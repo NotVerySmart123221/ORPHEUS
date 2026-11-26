@@ -731,14 +731,40 @@ impl RoomSimulation {
                 },
             });
             if let Some(target_sample) = self.sample_health_body(target) {
+                let target_full = self
+                    .by_wire
+                    .get(&target)
+                    .and_then(|&entity| self.world.get::<super::BotState>(entity))
+                    .map(|b| b.vitals.total() + 0.5 >= b.vitals.maximum())
+                    .or_else(|| {
+                        self.players_by_wire
+                            .get(&target)
+                            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
+                            .and_then(|p| p.vitals())
+                            .map(|v| v.total() + 0.5 >= v.maximum())
+                    })
+                    .unwrap_or(false);
+                let target_id = target_sample.identity();
                 self.player_cues.push(super::PlayerRoomCue {
                     owner,
                     listener,
-                    source: target_sample.identity(),
+                    source: target_id,
                     notice: CombatNotice::HealConfirm {
                         target,
                         amount,
                         shot_frame,
+                    },
+                });
+                self.player_cues.push(super::PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: target_id,
+                    notice: CombatNotice::HealEvent {
+                        healer: source,
+                        target,
+                        amount,
+                        full: target_full,
+                        loadout: 0,
                     },
                 });
             }

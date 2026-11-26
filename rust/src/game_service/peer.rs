@@ -35,6 +35,18 @@ pub(super) struct CombatUi {
     recent_heal_notices: VecDeque<(BodyId, u32, u32)>,
 }
 
+impl CombatUi {
+    pub(super) fn queue_legacy(&mut self, notice: CombatNotice) {
+        if self.notices.len() >= MAX_PENDING_COMBAT_NOTICES {
+            self.notices.pop_front();
+        }
+        self.notices.push_back(PendingCombatNotice {
+            notice,
+            audience: CombatAudience::Legacy,
+        });
+    }
+}
+
 struct AuthoredCueIdentity {
     listener: BodyId,
     source: RoomBodyIdentity,
@@ -268,6 +280,37 @@ impl Peer {
                     .recent_heal_notices
                     .push_back((body, target, shot_frame));
             }
+        } else if let CombatNotice::HealEvent {
+            target,
+            amount,
+            full,
+            ..
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::HealEvent {
+                        amount: existing_amount,
+                        full: existing_full,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::HealEvent {
+                            target: existing_target,
+                            ..
+                        }
+                    ) if *existing_body == body && *existing_target == target
+                )
+            }) {
+                *existing_amount += amount;
+                *existing_full |= full;
+                return;
+            }
         }
         self.queue_notice(notice, CombatAudience::Shooter(body));
     }
@@ -405,7 +448,22 @@ impl Peer {
                 self.combat_ui.notices.push_back(pending);
                 continue;
             }
-            let bytes = notice.encode(schemas)?;
+            let bytes = match notice.encode(schemas) {
+                Ok(bytes) => bytes,
+                Err(crate::game_messages::ChannelError::UnknownMessage { .. })
+                    if matches!(
+                        notice,
+                        CombatNotice::HealEvent { .. }
+                            | CombatNotice::ScorePopup { .. }
+                            | CombatNotice::HighlightHeader { .. }
+                            | CombatNotice::CommendationCardNotice { .. }
+                            | CombatNotice::CardVoteUpdate { .. }
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             let ordinal = self.egress.queue_reliable(bytes)?;
             if authored.is_some() && is_voice {
                 self.authored_cue_ordinal = Some(ordinal);

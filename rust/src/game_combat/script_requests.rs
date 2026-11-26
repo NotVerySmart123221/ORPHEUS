@@ -956,9 +956,17 @@ impl RoomSimulation {
         let owner = player.owner;
         let listener = player.id;
         let now_secs = f64::from(frame) * crate::game_clock::TICK_PERIOD.as_secs_f64();
-        let awarded = self
-            .scoreboard
-            .record_elimination(owner, victim_wire, false, now_secs);
+        let on_objective = self
+            .pvp_objective
+            .as_ref()
+            .zip(
+                self.sample_health_body(victim_wire)
+                    .and_then(|sample| sample.position(&self.world)),
+            )
+            .is_some_and(|(pvp, pos)| pvp.is_on_objective(pos));
+        let awarded =
+            self.scoreboard
+                .record_elimination(owner, victim_wire, on_objective, now_secs);
         if self.stats_catalog.is_some() {
             for (award_owner, points, _ignited) in awarded {
                 if award_owner == owner {
@@ -1005,8 +1013,18 @@ impl RoomSimulation {
         let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) else {
             return;
         };
+        const GENJI_BODY: u64 = 0x0400_0000_0000_0225;
+        let is_genji = player.body_template == GENJI_BODY;
+        let mut elim_queued = 0usize;
         if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
-            let _ = runtime.receive_authored_elimination_feedback(target.into());
+            elim_queued = runtime
+                .receive_authored_elimination_feedback(target.into())
+                .unwrap_or(0);
+        }
+        if is_genji && elim_queued == 0 {
+            if let Some(runtime) = player.runtime.as_mut() {
+                let _ = runtime.reset_all_cooldowns();
+            }
         }
         if !eligible {
             return;

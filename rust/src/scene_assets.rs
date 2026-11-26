@@ -562,6 +562,9 @@ impl SceneAssets {
             simulation.enable_authored_elimination_feedback();
         }
         simulation.set_environment(self.environment.for_map(map.map_guid));
+        if let Some(pvp) = crate::pvp_mode::PvpObjectiveRuntime::from_game_map(&map) {
+            simulation.set_pvp_objective(pvp);
+        }
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();
         }

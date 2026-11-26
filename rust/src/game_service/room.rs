@@ -502,7 +502,16 @@ impl Room {
             .ok_or(RoomError::Invariant(
                 "admitted member has no live roster slot",
             ))?;
-        member.peer = Some(Peer::new(player.entity));
+        let entity = player.entity;
+        let team = player.info.team;
+        member.peer = Some(Peer::new(entity));
+        if let Some(world) = &mut self.world {
+            world
+                .scene
+                .simulation_mut()
+                .voice_chat_mut()
+                .join(entity, crate::game_replay::VoiceChannel::Team(team));
+        }
         Ok(())
     }
 
@@ -521,6 +530,7 @@ impl Room {
             if let Some(world) = &mut self.world {
                 world.scene.retire_projectiles(connection);
                 let simulation = world.scene.simulation_mut();
+                simulation.voice_chat_mut().leave(entity);
                 simulation.retire_player_owner(entity);
                 simulation.set_team_member_counts(counts);
             }
@@ -567,6 +577,7 @@ impl Room {
                     egress,
                     loading,
                     world,
+                    combat_ui,
                     ..
                 } = peer;
                 let mut response_error = None;
@@ -598,6 +609,40 @@ impl Room {
                                     &message,
                                     command_frame,
                                 );
+                            }
+                        }
+                        MessageKind::CardVote => {
+                            let card_id = message
+                                .fields
+                                .get(&0x80)
+                                .and_then(|v| match *v {
+                                    crate::jam_codec::Value::Unsigned(id) => Some(id as usize),
+                                    crate::jam_codec::Value::Signed(id) if id >= 0 => {
+                                        Some(id as usize)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(0);
+                            if let Some(world_state) = &mut room.world {
+                                let voter = world.owner();
+                                if let Some(card) = world_state
+                                    .scene
+                                    .simulation_mut()
+                                    .scoreboard_mut()
+                                    .vote_card(voter, card_id)
+                                {
+                                    let vote_notice = CombatNotice::CardVoteUpdate {
+                                        card_index: card.card_id as u32,
+                                        votes: card.votes,
+                                        epic: card.epic(),
+                                    };
+                                    combat_ui.queue_legacy(vote_notice);
+                                    for member in room.members.values_mut() {
+                                        if let Some(other) = &mut member.peer {
+                                            other.queue_combat_notice(vote_notice);
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => (),
@@ -774,9 +819,75 @@ impl Room {
                     .simulation_mut()
                     .schedule_player_respawn(death.body, now.saturating_add(delay));
             }
+            let killcam_header = world
+                .scene
+                .simulation()
+                .replay()
+                .killcam(death.body.entity)
+                .filter(|clip| clip.killer != clip.victim && !clip.frames.is_empty())
+                .map(|clip| CombatNotice::HighlightHeader {
+                    star_entity: clip.killer,
+                    target_entity: clip.victim,
+                    category: 0,
+                    star_hero: clip
+                        .frames
+                        .last()
+                        .and_then(|f| f.actors.iter().find(|a| a.entity == clip.killer))
+                        .map_or(0, |a| a.hero),
+                    start_tick: clip.start_tick,
+                    end_tick: clip.end_tick,
+                });
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
                     peer.queue_player_death(death);
+                    if let Some(header) = killcam_header {
+                        if peer.world.active_body_id() == Some(death.body) {
+                            peer.queue_combat_notice(header);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(winner) = world.scene.simulation_mut().take_match_winner() {
+            let mode_name = self.map.mode_name.clone();
+            let sim = world.scene.simulation_mut();
+            sim.record_completed_career_matches(winner, &mode_name, now.as_secs_f64());
+            let potg_notice = sim.replay().potg().map(|potg| {
+                let category = match potg.category {
+                    crate::game_replay::PotgCategory::HighScore => 1,
+                    crate::game_replay::PotgCategory::Lifesaver => 2,
+                    crate::game_replay::PotgCategory::Sharpshooter => 3,
+                    crate::game_replay::PotgCategory::Shutdown => 4,
+                };
+                CombatNotice::HighlightHeader {
+                    star_entity: potg.star_entity,
+                    target_entity: potg.star_entity,
+                    category,
+                    star_hero: potg.star_hero,
+                    start_tick: potg.start_tick,
+                    end_tick: potg.end_tick,
+                }
+            });
+            let card_notices: Vec<CombatNotice> = sim
+                .scoreboard_mut()
+                .generate_commendation_cards()
+                .iter()
+                .map(|card| CombatNotice::CommendationCardNotice {
+                    card_index: card.card_id as u32,
+                    owner: card.owner,
+                    hero: card.hero,
+                    stat_guid: card.stat_guid,
+                    value: card.value as f32,
+                })
+                .collect();
+            for member in self.members.values_mut() {
+                if let Some(peer) = &mut member.peer {
+                    if let Some(potg) = potg_notice {
+                        peer.queue_combat_notice(potg);
+                    }
+                    for card in &card_notices {
+                        peer.queue_combat_notice(*card);
+                    }
                 }
             }
         }
@@ -803,6 +914,7 @@ impl Room {
                 match cue.notice {
                     CombatNotice::Hit { .. }
                     | CombatNotice::HealConfirm { .. }
+                    | CombatNotice::HealEvent { .. }
                     | CombatNotice::Elimination { .. }
                     | CombatNotice::ScorePopup { .. } => {
                         peer.queue_shooter_notice(cue.listener, cue.notice);

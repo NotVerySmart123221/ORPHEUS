@@ -281,22 +281,44 @@ impl RoomSimulation {
                         );
                     }
                     if outcome.killed {
-                        self.actor_statuses.remove(&wire);
-                        self.scoreboard.record_death(owner, wire);
-                        self.player_deaths.push(PlayerDeath {
-                            owner,
-                            body: id,
-                            source: source.killer,
-                            killed_by: valid_entity(source.killer) && source.killer != wire,
-                        });
-                        self.record_enemy_elimination(
-                            source.killer,
-                            wire,
-                            victim_team,
-                            source.frame,
-                        );
-                        #[cfg(feature = "lua-mods")]
-                        self.mod_on_kill(source.killer, wire, critical, source.frame, now);
+                        // Echo Duplicate: reaching 0 HP while duplicated reverts cleanly to
+                        // the original hero instead of counting as a death.
+                        if let Some(dup) = self.active_duplicates.remove(&owner) {
+                            if let Some(state) = self.player_body_mut(id) {
+                                let max_hp = state.vitals().map_or(200.0, |v| v.maximum());
+                                let _ = state.heal(max_hp);
+                            }
+                            self.pending_duplicate_reverts
+                                .insert(owner, dup.original_body);
+                        } else {
+                            let death_pos = self
+                                .player_body(id)
+                                .map(|s| s.mover.pose().position)
+                                .unwrap_or([0.0; 3]);
+                            self.soul_anchors.push(super::SoulAnchor {
+                                owner,
+                                body: id,
+                                team: victim_team,
+                                position: death_pos,
+                                expires_tick: source.frame.saturating_add(62 * 10),
+                            });
+                            self.actor_statuses.remove(&wire);
+                            self.scoreboard.record_death(owner, wire);
+                            self.player_deaths.push(PlayerDeath {
+                                owner,
+                                body: id,
+                                source: source.killer,
+                                killed_by: valid_entity(source.killer) && source.killer != wire,
+                            });
+                            self.record_enemy_elimination(
+                                source.killer,
+                                wire,
+                                victim_team,
+                                source.frame,
+                            );
+                            #[cfg(feature = "lua-mods")]
+                            self.mod_on_kill(source.killer, wire, critical, source.frame, now);
+                        }
                     }
                 }
             }
@@ -551,6 +573,8 @@ impl RoomSimulation {
         let mut heals = Vec::new();
         let mut dots = Vec::new();
         let mut unstunned_players = Vec::new();
+        let mut rooted_wires = Vec::new();
+        let mut hook_pulls: Vec<(u32, u32, [f64; 3])> = Vec::new();
         let mut dead_wires = Vec::new();
         for (&wire, status) in &self.actor_statuses {
             let alive = if let Some(&entity) = self.by_wire.get(&wire) {
@@ -600,6 +624,21 @@ impl RoomSimulation {
             if status.chill_stacks > 0 && tick.saturating_sub(status.chill_last_tick) > 94 {
                 status.chill_stacks = 0;
             }
+            if status.rooted_until.is_some_and(|until| tick >= until) {
+                status.rooted_until = None;
+            } else if status.rooted_until.is_some() {
+                rooted_wires.push(wire);
+            }
+            if let Some((puller, dest, until)) = status.hook_pull {
+                if tick >= until {
+                    status.hook_pull = None;
+                } else {
+                    hook_pulls.push((wire, puller, dest));
+                }
+            }
+            if status.beam_charge > 0.0 && tick.saturating_sub(status.beam_last_hit_tick) > 124 {
+                status.beam_charge = (status.beam_charge - 0.015).max(0.0);
+            }
             if status.hot_ticks > 0 {
                 status.hot_ticks -= 1;
                 heals.push((status.hot_source, wire, status.hot_per_tick));
@@ -615,10 +654,83 @@ impl RoomSimulation {
                 || status.hacked_until.is_some()
                 || status.invulnerable_until.is_some()
                 || status.cc_immune_until.is_some()
+                || status.rooted_until.is_some()
+                || status.hook_pull.is_some()
+                || status.beam_charge > 0.0
                 || status.chill_stacks > 0
                 || status.hot_ticks > 0
                 || status.dot_ticks > 0
         });
+        // Clamp horizontal velocity to zero on rooted targets (e.g. Junkrat Steel Trap).
+        for wire in rooted_wires {
+            if let Some(id) = self.player_handle_for_wire(wire) {
+                if let Some(player) = self.player_body_mut(id).filter(|p| p.alive()) {
+                    let frame = player.mover.pose().frame.unwrap_or(player.frame);
+                    player.mover.queue_velocity_change(
+                        frame.saturating_add(1),
+                        crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
+                    );
+                }
+            }
+        }
+        // Step 2-stage Chain Hook pulls with LOS break validation.
+        let frame_arc = self
+            .spatial_frame
+            .as_ref()
+            .map(|(_, f)| std::sync::Arc::clone(f));
+        for (victim, puller, dest) in hook_pulls {
+            let Some(vpos) = self
+                .sample_health_body(victim)
+                .and_then(|s| s.position(&self.world))
+            else {
+                continue;
+            };
+            let dx = dest[0] - vpos[0];
+            let dy = dest[1] - vpos[1];
+            let dz = dest[2] - vpos[2];
+            let dist = dx.hypot(dy).hypot(dz);
+            if dist <= 0.6 {
+                if let Some(st) = self.actor_statuses.get_mut(&victim) {
+                    st.hook_pull = None;
+                }
+                continue;
+            }
+            let dir = [dx / dist, dy / dist, dz / dist];
+            let los_broken = frame_arc.as_deref().is_some_and(|frame| {
+                let site = crate::script_init::Site {
+                    entity: puller,
+                    instance: 0,
+                    graph: 0,
+                    node: None,
+                };
+                frame
+                    .ray_cast(
+                        site,
+                        tick,
+                        [vpos[0], vpos[1] + 1.0, vpos[2]],
+                        dir,
+                        dist.min(20.0) - 0.3,
+                    )
+                    .flatten()
+                    .is_some()
+            });
+            if los_broken {
+                if let Some(st) = self.actor_statuses.get_mut(&victim) {
+                    st.hook_pull = None;
+                }
+                continue;
+            }
+            let pull_speed = 32.0_f64.min(dist * 18.0);
+            let _ = self.queue_combat_impulse(
+                victim,
+                tick,
+                [
+                    dir[0] * pull_speed * 0.15,
+                    dir[1] * 4.0,
+                    dir[2] * pull_speed * 0.15,
+                ],
+            );
+        }
         for wire in unstunned_players {
             if let Some(id) = self.player_handle_for_wire(wire) {
                 if let Some(player) = self.player_body_mut(id) {

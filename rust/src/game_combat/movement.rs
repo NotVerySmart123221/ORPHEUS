@@ -227,6 +227,11 @@ impl RoomSimulation {
                 actors.insert(wire, (team(state.team), state.mover.contact_capsule()));
             }
         }
+        // Solid blocking world structures (e.g. Mei Ice Wall pillars): team `None`
+        // so both allies and enemies are hard-blocked AND can stand on top of them.
+        for (wire, pose) in self.solid_wall_capsules() {
+            actors.insert(wire, (None, pose));
+        }
         if let Some(contacts) = &mut self.movement_contacts {
             contacts.frame = Some((tick, Arc::new(MovementContactFrame { actors })));
         }

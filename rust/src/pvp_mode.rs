@@ -927,6 +927,175 @@ pub enum PvpObjectiveRuntime {
 }
 
 impl PvpObjectiveRuntime {
+    /// Automatically construct a data-driven PvP objective runtime from a retail
+    /// `GameMap`'s authored `objectives` list (`game_maps_174.json`).
+    pub fn from_game_map(map: &crate::game_content::GameMap) -> Option<Self> {
+        if map.objectives.is_empty() || map.free_for_all || map.is_junkenstein() {
+            return None;
+        }
+        let make_zone = |pos: [f64; 3], half: [f64; 3]| {
+            ObbZone::new(vec![crate::room_primitives::ObbTrigger {
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                center: [pos[0], pos[1] + half[1] * 0.5, pos[2]],
+                half_extents: half,
+            }])
+        };
+        let control_points: Vec<_> = map
+            .objectives
+            .iter()
+            .filter(|o| o.kind.eq_ignore_ascii_case("control point"))
+            .collect();
+        if !control_points.is_empty() {
+            let stages: Vec<ControlStageSpec> = control_points
+                .iter()
+                .map(|o| ControlStageSpec {
+                    point: CapturePointSpec {
+                        placeable: o.placeable.unwrap_or(0),
+                        position: o.position,
+                        zone: make_zone(o.position, [7.5, 4.0, 7.5]),
+                        round_seconds: 120.0,
+                        capture_seconds: 16.0,
+                        segments: 1,
+                    },
+                    healing_rooms: [None, None],
+                })
+                .collect();
+            let order: Vec<usize> = (0..stages.len()).collect();
+            let mut round = ControlRound::new(
+                stages,
+                order,
+                2,
+                1.0,
+                1.0,
+                None,
+                DynamicBarrierRegistry::default(),
+            );
+            round.start_setup(0.0);
+            return Some(Self::Control(round));
+        }
+
+        let points: Vec<_> = map
+            .objectives
+            .iter()
+            .filter(|o| o.kind.eq_ignore_ascii_case("point"))
+            .collect();
+        let checkpoints: Vec<_> = map
+            .objectives
+            .iter()
+            .filter(|o| o.kind.eq_ignore_ascii_case("checkpoint"))
+            .collect();
+        let payload = map
+            .objectives
+            .iter()
+            .find(|o| o.kind.eq_ignore_ascii_case("payload"));
+
+        let build_escort = |start_pos: [f64; 3]| -> Option<EscortRound> {
+            if checkpoints.is_empty() {
+                return None;
+            }
+            let mut nodes = Vec::with_capacity(checkpoints.len() + 1);
+            nodes.push(crate::room_primitives::SplineNode::simple(start_pos));
+            for (idx, cp) in checkpoints.iter().enumerate() {
+                let mut node = crate::room_primitives::SplineNode::simple(cp.position);
+                node.checkpoint = Some((idx + 1) as u32);
+                nodes.push(node);
+            }
+            let track = SplineTrack::from_nodes(nodes);
+            let stage_seconds = vec![240.0; checkpoints.len().max(1)];
+            Some(EscortRound::new(
+                track,
+                SplineSpeedCurve::default(),
+                DynamicBarrierRegistry::default(),
+                stage_seconds,
+                false,
+            ))
+        };
+
+        // Hybrid: initial capture point A + payload escort checkpoints
+        if let (Some(point_a), Some(pl)) = (points.first(), payload) {
+            if let Some(escort) = build_escort(pl.position) {
+                let capture = CapturePointStage::new(
+                    CapturePointSpec {
+                        placeable: point_a.placeable.unwrap_or(0),
+                        position: point_a.position,
+                        zone: make_zone(point_a.position, [8.0, 4.0, 8.0]),
+                        round_seconds: 240.0,
+                        capture_seconds: 20.0,
+                        segments: 3,
+                    },
+                    1.0,
+                );
+                let mut round = HybridRound::new(capture, escort, 2.0, 4.0);
+                round.start_setup(0.0);
+                return Some(Self::Hybrid(round));
+            }
+        }
+
+        // Escort: payload + checkpoints
+        if let Some(pl) = payload {
+            if let Some(mut round) = build_escort(pl.position) {
+                round.start_setup(0.0);
+                return Some(Self::Escort(round));
+            }
+        }
+
+        // Assault: 1..N capture points (Point A, Point B)
+        if !points.is_empty() {
+            let specs: Vec<CapturePointSpec> = points
+                .iter()
+                .map(|o| CapturePointSpec {
+                    placeable: o.placeable.unwrap_or(0),
+                    position: o.position,
+                    zone: make_zone(o.position, [8.0, 4.0, 8.0]),
+                    round_seconds: 240.0,
+                    capture_seconds: 20.0,
+                    segments: 3,
+                })
+                .collect();
+            let mut round = AssaultRound::new(specs, 1.0);
+            round.start_setup(0.0);
+            return Some(Self::Assault(round));
+        }
+
+        None
+    }
+
+    pub fn is_on_objective(&self, pos: [f64; 3]) -> bool {
+        match self {
+            Self::Assault(round) => round.current().spec.zone.contains(pos),
+            Self::Escort(round) => {
+                let p = round.mover.pose().position;
+                let dx = pos[0] - p[0];
+                let dy = pos[1] - p[1];
+                let dz = pos[2] - p[2];
+                dx * dx + dz * dz <= 8.5 * 8.5 && dy.abs() <= 4.5
+            }
+            Self::Hybrid(round) => {
+                if round.payload_active() {
+                    let p = round.escort.mover.pose().position;
+                    let dx = pos[0] - p[0];
+                    let dy = pos[1] - p[1];
+                    let dz = pos[2] - p[2];
+                    dx * dx + dz * dz <= 8.5 * 8.5 && dy.abs() <= 4.5
+                } else {
+                    round.capture.spec.zone.contains(pos)
+                }
+            }
+            Self::Control(round) => round.stages[round.stage()].point.zone.contains(pos),
+        }
+    }
+
+    pub fn objective_occupants(&self, actors: &[ActorSample]) -> Vec<u32> {
+        if self.phase() != MatchPhase::Active {
+            return Vec::new();
+        }
+        actors
+            .iter()
+            .filter(|a| a.alive && self.is_on_objective(a.position))
+            .map(|a| a.entity)
+            .collect()
+    }
+
     pub fn mode_guid(&self) -> u64 {
         match self {
             Self::Assault(_) => MODE_ASSAULT,

@@ -18,6 +18,7 @@ pub enum MessageKind {
     MapLoaded,
     GameMessage,
     WheelAction,
+    CardVote,
     Other,
 }
 
@@ -28,6 +29,7 @@ impl From<u32> for MessageKind {
             21601 | 21602 => Self::MapLoaded,
             CLIENT_GAME_MESSAGE => Self::GameMessage,
             CLIENT_WHEEL_ACTION => Self::WheelAction,
+            25700 | 25701 => Self::CardVote,
             _ => Self::Other,
         }
     }

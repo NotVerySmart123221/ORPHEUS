@@ -116,6 +116,12 @@ pub(super) struct RoomPet {
     pub(super) yaw: i32,
     pub(super) vitals: Option<Vitals>,
     pub(super) wire_vitals: bool,
+    /// Solid world obstacle (e.g. Mei Ice Wall pillar) that blocks movement & shots for both teams.
+    pub(super) solid_wall: bool,
+    /// Autonomous combat turret / companion (Torbjörn Turret / Ashe B.O.B.) fire cooldown in ticks.
+    pub(super) ai_fire_cooldown: u16,
+    /// Opening charge ticks remaining for high-HP autonomous companions (B.O.B.).
+    pub(super) charge_ticks: u16,
     pub(super) component: Option<Component>,
     pub(super) world: Option<DeployableWorld>,
 }
@@ -873,6 +879,13 @@ impl RoomSimulation {
             (None, None)
         };
         let ecs_entity = self.world.spawn_empty().id();
+        let max_hp = vitals.as_ref().map_or(0.0, Vitals::maximum);
+        let solid_wall = attach.is_none() && (350.0..=550.0).contains(&max_hp);
+        let charge_ticks = if attach.is_none() && max_hp >= 800.0 {
+            186 // ~3.0s opening charge for B.O.B. companions
+        } else {
+            0
+        };
         self.room_pets.insert(
             pet_id,
             RoomPet {
@@ -886,11 +899,79 @@ impl RoomSimulation {
                 yaw,
                 vitals,
                 wire_vitals: authored_body_vitals,
+                solid_wall,
+                ai_fire_cooldown: 16,
+                charge_ticks,
                 component,
                 world: world_opt,
             },
         );
         self.created.push(update);
+    }
+
+    /// Spawn a 5-pillar solid destructible Ice Wall perpendicular to `yaw`,
+    /// where each pillar has independent HP (`400.0`) and blocks movement + rays for both teams.
+    #[allow(dead_code)]
+    pub(super) fn spawn_ice_wall_pillars(
+        &mut self,
+        owner: u32,
+        team: u8,
+        definition: u64,
+        center: Vec3,
+        yaw: i32,
+        tick: u32,
+    ) -> Vec<u32> {
+        let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
+        let (sin_y, cos_y) = rad.sin_cos();
+        let right = [cos_y, 0.0, -sin_y];
+        let mut ids = Vec::with_capacity(5);
+        for idx in -2i32..=2i32 {
+            let offset = f64::from(idx) * 1.6;
+            let pos = [
+                center[0] + right[0] * offset,
+                center[1],
+                center[2] + right[2] * offset,
+            ];
+            let id = next_pet_wire_id();
+            self.spawn_room_pet(
+                owner,
+                team,
+                id,
+                definition,
+                None,
+                pos,
+                yaw,
+                Some(400.0),
+                None,
+                tick,
+            );
+            if let Some(pet) = self.room_pets.get_mut(&id) {
+                pet.solid_wall = true;
+            }
+            ids.push(id);
+        }
+        ids
+    }
+
+    /// Return solid blocking capsules for all living wall pillars so players
+    /// cannot clip through them and can stand on top of them.
+    pub(super) fn solid_wall_capsules(&self) -> Vec<(u32, crate::contact_cache::CapsulePose)> {
+        self.room_pets
+            .iter()
+            .filter(|(_, pet)| {
+                pet.solid_wall && pet.vitals.as_ref().is_none_or(|v| v.death().is_none())
+            })
+            .map(|(&wire, pet)| {
+                (
+                    wire,
+                    crate::contact_cache::CapsulePose {
+                        position: pet.position.map(|v| v as f32),
+                        radius: 0.78,
+                        top: 2.6,
+                    },
+                )
+            })
+            .collect()
     }
 
     pub(super) fn despawn_room_pet(&mut self, pet_id: u32) {
@@ -1066,7 +1147,7 @@ impl RoomSimulation {
             if vitals.death().is_some() {
                 continue;
             }
-            if !ffa && attacker_team == Some(pet.team) {
+            if !pet.solid_wall && !ffa && attacker_team == Some(pet.team) {
                 continue;
             }
             let hit = if pet.attach.is_some() && vitals.maximum() >= 200.0 {
@@ -1397,6 +1478,7 @@ impl RoomSimulation {
         self.step_status_effects(tick);
         self.advance_scheduled_voices(tick);
         self.advance_progression_and_replay(tick);
+        self.step_hero_mechanics(tick);
         let frame = self.spatial_frame.as_ref().map(|(_, f)| Arc::clone(f));
 
         // Step active room pets (barriers, turrets, walls, teleporters).
@@ -1490,6 +1572,406 @@ impl RoomSimulation {
                 Arc::make_mut(&mut self.retired_entity_ids).insert(id);
                 self.retired_enemies.push(id);
             }
+        }
+    }
+
+    /// Step specialized data-driven hero mechanics each tick:
+    /// - Autonomous combat turrets / B.O.B. (charge + knockup + LOS target acquisition & cadence fire)
+    /// - Gliding Self-Destruct bombs (3s glide + 1000-dmg 20m LOS/barrier-occluded blast)
+    /// - Echo Duplicate 15s expiry revert
+    /// - Mercy Resurrect soul anchor expiry
+    fn step_hero_mechanics(&mut self, tick: u32) {
+        let now =
+            Duration::from_secs_f64(f64::from(tick) * crate::game_clock::TICK_PERIOD.as_secs_f64());
+        let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
+
+        // 1. Expire old fallen-ally Soul Anchors (10s window).
+        self.soul_anchors
+            .retain(|anchor| tick < anchor.expires_tick);
+
+        // 2. Expire timed Echo Duplicates -> revert cleanly to original hero body.
+        let expired_dups: Vec<(u32, u64)> = self
+            .active_duplicates
+            .iter()
+            .filter(|(_, dup)| tick >= dup.expires_tick)
+            .map(|(&owner, dup)| (owner, dup.original_body))
+            .collect();
+        for (owner, orig_body) in expired_dups {
+            self.active_duplicates.remove(&owner);
+            self.pending_duplicate_reverts.insert(owner, orig_body);
+        }
+
+        // 3. Step gliding Self-Destruct bombs and detonate with LOS + barrier occlusion.
+        let mut detonated_bombs = Vec::new();
+        let frame_arc = self.spatial_frame.as_ref().map(|(_, f)| Arc::clone(f));
+        for bomb in &mut self.self_destruct_bombs {
+            let speed = bomb.velocity[0].hypot(bomb.velocity[2]);
+            if speed > 0.1 {
+                let step = [
+                    bomb.velocity[0] * dt,
+                    bomb.velocity[1] * dt,
+                    bomb.velocity[2] * dt,
+                ];
+                let step_len = step[0].hypot(step[1]).hypot(step[2]);
+                let blocked = if step_len > 1e-4 {
+                    let dir = [step[0] / step_len, step[1] / step_len, step[2] / step_len];
+                    frame_arc.as_deref().is_some_and(|frame| {
+                        let origin = [bomb.position[0], bomb.position[1] + 0.9, bomb.position[2]];
+                        let site = Site {
+                            entity: bomb.owner,
+                            instance: 0,
+                            graph: 0,
+                            node: None,
+                        };
+                        frame
+                            .ray_cast(site, tick, origin, dir, step_len + 0.7)
+                            .flatten()
+                            .is_some()
+                    })
+                } else {
+                    false
+                };
+                if blocked {
+                    bomb.velocity = [0.0; 3];
+                } else {
+                    bomb.position[0] += step[0];
+                    bomb.position[1] += step[1];
+                    bomb.position[2] += step[2];
+                    // Gentle drag + gravity settling
+                    bomb.velocity[0] *= 0.97;
+                    bomb.velocity[2] *= 0.97;
+                }
+            }
+            if tick >= bomb.detonate_tick {
+                detonated_bombs.push(*bomb);
+            }
+        }
+        self.self_destruct_bombs
+            .retain(|bomb| tick < bomb.detonate_tick);
+
+        for bomb in detonated_bombs {
+            let origin = [bomb.position[0], bomb.position[1] + 1.0, bomb.position[2]];
+            let radius = 20.0_f64;
+            let targets: Vec<(u32, Vec3, f64)> = frame_arc
+                .as_deref()
+                .map(|frame| {
+                    frame
+                        .candidates()
+                        .iter()
+                        .filter(|c| self.free_for_all || c.team != Some(bomb.team))
+                        .filter_map(|c| {
+                            let target_pos = [c.position[0], c.position[1] + 1.0, c.position[2]];
+                            let dx = target_pos[0] - origin[0];
+                            let dy = target_pos[1] - origin[1];
+                            let dz = target_pos[2] - origin[2];
+                            let d = dx.hypot(dy).hypot(dz);
+                            (d <= radius).then_some((c.entity, target_pos, d))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let death = Death {
+                time: now.as_secs_f64(),
+                frame: tick,
+                killer: bomb.owner,
+            };
+            for (target, target_pos, d) in targets {
+                let dir = if d > 1e-4 {
+                    [
+                        (target_pos[0] - origin[0]) / d,
+                        (target_pos[1] - origin[1]) / d,
+                        (target_pos[2] - origin[2]) / d,
+                    ]
+                } else {
+                    [0.0, 1.0, 0.0]
+                };
+                // Strict world LOS check
+                let world_blocked = d > 0.5
+                    && frame_arc.as_deref().is_some_and(|frame| {
+                        let site = Site {
+                            entity: bomb.owner,
+                            instance: 0,
+                            graph: 0,
+                            node: None,
+                        };
+                        frame
+                            .ray_cast(site, tick, origin, dir, d - 0.35)
+                            .flatten()
+                            .is_some()
+                    });
+                if world_blocked {
+                    continue;
+                }
+                // Barrier occlusion (Reinhardt/Sigma/Orisa/Winston/Mei Wall blocks Self-Destruct!)
+                if let Some((barrier_wire, is_pet, bdist, _)) =
+                    self.probe_barrier_ray(Some(bomb.team), self.free_for_all, origin, dir, d)
+                {
+                    if bdist < d {
+                        let dmg = (1000.0 * (1.0 - (bdist / radius) * 0.9)).clamp(100.0, 1000.0);
+                        self.damage_barrier_or_deployable(
+                            barrier_wire,
+                            is_pet,
+                            dmg,
+                            bomb.owner,
+                            tick,
+                            now,
+                        );
+                        continue;
+                    }
+                }
+                let dmg = (1000.0 * (1.0 - (d / radius) * 0.9)).clamp(100.0, 1000.0);
+                let _ = self.apply_health(
+                    target,
+                    crate::game_combat::HealthEffect::Damage(dmg),
+                    death,
+                    now,
+                    None,
+                );
+                let _ =
+                    self.queue_combat_impulse(target, tick, [dir[0] * 12.0, 7.5, dir[2] * 12.0]);
+            }
+        }
+
+        // 4. Autonomous combat pets (Torbjörn Turret 250 HP & Ashe B.O.B. >= 800 HP):
+        //    B.O.B. charges forward with knockup, then acquires LOS targets and fires on cadence.
+        if let Some(frame) = frame_arc {
+            let mut ai_hits: Vec<(u32, u32, f64, Option<Vec3>)> = Vec::new();
+            for (&pet_wire, pet) in &mut self.room_pets {
+                if pet.attach.is_some() || pet.solid_wall {
+                    continue;
+                }
+                let Some(max_hp) = pet
+                    .vitals
+                    .as_ref()
+                    .filter(|v| v.death().is_none())
+                    .map(Vitals::maximum)
+                else {
+                    continue;
+                };
+                let is_bob = max_hp >= 800.0;
+                let is_turret = (180.0..=300.0).contains(&max_hp) && pet.component.is_none();
+                if !is_bob && !is_turret {
+                    continue;
+                }
+                if is_bob && pet.charge_ticks > 0 {
+                    pet.charge_ticks -= 1;
+                    let rad = f64::from(pet.yaw) * std::f64::consts::TAU / 65_536.0;
+                    let (sin_y, cos_y) = rad.sin_cos();
+                    let dir = [sin_y, 0.0, cos_y];
+                    let step = 15.0 * dt;
+                    let origin = [pet.position[0], pet.position[1] + 1.0, pet.position[2]];
+                    let site = Site {
+                        entity: pet_wire,
+                        instance: 0,
+                        graph: 0,
+                        node: None,
+                    };
+                    let hit_wall = frame
+                        .ray_cast(site, tick, origin, dir, step + 0.85)
+                        .flatten()
+                        .is_some();
+                    if hit_wall {
+                        pet.charge_ticks = 0;
+                    } else {
+                        pet.position[0] += dir[0] * step;
+                        pet.position[2] += dir[2] * step;
+                        for c in frame.candidates() {
+                            if c.entity == pet.owner || c.entity == pet_wire {
+                                continue;
+                            }
+                            if !self.free_for_all && c.team == Some(pet.team) {
+                                continue;
+                            }
+                            let dist = (c.position[0] - pet.position[0])
+                                .hypot(c.position[2] - pet.position[2]);
+                            if dist <= 2.1 && (c.position[1] - pet.position[1]).abs() <= 2.2 {
+                                ai_hits.push((
+                                    pet.owner,
+                                    c.entity,
+                                    120.0,
+                                    Some([dir[0] * 4.0, 9.5, dir[2] * 4.0]),
+                                ));
+                                pet.charge_ticks = 0;
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if pet.ai_fire_cooldown > 0 {
+                    pet.ai_fire_cooldown -= 1;
+                    continue;
+                }
+                let origin = [pet.position[0], pet.position[1] + 1.1, pet.position[2]];
+                let site = Site {
+                    entity: pet_wire,
+                    instance: 0,
+                    graph: 0,
+                    node: None,
+                };
+                let mut best: Option<(f64, u32, f64, f64)> = None;
+                for c in frame.candidates() {
+                    if c.entity == pet.owner || c.entity == pet_wire {
+                        continue;
+                    }
+                    if !self.free_for_all && c.team == Some(pet.team) {
+                        continue;
+                    }
+                    let tpos = [c.position[0], c.position[1] + 1.0, c.position[2]];
+                    let dx = tpos[0] - origin[0];
+                    let dy = tpos[1] - origin[1];
+                    let dz = tpos[2] - origin[2];
+                    let dist = dx.hypot(dy).hypot(dz);
+                    if dist <= 0.1 || dist > 40.0 || best.is_some_and(|(prev, ..)| dist >= prev) {
+                        continue;
+                    }
+                    let dir = [dx / dist, dy / dist, dz / dist];
+                    if frame
+                        .ray_cast(site, tick, origin, dir, dist - 0.3)
+                        .flatten()
+                        .is_some()
+                    {
+                        continue;
+                    }
+                    best = Some((dist, c.entity, dx, dz));
+                }
+                if let Some((_, target, dx, dz)) = best {
+                    let yaw_rad = dx.atan2(dz);
+                    pet.yaw = (yaw_rad * 65_536.0 / std::f64::consts::TAU).round() as i32;
+                    pet.ai_fire_cooldown = if is_bob { 8 } else { 15 };
+                    ai_hits.push((pet.owner, target, 14.0, None));
+                } else {
+                    pet.ai_fire_cooldown = 6;
+                }
+            }
+            for (owner, target, dmg, impulse) in ai_hits {
+                let death = Death {
+                    time: now.as_secs_f64(),
+                    frame: tick,
+                    killer: owner,
+                };
+                let _ = self.apply_health(
+                    target,
+                    crate::game_combat::HealthEffect::Damage(dmg),
+                    death,
+                    now,
+                    None,
+                );
+                if let Some(imp) = impulse {
+                    let _ = self.queue_combat_impulse(target, tick, imp);
+                }
+            }
+        }
+    }
+
+    /// Mercy Resurrect: revive the nearest fallen ally soul anchor within 5.5m
+    /// by clearing their respawn timer immediately.
+    #[allow(dead_code)]
+    pub(super) fn try_resurrect_nearest_ally(
+        &mut self,
+        healer_team: u8,
+        healer_pos: Vec3,
+        tick: u32,
+        now: Duration,
+    ) -> Option<super::SoulAnchor> {
+        let idx = self
+            .soul_anchors
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.team == healer_team && tick < a.expires_tick)
+            .filter_map(|(i, a)| {
+                let d = (a.position[0] - healer_pos[0])
+                    .hypot(a.position[2] - healer_pos[2])
+                    .hypot(a.position[1] - healer_pos[1]);
+                (d <= 5.5).then_some((i, d))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)?;
+        let anchor = self.soul_anchors.swap_remove(idx);
+        self.schedule_player_respawn(anchor.body, now);
+        Some(anchor)
+    }
+
+    /// Register an active Echo Duplicate transform (15 seconds = 930 ticks).
+    #[allow(dead_code)]
+    pub(super) fn start_echo_duplicate(&mut self, owner: u32, original_body: u64, tick: u32) {
+        self.active_duplicates.insert(
+            owner,
+            super::DuplicateState {
+                original_body,
+                expires_tick: tick.saturating_add(62 * 15),
+            },
+        );
+    }
+
+    pub(crate) fn take_pending_duplicate_revert(&mut self, owner: u32) -> Option<u64> {
+        self.pending_duplicate_reverts.remove(&owner)
+    }
+
+    /// Spawn a gliding D.Va Self-Destruct bomb that explodes after 3.0s (186 ticks).
+    pub(crate) fn spawn_self_destruct_bomb(
+        &mut self,
+        owner: u32,
+        team: u8,
+        position: Vec3,
+        velocity: Vec3,
+        tick: u32,
+    ) {
+        self.self_destruct_bombs.push(super::SelfDestructBomb {
+            owner,
+            team,
+            position,
+            velocity,
+            detonate_tick: tick.saturating_add(186),
+        });
+    }
+
+    /// D.Va Call Mech crush: 250 AoE damage + knockback to nearby enemies within 3.0m.
+    pub(crate) fn apply_call_mech_crush(
+        &mut self,
+        owner_wire: u32,
+        team: u8,
+        center: Vec3,
+        tick: u32,
+        now: Duration,
+    ) {
+        let targets: Vec<(u32, Vec3)> = self
+            .spatial_frame
+            .as_ref()
+            .map(|(_, frame)| {
+                frame
+                    .candidates()
+                    .iter()
+                    .filter(|c| {
+                        c.entity != owner_wire && (self.free_for_all || c.team != Some(team))
+                    })
+                    .filter_map(|c| {
+                        let d = (c.position[0] - center[0])
+                            .hypot(c.position[2] - center[2])
+                            .hypot(c.position[1] - center[1]);
+                        (d <= 3.0).then_some((c.entity, c.position))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: owner_wire,
+        };
+        for (target, pos) in targets {
+            let dx = pos[0] - center[0];
+            let dz = pos[2] - center[2];
+            let len = dx.hypot(dz).max(1e-4);
+            let _ = self.apply_health(
+                target,
+                crate::game_combat::HealthEffect::Damage(250.0),
+                death,
+                now,
+                None,
+            );
+            let _ = self.queue_combat_impulse(target, tick, [dx / len * 9.0, 5.5, dz / len * 9.0]);
         }
     }
 
@@ -1923,5 +2405,62 @@ mod tests {
             ..req
         };
         assert_eq!(extract_play_script_stun_ticks(&graphs, &other), None);
+    }
+
+    #[test]
+    fn ice_wall_pillars_block_both_teams_and_expose_solid_capsules() {
+        let mut sim = RoomSimulation::new(Vec::new()).unwrap();
+        let owner = 0xa000_0101;
+        let pillars =
+            sim.spawn_ice_wall_pillars(owner, 0, 0x0400_0000_0000_08ba, [0.0, 0.0, 6.0], 0, 10);
+        assert_eq!(pillars.len(), 5);
+        assert_eq!(sim.solid_wall_capsules().len(), 5);
+        // Rays from BOTH allied (team 0) and enemy (team 1) are blocked by the solid wall.
+        assert!(
+            sim.probe_barrier_ray(Some(0), false, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 20.0)
+                .is_some()
+        );
+        assert!(
+            sim.probe_barrier_ray(Some(1), false, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 20.0)
+                .is_some()
+        );
+        // Breaking the center pillar opens a gap while the remaining 4 pillars stay solid.
+        let center_wire = pillars[2];
+        let now = Duration::from_secs(1);
+        sim.damage_barrier_or_deployable(center_wire, true, 450.0, 0xa000_0201, 12, now);
+        sim.advance_deployables(13);
+        assert_eq!(sim.solid_wall_capsules().len(), 4);
+    }
+
+    #[test]
+    fn duplicate_expiry_and_soul_anchor_resurrect_settle_cleanly() {
+        let mut sim = RoomSimulation::new(Vec::new()).unwrap();
+        let owner = 0xa000_0100;
+        let orig_body = 0x0400_0000_0000_2593;
+        sim.start_echo_duplicate(owner, orig_body, 100);
+        sim.advance_deployables(100 + 62 * 14);
+        assert_eq!(sim.take_pending_duplicate_revert(owner), None);
+        sim.advance_deployables(100 + 62 * 15);
+        assert_eq!(sim.take_pending_duplicate_revert(owner), Some(orig_body));
+
+        let body = crate::game_replication::BodyId {
+            entity: 0xa000_0101,
+            generation: 1,
+        };
+        sim.soul_anchors.push(crate::game_combat::SoulAnchor {
+            owner,
+            body,
+            team: 0,
+            position: [10.0, 0.0, 10.0],
+            expires_tick: 1000,
+        });
+        assert!(
+            sim.try_resurrect_nearest_ally(0, [25.0, 0.0, 25.0], 200, Duration::from_secs(3))
+                .is_none()
+        );
+        let revived =
+            sim.try_resurrect_nearest_ally(0, [12.0, 0.0, 11.0], 200, Duration::from_secs(3));
+        assert_eq!(revived.map(|a| a.body), Some(body));
+        assert!(sim.soul_anchors.is_empty());
     }
 }

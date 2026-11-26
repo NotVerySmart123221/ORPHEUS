@@ -12,9 +12,13 @@ use crate::{
 const RECEIVED_DAMAGE: u32 = 25000;
 const HIT: u32 = 25001;
 const HEAL_CONFIRM: u32 = 25002;
+const HEAL_EVENT: u32 = 25003;
 const DEATH: u32 = 25004;
 const ELIMINATION: u32 = 25005;
 const SCORE_POPUP: u32 = 25007;
+const HIGHLIGHT_HEADER: u32 = 25011;
+const COMMENDATION_CARD: u32 = 25012;
+const CARD_VOTE_UPDATE: u32 = 25013;
 const VOICE: u32 = 27500;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,6 +34,14 @@ pub enum CombatNotice {
         target: u32,
         amount: f64,
         shot_frame: u32,
+    },
+    /// Retail `25003` -> client StateScript `0x02400000000008CB` heal feedback/audio event.
+    HealEvent {
+        healer: u32,
+        target: u32,
+        amount: f64,
+        full: bool,
+        loadout: u64,
     },
     DamageReceived {
         source: u32,
@@ -54,6 +66,29 @@ pub enum CombatNotice {
         score: u16,
         label: u64,
     },
+    /// Killcam / Play of the Game highlight header (`25011`).
+    HighlightHeader {
+        star_entity: u32,
+        target_entity: u32,
+        category: u32,
+        star_hero: u64,
+        start_tick: u32,
+        end_tick: u32,
+    },
+    /// End-of-match commendation card (`25012`).
+    CommendationCardNotice {
+        card_index: u32,
+        owner: u32,
+        hero: u64,
+        stat_guid: u64,
+        value: f32,
+    },
+    /// End-of-match card vote tally update (`25013`).
+    CardVoteUpdate {
+        card_index: u32,
+        votes: u32,
+        epic: bool,
+    },
     Voice {
         anchor: u32,
         speaker: u32,
@@ -73,11 +108,16 @@ impl CombatNotice {
 
     pub fn required_identity(self) -> Option<u32> {
         match self {
-            Self::Hit { target, .. } | Self::HealConfirm { target, .. } => Some(target),
+            Self::Hit { target, .. }
+            | Self::HealConfirm { target, .. }
+            | Self::HealEvent { target, .. } => Some(target),
             Self::DamageReceived { source, .. } => Some(source),
             Self::Death { source, killed_by } => killed_by.then_some(source),
             Self::Elimination { victim, .. } => Some(victim),
-            Self::ScorePopup { .. } => None,
+            Self::ScorePopup { .. }
+            | Self::HighlightHeader { .. }
+            | Self::CommendationCardNotice { .. }
+            | Self::CardVoteUpdate { .. } => None,
             Self::Voice { anchor, .. } => Some(anchor),
         }
     }
@@ -87,10 +127,17 @@ impl CombatNotice {
             Self::Hit { target, .. } | Self::HealConfirm { target, .. } => {
                 [Some(target), None, None]
             }
+            Self::HealEvent { healer, target, .. } => [Some(healer), Some(target), None],
             Self::DamageReceived { source, victim, .. } => [Some(source), Some(victim), None],
             Self::Death { source, killed_by } => [killed_by.then_some(source), None, None],
             Self::Elimination { killer, victim, .. } => [Some(killer), Some(victim), None],
-            Self::ScorePopup { .. } => [None, None, None],
+            Self::HighlightHeader {
+                star_entity,
+                target_entity,
+                ..
+            } => [Some(star_entity), Some(target_entity), None],
+            Self::CommendationCardNotice { owner, .. } => [Some(owner), None, None],
+            Self::ScorePopup { .. } | Self::CardVoteUpdate { .. } => [None, None, None],
             Self::Voice {
                 anchor,
                 speaker,
@@ -154,6 +201,32 @@ impl CombatNotice {
                         ])),
                     ),
                     (0x84, Value::Unsigned(u64::from(shot_frame))),
+                ]),
+            ),
+            Self::HealEvent {
+                healer,
+                target,
+                amount,
+                full,
+                loadout,
+            } => (
+                HEAL_EVENT,
+                Fields::from([
+                    (0x78, entity(healer)),
+                    (
+                        0x7c,
+                        Value::Struct(Fields::from([
+                            (0, entity(target)),
+                            (
+                                4,
+                                Value::Unsigned(
+                                    u64::from(amount.round_ties_even().max(1.0) as u32),
+                                ),
+                            ),
+                            (8, Value::Unsigned(u64::from(full))),
+                        ])),
+                    ),
+                    (0x88, Value::Unsigned(loadout)),
                 ]),
             ),
             Self::DamageReceived {
@@ -234,6 +307,70 @@ impl CombatNotice {
                 Fields::from([
                     (0x78, Value::Unsigned(u64::from(score))),
                     (0x80, Value::Unsigned(label)),
+                ]),
+            ),
+            Self::HighlightHeader {
+                star_entity,
+                target_entity,
+                category,
+                star_hero,
+                start_tick,
+                end_tick,
+            } => (
+                HIGHLIGHT_HEADER,
+                Fields::from([
+                    (0x78, entity(star_entity)),
+                    (0x7c, entity(target_entity)),
+                    (0x80, Value::String(String::new())),
+                    (0xa8, Value::Unsigned(u64::from(category))),
+                    (0xb0, Value::Unsigned(star_hero)),
+                    (0xb8, Value::Unsigned(u64::from(start_tick))),
+                    (0xc0, Value::Array(Vec::new())),
+                    (
+                        0xd8,
+                        Value::Signed(i64::from(end_tick.saturating_sub(start_tick))),
+                    ),
+                    (0xdc, entity(star_entity)),
+                    (0xe0, Value::Unsigned(u64::from(end_tick))),
+                ]),
+            ),
+            Self::CommendationCardNotice {
+                card_index,
+                owner,
+                hero,
+                stat_guid,
+                value,
+            } => (
+                COMMENDATION_CARD,
+                Fields::from([
+                    (
+                        0x78,
+                        Value::Struct(Fields::from([
+                            (0x10, Value::Unsigned(u64::from(owner))),
+                            (0x18, Value::Unsigned(hero)),
+                            (0x20, Value::Unsigned(stat_guid)),
+                            (0x38, Value::Unsigned(u64::from(value.to_bits()))),
+                        ])),
+                    ),
+                    (0x158, Value::Signed(i64::from(card_index))),
+                ]),
+            ),
+            Self::CardVoteUpdate {
+                card_index,
+                votes,
+                epic,
+            } => (
+                CARD_VOTE_UPDATE,
+                Fields::from([
+                    (
+                        0x78,
+                        Value::Struct(Fields::from([
+                            (0x00, Value::Unsigned(u64::from(card_index))),
+                            (0x08, Value::Unsigned(u64::from(votes))),
+                        ])),
+                    ),
+                    (0xe0, Value::Bool(epic)),
+                    (0xe4, Value::Float32(votes as f32)),
                 ]),
             ),
             Self::Voice {

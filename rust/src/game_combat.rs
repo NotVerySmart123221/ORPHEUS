@@ -259,6 +259,41 @@ pub(super) struct ActorStatus {
     pub(super) dot_ticks: u16,
     pub(super) dot_per_tick: f64,
     pub(super) dot_source: u32,
+    /// Root effect (e.g. Junkrat Steel Trap): clamps horizontal velocity without blocking weapon fire.
+    pub(super) rooted_until: Option<u32>,
+    /// Two-stage pull tether `(puller_wire, target_pos, expires_tick)` (e.g. Roadhog Chain Hook).
+    pub(super) hook_pull: Option<(u32, Vec3, u32)>,
+    /// Continuous beam charge level `0.0..=2.0` (level 1 -> 2 -> 3 ramp, e.g. Symmetra LMB).
+    pub(super) beam_charge: f32,
+    pub(super) beam_last_hit_tick: u32,
+}
+
+/// Fallen ally soul anchor spawned on player death (10s window) for Mercy Resurrect.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SoulAnchor {
+    #[allow(dead_code)]
+    pub(super) owner: u32,
+    pub(super) body: BodyId,
+    pub(super) team: u8,
+    pub(super) position: Vec3,
+    pub(super) expires_tick: u32,
+}
+
+/// Active Echo Duplicate transform: reverts cleanly to `original_body` at 0 HP or `expires_tick`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct DuplicateState {
+    pub(super) original_body: u64,
+    pub(super) expires_tick: u32,
+}
+
+/// Gliding Self-Destruct bomb (D.Va Q): glides forward and detonates for 1000 LOS damage.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SelfDestructBomb {
+    pub(super) owner: u32,
+    pub(super) team: u8,
+    pub(super) position: Vec3,
+    pub(super) velocity: Vec3,
+    pub(super) detonate_tick: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -1017,6 +1052,10 @@ pub(crate) struct RoomSimulation {
     room_pets: IndexMap<u32, deployables::RoomPet>,
     room_deployables: IndexMap<u32, deployables::RoomDeployable>,
     actor_statuses: HashMap<u32, ActorStatus>,
+    soul_anchors: Vec<SoulAnchor>,
+    active_duplicates: HashMap<u32, DuplicateState>,
+    pending_duplicate_reverts: HashMap<u32, u64>,
+    self_destruct_bombs: Vec<SelfDestructBomb>,
     health_pack_states: Vec<HealthPackState>,
     jump_pad_cooldowns: HashMap<u32, u32>,
     scheduled_voices: Vec<(u32, u32, u64, u64)>,
@@ -1029,6 +1068,9 @@ pub(crate) struct RoomSimulation {
     interactive_props: crate::room_primitives::InteractivePropRuntime,
     interactive_prop_floor_y: f64,
     pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
+    pvp_completion_emitted: bool,
+    pending_match_winner: Option<u8>,
+    completed_career_records: Vec<(u32, crate::game_progression::CareerMatchRecord)>,
     player_names: HashMap<u32, String>,
     #[cfg(feature = "lua-mods")]
     mod_host: Option<Arc<std::sync::Mutex<crate::mod_script::ModHost>>>,
@@ -1521,6 +1563,10 @@ impl RoomSimulation {
             room_pets: IndexMap::new(),
             room_deployables: IndexMap::new(),
             actor_statuses: HashMap::new(),
+            soul_anchors: Vec::new(),
+            active_duplicates: HashMap::new(),
+            pending_duplicate_reverts: HashMap::new(),
+            self_destruct_bombs: Vec::new(),
             health_pack_states: Vec::new(),
             jump_pad_cooldowns: HashMap::new(),
             scheduled_voices: Vec::new(),
@@ -1533,6 +1579,9 @@ impl RoomSimulation {
             interactive_props: crate::room_primitives::InteractivePropRuntime::default(),
             interactive_prop_floor_y: 0.0,
             pvp_objective: None,
+            pvp_completion_emitted: false,
+            pending_match_winner: None,
+            completed_career_records: Vec::new(),
             player_names: HashMap::new(),
             #[cfg(feature = "lua-mods")]
             mod_host: None,
@@ -1572,7 +1621,6 @@ impl RoomSimulation {
         self.pvp_objective.as_ref()
     }
 
-    #[cfg(test)]
     pub(crate) fn set_pvp_objective(&mut self, runtime: crate::pvp_mode::PvpObjectiveRuntime) {
         self.pvp_objective = Some(runtime);
     }
@@ -1696,8 +1744,10 @@ impl RoomSimulation {
         }
         if let Some(pvp) = &mut self.pvp_objective {
             let mut actors = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
+            let mut wire_to_owner: HashMap<u32, u32> = HashMap::new();
             for (&wire, &entity) in &self.players_by_wire {
                 if let Some(state) = self.world.get::<PlayerBodyState>(entity) {
+                    wire_to_owner.insert(wire, state.owner);
                     actors.push(crate::room_primitives::ActorSample {
                         entity: wire,
                         team: state.team,
@@ -1716,8 +1766,74 @@ impl RoomSimulation {
                     });
                 }
             }
+            // High-HP autonomous companions (e.g. Ashe's B.O.B. >= 800 HP) contest and
+            // capture PvP objectives just like retail Overwatch.
+            for (&wire, pet) in &self.room_pets {
+                if pet.attach.is_none()
+                    && pet
+                        .vitals
+                        .as_ref()
+                        .is_some_and(|v| v.death().is_none() && v.maximum() >= 800.0)
+                {
+                    actors.push(crate::room_primitives::ActorSample {
+                        entity: wire,
+                        team: pet.team,
+                        position: pet.position,
+                        alive: true,
+                    });
+                }
+            }
             pvp.advance(now_secs, &actors);
+            let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
+            for wire in pvp.objective_occupants(&actors) {
+                if let Some(&owner) = wire_to_owner.get(&wire) {
+                    self.scoreboard.record_objective_time(owner, dt, now_secs);
+                }
+            }
+            if !self.pvp_completion_emitted {
+                if let Some(winner) = pvp.winner() {
+                    self.pvp_completion_emitted = true;
+                    self.pending_match_winner = Some(winner);
+                }
+            }
         }
+    }
+
+    pub(crate) fn take_match_winner(&mut self) -> Option<u8> {
+        self.pending_match_winner.take()
+    }
+
+    pub(crate) fn record_completed_career_matches(
+        &mut self,
+        winner: u8,
+        mode_name: &str,
+        now_secs: f64,
+    ) {
+        let Some((catalog, mode)) = self.stats_catalog.as_ref() else {
+            return;
+        };
+        let participants: Vec<(u32, u8)> = self
+            .players_by_wire
+            .values()
+            .filter_map(|&entity| self.world.get::<PlayerBodyState>(entity))
+            .map(|state| (state.owner, state.team))
+            .collect();
+        for (owner, team) in participants {
+            let won = team == winner;
+            if let Some(rec) = self
+                .scoreboard
+                .build_career_record(catalog, *mode, mode_name, owner, won, false, now_secs)
+            {
+                self.completed_career_records.push((owner, rec));
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn take_completed_career_records(
+        &mut self,
+    ) -> Vec<(u32, crate::game_progression::CareerMatchRecord)> {
+        std::mem::take(&mut self.completed_career_records)
     }
 
     #[cfg(test)]
@@ -4953,6 +5069,13 @@ impl RoomSimulation {
         self.interactive_props = Default::default();
         self.interactive_prop_floor_y = 0.0;
         self.pvp_objective = None;
+        self.pvp_completion_emitted = false;
+        self.pending_match_winner = None;
+        self.completed_career_records.clear();
+        self.soul_anchors.clear();
+        self.active_duplicates.clear();
+        self.pending_duplicate_reverts.clear();
+        self.self_destruct_bombs.clear();
         #[cfg(feature = "lua-mods")]
         {
             self.mod_host = None;

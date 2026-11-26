@@ -60,21 +60,37 @@ impl HurtPose {
 
     fn capsules(self) -> impl Iterator<Item = (Capsule, bool)> {
         let [x, y, z] = self.movement.feet;
+        let (sin, cos) = self
+            .stance
+            .map(|stance| {
+                let rad = f64::from(stance.yaw) * std::f64::consts::TAU / 65_536.0;
+                rad.sin_cos()
+            })
+            .unwrap_or((0.0, 1.0));
         let world = |shape: LocalCapsule, head| {
+            let fwd = shape.forward_offset;
+            let cx = x + sin * fwd;
+            let cz = z + cos * fwd;
             (
                 Capsule {
-                    ends: [[x, y + shape.lower, z], [x, y + shape.upper, z]],
+                    ends: [[cx, y + shape.lower, cz], [cx, y + shape.upper, cz]],
                     radius: shape.radius,
                 },
                 head,
             )
         };
         let regions = match (self.calibrated, self.stance) {
-            (Some(profile), _) => [
-                Some(world(profile.body, false)),
-                profile.head.map(|shape| world(shape, true)),
-                None,
-            ],
+            (Some(profile), stance) => {
+                let head_protected = stance.is_some_and(|s| s.head_protected);
+                [
+                    Some(world(profile.body, false)),
+                    (!head_protected)
+                        .then_some(profile.head)
+                        .flatten()
+                        .map(|shape| world(shape, true)),
+                    None,
+                ]
+            }
             (None, Some(stance)) => {
                 let h = self.movement.height.max(0.8);
                 let r = self.movement.radius.max(0.25);
@@ -255,6 +271,10 @@ struct LocalCapsule {
     lower: f64,
     upper: f64,
     radius: f64,
+    /// Optional local forward offset along actor facing yaw (e.g. D.Va MEKA cockpit,
+    /// Bastion Sentry rear core with negative offset, or forward-leaning Tank heads).
+    #[serde(default)]
+    forward_offset: f64,
 }
 
 impl LocalCapsule {
@@ -264,6 +284,7 @@ impl LocalCapsule {
             && self.lower <= self.upper
             && self.radius.is_finite()
             && self.radius > 0.0
+            && self.forward_offset.is_finite()
     }
 }
 

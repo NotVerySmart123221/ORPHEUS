@@ -795,3 +795,55 @@ fn contract_match_audio_v1() {
     // Suppress unused helper warnings when all checks pass
     let _ = (parse_hex_u32, MAP_ENTITY_BIT, SPECTATOR_TEAM);
 }
+
+#[test]
+fn from_game_map_auto_mounts_all_four_pvp_modes() {
+    use crate::game_content::{GameMap, MapObjective};
+    let make_map = |objectives: Vec<MapObjective>| GameMap {
+        objectives,
+        ..GameMap::practice_range()
+    };
+    let obj = |kind: &str, pos: [f64; 3]| MapObjective {
+        kind: kind.into(),
+        name: None,
+        placeable: Some(10),
+        position: pos,
+        rotation: None,
+    };
+    let assault = make_map(vec![
+        obj("point", [0.0, 0.0, 0.0]),
+        obj("point", [40.0, 0.0, 0.0]),
+    ]);
+    assert!(matches!(
+        PvpObjectiveRuntime::from_game_map(&assault),
+        Some(PvpObjectiveRuntime::Assault(_))
+    ));
+    let escort = make_map(vec![
+        obj("payload", [0.0, 0.0, 0.0]),
+        obj("checkpoint", [50.0, 0.0, 0.0]),
+        obj("checkpoint", [100.0, 0.0, 0.0]),
+    ]);
+    assert!(matches!(
+        PvpObjectiveRuntime::from_game_map(&escort),
+        Some(PvpObjectiveRuntime::Escort(_))
+    ));
+    let hybrid = make_map(vec![
+        obj("point", [0.0, 0.0, 0.0]),
+        obj("payload", [2.0, 0.0, 0.0]),
+        obj("checkpoint", [60.0, 0.0, 0.0]),
+    ]);
+    assert!(matches!(
+        PvpObjectiveRuntime::from_game_map(&hybrid),
+        Some(PvpObjectiveRuntime::Hybrid(_))
+    ));
+    let control = make_map(vec![
+        obj("control point", [0.0, 0.0, 0.0]),
+        obj("control point", [0.0, 100.0, 0.0]),
+        obj("control point", [0.0, 200.0, 0.0]),
+    ]);
+    assert!(matches!(
+        PvpObjectiveRuntime::from_game_map(&control),
+        Some(PvpObjectiveRuntime::Control(_))
+    ));
+    assert!(PvpObjectiveRuntime::from_game_map(&GameMap::practice_range()).is_none());
+}

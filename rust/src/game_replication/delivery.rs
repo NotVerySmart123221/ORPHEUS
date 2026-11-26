@@ -2207,23 +2207,50 @@ impl WorldDelivery {
         let Some(entity) = self.next_body(now) else {
             return Ok(());
         };
+        const DVA_MEKA_BODY: u64 = 0x0400_0000_0000_0407;
+        const DVA_PILOT_BODY: u64 = 0x0400_0000_0000_040a;
         let swap = {
+            let duplicate_revert = scene
+                .simulation_mut()
+                .take_pending_duplicate_revert(self.owner);
             let Some(state) = scene.simulation_mut().player_body_mut(body.id) else {
                 return Ok(());
             };
-            let Some(new_body) = state
-                .runtime
-                .as_mut()
-                .and_then(|runtime| runtime.take_body_swap())
-            else {
+            let Some(new_body) = duplicate_revert.or_else(|| {
+                state
+                    .runtime
+                    .as_mut()
+                    .and_then(|runtime| runtime.take_body_swap())
+            }) else {
                 return Ok(());
             };
             if new_body == state.body_template {
                 return Ok(());
             }
             let pose = state.mover.pose();
-            (new_body, pose.position, pose.yaw)
+            let old_body = state.body_template;
+            (new_body, old_body, pose.position, pose.velocity, pose.yaw)
         };
+        // D.Va Call Mech crush (Pilot -> MEKA): 250 AoE damage + knockback within 3.0m.
+        if swap.1 == DVA_PILOT_BODY && swap.0 == DVA_MEKA_BODY {
+            scene.simulation_mut().apply_call_mech_crush(
+                body.id.entity,
+                viewer.team,
+                swap.2,
+                tick,
+                now,
+            );
+        }
+        // D.Va Self-Destruct eject (MEKA -> Pilot while moving forward): glide & detonate.
+        if swap.1 == DVA_MEKA_BODY && swap.0 == DVA_PILOT_BODY && swap.3[0].hypot(swap.3[2]) > 3.5 {
+            scene.simulation_mut().spawn_self_destruct_bomb(
+                body.id.entity,
+                viewer.team,
+                swap.2,
+                swap.3,
+                tick,
+            );
+        }
         let mut hero = scene
             .heroes()
             .get(body.hero)
@@ -2237,7 +2264,7 @@ impl WorldDelivery {
             quanta,
             entity,
             (&hero, body.skin),
-            Some((swap.1, swap.2)),
+            Some((swap.2, swap.4)),
             true,
         )
     }
