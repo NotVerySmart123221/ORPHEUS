@@ -27,14 +27,24 @@ pub fn confirmation(entity: u32, definition: u64) -> EntityUpdate {
 /// Release an acknowledged predicted projectile at its client impact point.
 /// The count-only state uses a blank baseline and a frame ahead of its flight.
 pub fn release(frame: u32, impacts: u32) -> Result<BitWriter, BitError> {
+    release_at(frame, HIDDEN_POSITION, impacts)
+}
+
+/// Release a projectile with a specific authoritative impact/end position.
+pub fn release_at(frame: u32, position: [f32; 3], impacts: u32) -> Result<BitWriter, BitError> {
     let mut out = BitWriter::new();
     out.bit(false); // no shot events
     out.bit(true); // one projectile state
     out.var_b(NO_BASELINE);
     out.var_b(frame.wrapping_add(1));
     out.bits(0, 2)?; // alive, no optional field at +260
-    for position in HIDDEN_POSITION {
-        out.f32(position);
+    let pos = if position.into_iter().all(f32::is_finite) {
+        position
+    } else {
+        HIDDEN_POSITION
+    };
+    for coord in pos {
+        out.f32(coord);
     }
     out.bits(0, 5)?; // unchanged velocity, +88 and three lists
     out.bit(true); // impact count

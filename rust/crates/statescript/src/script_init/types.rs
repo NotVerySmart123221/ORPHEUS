@@ -187,6 +187,29 @@ pub enum StateKind {
     MoveTo {
         movement: Option<([f64; 3], f64)>,
     },
+    CombatModFilter {
+        registered: bool,
+    },
+    DeflectProjectiles {
+        reflect: bool,
+        half_angle_deg: f64,
+    },
+    GenericContactSweep,
+    TargetAura {
+        effect: u64,
+    },
+    TargetSubScript {
+        child: Option<u16>,
+    },
+    ConstantAccel,
+    WallClimb,
+    Grapple,
+    RecallHistory,
+    RecallRewind,
+    BallRoll {
+        fireball: bool,
+    },
+    FilterArray,
     WeaponVolley {
         volleys: u8,
         offset_ms: u64,
@@ -202,10 +225,19 @@ pub(super) struct BufferedPress {
     pub(super) button: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GrappleState {
+    pub(super) anchor: [f64; 3],
+    pub(super) speed: f64,
+    pub(super) pendulum: bool,
+    pub(super) rope_len: f64,
+}
+
 #[derive(Clone, Debug)]
 pub struct State {
     pub tracked_targets: Vec<u32>,
     pub(super) ground_wave: Option<Box<super::world::GroundWave>>,
+    pub(super) grapple: Option<Box<GrappleState>>,
     pub(super) target_children: BTreeMap<u32, u16>,
     pub active: bool,
     pub activation: u16,
@@ -242,8 +274,16 @@ impl State {
     }
 
     pub fn move_request(&self) -> Option<([f64; 3], f64)> {
+        if !self.active {
+            return None;
+        }
         match self.kind {
-            StateKind::MoveTo { movement } if self.active => movement,
+            StateKind::MoveTo { movement } => movement,
+            StateKind::Grapple => self
+                .grapple
+                .as_deref()
+                .filter(|g| !g.pendulum)
+                .map(|g| (g.anchor, g.speed)),
             _ => None,
         }
     }
@@ -252,6 +292,7 @@ impl State {
         Self {
             tracked_targets: Vec::new(),
             ground_wave: None,
+            grapple: None,
             target_children: BTreeMap::new(),
             active: false,
             activation: 0,

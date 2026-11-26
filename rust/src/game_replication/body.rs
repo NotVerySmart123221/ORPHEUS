@@ -166,7 +166,11 @@ impl BodyScript {
             self.frame = command.frame;
         }
         match runtime.snapshot() {
-            Some(snapshot) if snapshot.initialization_complete() => {}
+            Some(snapshot)
+                if snapshot.diagnostics.iter().all(|diagnostic| {
+                    diagnostic.server_only
+                        || diagnostic.issue == crate::script_init::Issue::ObservationUnavailable
+                }) => {}
             Some(snapshot) => {
                 mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
@@ -186,6 +190,7 @@ impl BodyScript {
         }
         mover.set_cinematic_aim(runtime.cinematic_aim());
         mover.set_authored_facing(runtime.authored_facing());
+        mover.set_move_request(runtime.move_request());
         let velocity_changes = runtime.take_velocity_changes();
         if runtime
             .vitals()
@@ -274,7 +279,10 @@ impl BodyScript {
         };
         let flight = flight
             .with_target_policy(projectile.target_policy)
-            .with_piercing(projectile.piercing);
+            .with_piercing(projectile.piercing)
+            .with_post_bounce_fuse(projectile.post_bounce_fuse)
+            .with_sticky_delay(projectile.sticky_delay)
+            .with_effects(projectile.direct_effect, projectile.blast_effect);
         let token = if projectile.predicted {
             let Some((projectiles, def)) = self.projectiles.as_mut().zip(definition) else {
                 #[cfg(feature = "inspector")]

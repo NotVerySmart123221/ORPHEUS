@@ -779,8 +779,10 @@ fn explosion_float(config: &Json) -> bool {
 
 fn native_expression_operand(config: &Json) -> bool {
     let vars = field(config, "m_configVars");
-    field(config, "$").as_str() == Some("STU_919FD47C")
-        && script_expr::native_fields(config, &["m_expression", "m_configVars"])
+    matches!(
+        field(config, "$").as_str(),
+        Some("STU_919FD47C" | "STUConfigVarExpression")
+    ) && script_expr::native_fields(config, &["m_expression", "m_configVars"])
         && field(config, "m_expression").is_object()
         && (vars.is_null() || vars.is_array())
 }

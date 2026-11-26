@@ -896,6 +896,35 @@ impl Room {
                 }
             }
         }
+        if !world.scene.simulation().encounter_screens_complete() {
+            for member in self.members.values_mut() {
+                let Some(peer) = &mut member.peer else {
+                    continue;
+                };
+                let Some(player) = self.players.get(member.slot).filter(|player| !player.gone)
+                else {
+                    continue;
+                };
+                let Ok(slot) = i8::try_from(member.slot) else {
+                    continue;
+                };
+                let viewer = PlayerAppearance {
+                    entity: player.entity,
+                    slot,
+                    team: player.info.team,
+                    card: &world.card,
+                };
+                if let Err(error) = peer.world.advance_body_swap(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!("player {:08X} body swap rejected: {error}", viewer.entity);
+                }
+            }
+        }
         Ok(RoomUpdates {
             replacements,
             created: world.scene.take_enemy_creates(),

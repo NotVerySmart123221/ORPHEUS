@@ -121,13 +121,48 @@ type OwnerBodyFactory = dyn Fn(&Hero, OwnerBodySpawn, OwnerBodySetup) -> io::Res
     + Sync;
 
 fn practice_owner_selector(
-    factories: BTreeMap<u64, Result<PlayerBodyFactory, Arc<SceneOwnerPreparationError>>>,
+    factories: BTreeMap<
+        (u64, u64),
+        Result<Arc<PlayerBodyFactory>, Arc<SceneOwnerPreparationError>>,
+    >,
+    graphs: Arc<GraphStore>,
+    codecs: Option<Arc<CodecTable>>,
+    mode: u64,
+    pools: Arc<PoolCatalog>,
+    controller_on_fire: Option<bool>,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
 ) -> Arc<OwnerBodyFactory> {
+    let cache = Mutex::new(factories);
     Arc::new(move |hero, spawn, setup| {
-        let Some(factory) = factories.get(&hero.guid) else {
-            return Ok(None);
+        let key = (hero.guid, hero.body);
+        let entry = {
+            let mut guard = cache
+                .lock()
+                .map_err(|_| io::Error::other("owner body factory cache poisoned"))?;
+            if let Some(existing) = guard.get(&key) {
+                existing.clone()
+            } else if graphs.entity_body(hero.body).is_some() {
+                let compiled = match (codecs.as_ref(), controller_on_fire) {
+                    (Some(codecs), Some(on_fire)) => PlayerBodyFactory::from_body(
+                        Arc::clone(&graphs),
+                        Arc::clone(codecs),
+                        mode,
+                        hero,
+                        pools.hero_pools(hero.guid),
+                        on_fire,
+                    )
+                    .map(|f| Arc::new(f.with_anim_timing(anim_timing.clone())))
+                    .map_err(|source| Arc::new(SceneOwnerPreparationError::Body(Box::new(source)))),
+                    (None, _) => Err(Arc::new(SceneOwnerPreparationError::Codecs)),
+                    (_, None) => Err(Arc::new(SceneOwnerPreparationError::ControllerFlag)),
+                };
+                guard.insert(key, compiled.clone());
+                compiled
+            } else {
+                return Ok(None);
+            }
         };
-        let factory = factory
+        let factory = entry
             .as_ref()
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(error)))?;
         let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
@@ -546,6 +581,7 @@ impl SceneAssets {
         if contacts.is_some() {
             simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
         }
+        simulation.set_script_graphs(Arc::clone(&self.graphs), map.mode_guid);
         if let Some(codecs) = self
             .codecs
             .as_ref()
@@ -733,12 +769,25 @@ impl SceneAssets {
             .heroes()
             .map(|hero| {
                 (
-                    hero.guid,
-                    self.compile_owner_factory(scene, hero).map_err(Arc::new),
+                    (hero.guid, hero.body),
+                    self.compile_owner_factory(scene, hero)
+                        .map(Arc::new)
+                        .map_err(Arc::new),
                 )
             })
             .collect();
-        (!factories.is_empty()).then(|| practice_owner_selector(factories))
+        let on_fire = initial_on_fire(&scene.initial_board);
+        (!factories.is_empty()).then(|| {
+            practice_owner_selector(
+                factories,
+                Arc::clone(&self.graphs),
+                self.codecs.clone(),
+                scene.map.mode_guid,
+                Arc::clone(&self.pools),
+                on_fire,
+                self.anim_timing.clone(),
+            )
+        })
     }
 
     #[cfg(test)]

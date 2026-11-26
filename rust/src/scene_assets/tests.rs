@@ -382,8 +382,10 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
             false,
         );
         (
-            hero.guid,
-            prepared.map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
+            (hero.guid, hero.body),
+            prepared
+                .map(Arc::new)
+                .map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
         )
     });
     assert!(definitions[0].1.is_ok() && definitions[1].1.is_ok());
@@ -392,7 +394,15 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
         matches!(invalid, Some(SceneOwnerPreparationError::Body(error))
         if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody))
     );
-    scene.owner_body_factory = Some(practice_owner_selector(definitions.into_iter().collect()));
+    scene.owner_body_factory = Some(practice_owner_selector(
+        definitions.into_iter().collect(),
+        Arc::clone(&graphs),
+        Some(Arc::clone(&codecs)),
+        scene.map().mode_guid,
+        Arc::new(PoolCatalog::default()),
+        Some(false),
+        None,
+    ));
     let spawn = OwnerBodySpawn {
         slot: 0,
         controller: OWNER_PROBE_CONTROLLER,

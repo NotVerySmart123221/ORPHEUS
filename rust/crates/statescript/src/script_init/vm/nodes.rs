@@ -319,22 +319,44 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 let site = self.site(id, node);
-                let target_field = field(&node.fields, "m_0F99C09F");
-                let targets_self = target_field.is_null()
-                    || matches!(
-                        self.evaluate(id, node, target_field, caller),
-                        Some(Value::Entity(entity)) if entity == site.entity
-                    );
-                if targets_self {
-                    if let Some(Value::Vector(delta)) =
-                        self.evaluate(id, node, field(&node.fields, "m_direction"), caller)
-                    {
-                        if delta.iter().all(|a| (*a as f32).is_finite()) {
-                            let _ = self.world.apply_velocity_ops(
-                                site,
-                                self.machine.frame,
-                                &[VelocityOp::AddVector(delta)],
-                            );
+                // `m_C285CBB2` is the impulse recipient (target); `m_0F99C09F` is the instigator.
+                let recipient_field = field(&node.fields, "m_C285CBB2");
+                let target_field = if recipient_field.is_null() {
+                    field(&node.fields, "m_0F99C09F")
+                } else {
+                    recipient_field
+                };
+                let target_val = if target_field.is_null() {
+                    Some(Value::Entity(site.entity))
+                } else {
+                    self.evaluate(id, node, target_field, caller)
+                };
+                if let Some(Value::Vector(delta)) =
+                    self.evaluate(id, node, field(&node.fields, "m_direction"), caller)
+                {
+                    if delta.iter().all(|a| (*a as f32).is_finite()) {
+                        let targets = match target_val {
+                            Some(Value::Array(items)) => items,
+                            Some(v @ Value::Entity(_)) => vec![v],
+                            _ => Vec::new(),
+                        };
+                        for item in targets {
+                            if let Value::Entity(entity) = item {
+                                if entity == site.entity {
+                                    let _ = self.world.apply_velocity_ops(
+                                        site,
+                                        self.machine.frame,
+                                        &[VelocityOp::AddVector(delta)],
+                                    );
+                                } else if script_expr::valid_entity(entity) {
+                                    let _ = self.world.queue_modify_health(
+                                        site,
+                                        entity,
+                                        0.0,
+                                        Some(delta),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -394,12 +416,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .world
                     .admits_generic_player_runtime(self.site(id, node)) =>
             {
-                if let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "m_B3019338")) {
-                    let target = source_key(id, output);
-                    if stored(&self.machine.snapshot, target) == Value::Null {
-                        self.write(target, Value::Null)?;
-                    }
-                }
+                self.run_create_entity(id, node, caller)?;
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            "STU_0B0BABC6"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)) =>
+            {
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -970,7 +995,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     matches!(rows, [row] if matches!(
                         row.get("$").and_then(Json::as_str),
                         Some("STU_748FC65A" | "STU_95A10547")
-                    ) && field(row, "m_priority").is_null())
+                    ) && field(row, "m_priority").is_null()
+                        && row.get(if row.get("$").and_then(Json::as_str) == Some("STU_748FC65A") {
+                            "m_A9561CA0"
+                        } else {
+                            "m_CFEC5F76"
+                        }).and_then(Json::as_u64) == Some(1))
                 }) =>
             {
                 let rows = array_field(&node.fields, "m_BC5E91CF");
@@ -1130,9 +1160,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_6FEE499E"
-                if registration.shape(field(&node.fields, "m_93CDFD2F").as_u64() == Some(1)) =>
+                if registration.shape(matches!(
+                    field(&node.fields, "m_93CDFD2F").as_u64(),
+                    Some(0 | 1)
+                )) =>
             {
-                // Pinned Roll fallback; the native service remains unverified.
+                // Movement ability state-reset action (used on Blink, Jump Jet, Grapple, GA, Uppercut).
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -1874,7 +1907,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 StateKind::Plain
             }
             "STU_BD02E168"
-                if registration.shape(is_client_subgraph_controller(self.graph(id), node)) =>
+                if registration.shape(is_client_subgraph_controller(self.graph(id), node))
+                    || self
+                        .world
+                        .admits_generic_player_runtime(self.site(id, node)) =>
             {
                 StateKind::Plain
             }
@@ -2027,7 +2063,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .admits_generic_player_runtime(self.site(id, node))
                     && node.is_state() =>
             {
-                StateKind::Plain
+                StateKind::HealthPool { pool: None }
             }
             "STU_B7D2C9C0" => StateKind::DisplayName { binding: None },
             "STU_E56BA8D8" if registration.shape(node.is_networked() && node.remote == -1) => {
@@ -2204,10 +2240,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // in the Python reference (`world.tracked_targets` returns
             // NotImplemented / empty targets).
             "STUStatescriptStateTrackTargets"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0257, 11) | (0x00ca, 90)
-                )) =>
+                if registration.permits((self.graph(id).index, node.pos) == (0x0257, 11)) =>
             {
                 StateKind::EmptyTargets
             }
@@ -2441,40 +2474,127 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Pet { entity: None }
             }
+            "STUStatescriptStateCombatModFilter"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::CombatModFilter { registered: false }
+            }
+            "STUStatescriptStateDeflectProjectiles"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::DeflectProjectiles {
+                    reflect: false,
+                    half_angle_deg: 90.0,
+                }
+            }
+            "STU_23A00A53"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::GenericContactSweep
+            }
+            "STU_431F3FCC"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::TargetAura { effect: 0 }
+            }
+            "STU_CB4905E9"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::TargetSubScript { child: None }
+            }
+            "STU_A9C4FF83"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::ConstantAccel
+            }
+            "STU_798B41F4" | "STU_92ED01D0"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::WallClimb
+            }
+            "STU_4BBC5D09" | "STU_8B4B379C"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::Grapple
+            }
+            "STU_0A6BE10E"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::FilterArray
+            }
+            "STU_CF950CB5"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::RecallHistory
+            }
+            "STU_41B3FC2B"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::RecallRewind
+            }
+            "STU_C537444C"
+                if self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node))
+                    && node.is_state() =>
+            {
+                StateKind::BallRoll { fireball: false }
+            }
             "STUStatescriptStateBlinkEffect"
             | "STUStatescriptStateRayCast"
-            | "STUStatescriptStatePet"
-            | "STUStatescriptStateDeflectProjectiles"
             | "STUStatescriptStateAnimatedCamera"
-            | "STU_0A6BE10E"
             | "STU_BA4C2296"
-            | "STU_431F3FCC"
-            | "STU_CB4905E9"
             | "STU_5AFB02C7"
             | "STU_1E356736"
-            | "STU_4BBC5D09"
             | "STU_43DB06B1"
             | "STU_54FEB21C"
             | "STU_D07EBF01"
             | "STU_C1BA7545"
             | "STU_D1BF5FA6"
-            | "STU_CF950CB5"
-            | "STU_A9C4FF83"
             | "STU_64CFBC4E"
             | "STU_9932D728"
             | "STU_CA861E44"
             | "STU_D1D0DED6"
             | "STU_FBFF5DE7"
             | "STU_4773DA56"
-            | "STUStatescriptStateCombatModFilter"
             | "STU_4D076571"
             | "STU_C5D842D8"
-            | "STU_C537444C"
             | "STU_582E0D5F"
             | "STU_D09BD154"
             | "STUStatescriptStatePhysicsExplosion"
-            | "STU_798B41F4"
-            | "STU_92ED01D0"
             | "STU_0DB9E66B"
             | "STU_72DDE005"
             | "STU_757BBC46"
@@ -2493,7 +2613,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | "STU_45D3C742"
             | "STU_1E0773EB"
             | "STU_57BDCAB6"
-            | "STU_41B3FC2B"
             | "STU_1F5ED928"
             | "STU_9163D489"
             | "STU_875C9635"
@@ -2508,7 +2627,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | "STU_C18969E1"
             | "STU_CB6C0ED7"
             | "STU_75C1D62C"
-            | "STU_8B4B379C"
             | "STU_4DCDA966"
             | "STU_15F1260F"
             | "STU_51BBFB1B"
@@ -2574,6 +2692,36 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             StateKind::Pet { .. } => self.begin_pet(key, node)?,
+            StateKind::CombatModFilter { .. } => self.begin_combat_mod(key, node)?,
+            StateKind::DeflectProjectiles { .. } => self.begin_deflect(key, node)?,
+            StateKind::GenericContactSweep => {
+                self.refresh_generic_contact_sweep(key, node)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::TargetAura { .. } => {
+                self.refresh_target_aura(key, node)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::TargetSubScript { .. } => self.begin_target_subscript(key, node)?,
+            StateKind::ConstantAccel => {
+                self.tick_constant_accel(key, node, 16)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::WallClimb => {
+                self.tick_wall_climb(key, node)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::Grapple => self.begin_grapple(key, node)?,
+            StateKind::FilterArray => {
+                self.refresh_filter_array(key, node)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::RecallHistory => {
+                self.tick_recall_history(key, node)?;
+                self.register_tick(key, self.machine.now_ms);
+            }
+            StateKind::RecallRewind => self.begin_recall_rewind(key, node)?,
+            StateKind::BallRoll { .. } => self.begin_ball_roll(key, node)?,
             StateKind::Shockwave { .. } => self.begin_shockwave(key, node)?,
             StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
             StateKind::SprayPlacement(_) => self.place_spray(key, node, depth)?,
@@ -2925,6 +3073,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             | StateKind::ActiveQuery
             | StateKind::RollMovementParameter
             | StateKind::AiWeaponFire(_) => (),
+        }
+        if self
+            .world
+            .admits_generic_player_runtime(self.site(id, node))
+        {
+            if node.class == "STU_54FEB21C" {
+                self.post(id, Event::Finish(key.raw))?;
+            } else if node.class == "STU_CA861E44" {
+                let site = self.site(id, node);
+                if let Some(Value::Entity(target)) =
+                    self.evaluate(id, node, field(&node.fields, "m_C98661CF"), Some(key))
+                {
+                    if script_expr::valid_entity(target) {
+                        let _ = self.world.request_possess_entity(site, target);
+                    }
+                }
+            }
         }
         self.follow(id, node, "m_onBeginPlug", Some(key), depth)?;
         self.follow(id, node, "m_subgraphPlug", Some(key), depth)?;

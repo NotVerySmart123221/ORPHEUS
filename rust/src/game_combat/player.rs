@@ -67,7 +67,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) slot: u8,
     pub(crate) team: u8,
     pub(crate) hero: u64,
-    pub(super) body_template: u64,
+    pub(crate) body_template: u64,
     pub(super) elimination_streak: Option<EliminationStreak>,
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
@@ -321,6 +321,9 @@ impl RoomSimulation {
     ) -> Option<(Vec<HealingPulse>, Vec<ProjectileToken>)> {
         let (pulses, expired_tokens, healed) = self.player_body_mut(owner)?.advance_fields(tick);
         self.record_health_applied(owner.entity, owner.entity, healed, false, None);
+        if healed > 0.0 {
+            self.deliver_applied_heal(owner.entity, owner.entity, healed);
+        }
         Some((pulses, expired_tokens))
     }
 
@@ -627,6 +630,32 @@ impl RoomSimulation {
                     if let Err(error) = runtime.receive_applied_damage(damage) {
                         eprintln!(
                             "Owner damage event failed for {:08x}: {error}",
+                            state.id.entity
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn deliver_applied_damage_by_wire(&mut self, damage: AppliedDamage) {
+        if let Some(id) = self.player_handle_for_wire(damage.source) {
+            if let Some(owner) = self.player_body(id).map(|body| body.owner) {
+                self.deliver_applied_damage(owner, damage);
+            }
+        }
+    }
+
+    pub(crate) fn deliver_applied_heal(&mut self, source: u32, target: u32, amount: f64) {
+        if !amount.is_finite() || amount <= 0.0 {
+            return;
+        }
+        if let Some(id) = self.player_handle_for_wire(source) {
+            if let Some(state) = self.player_body_mut(id) {
+                if let Some(runtime) = &mut state.runtime {
+                    if let Err(error) = runtime.receive_applied_heal(source, target, amount) {
+                        eprintln!(
+                            "Owner heal event failed for {:08x}: {error}",
                             state.id.entity
                         );
                     }
@@ -1174,6 +1203,7 @@ impl RoomSimulation {
     ) {
         #[cfg(feature = "lua-mods")]
         let healing_scale = self.mod_healing_scale();
+        let mut credited_heals = Vec::new();
         for (&wire, &entity) in &self.players_by_wire {
             if Some(wire) == skip_wire {
                 continue;
@@ -1202,6 +1232,9 @@ impl RoomSimulation {
                     ..EntityUpdate::default()
                 });
             }
+            if let Some(owner_body) = source {
+                credited_heals.push((owner_body.wire, wire, healed));
+            }
             let target = SampledBody { wire, entity };
             let room_status = self.sample_health_target_room_status(target);
             self.health_events.stage(
@@ -1215,6 +1248,9 @@ impl RoomSimulation {
                 },
                 room_status,
             );
+        }
+        for (healer, target, healed) in credited_heals {
+            self.deliver_applied_heal(healer, target, healed);
         }
     }
 

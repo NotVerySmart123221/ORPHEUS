@@ -66,6 +66,42 @@ impl RoomSimulation {
         now: Duration,
         impact: Option<&Impact>,
     ) -> Result<Option<SettledHealth>, CombatError> {
+        let (attacker_out_dmg, _, attacker_out_heal, _, _) =
+            self.actor_combat_modifiers(source.killer);
+        let (_, victim_in_dmg, _, victim_in_heal, _) = self.actor_combat_modifiers(wire);
+        let effect = match effect {
+            HealthEffect::Heal(amount) => {
+                let mut scaled = amount * attacker_out_heal * victim_in_heal;
+                if let Some(status) = self.actor_statuses.get(&wire) {
+                    if status
+                        .anti_heal_until
+                        .is_some_and(|until| source.frame < until)
+                    {
+                        scaled = 0.0;
+                    } else if status
+                        .heal_boost_until
+                        .is_some_and(|until| source.frame < until)
+                    {
+                        scaled *= 1.5;
+                    }
+                }
+                HealthEffect::Heal(scaled)
+            }
+            HealthEffect::Damage(amount) => {
+                let scaled = amount * attacker_out_dmg * victim_in_dmg;
+                if scaled > 0.0 {
+                    if let Some(status) = self.actor_statuses.get_mut(&wire) {
+                        if status.sleep_until.is_some_and(|until| source.frame < until) {
+                            status.sleep_until = None;
+                            if let Some(state) = self.state_mut(wire)? {
+                                state.bot.stun_for(source.frame, 0);
+                            }
+                        }
+                    }
+                }
+                HealthEffect::Damage(scaled)
+            }
+        };
         let critical = impact.is_some_and(|impact| impact.critical);
         let loadout = impact.and_then(|impact| impact.loadout);
         if let Some(state) = self.state_mut(wire)? {
@@ -190,6 +226,129 @@ impl RoomSimulation {
             }
         }
         Ok(Some(settled))
+    }
+
+    /// Apply a retail `m_277A4ECA` projectile status effect GUID to a live actor.
+    pub(super) fn apply_projectile_status_effect(
+        &mut self,
+        effect_guid: u64,
+        source_wire: u32,
+        target_wire: u32,
+        is_ally: bool,
+        tick: u32,
+    ) {
+        const EFFECT_FLASHBANG: u64 = 0x04a0_0000_0000_0079;
+        const EFFECT_MEI_FREEZE: u64 = 0x04a0_0000_0000_0169;
+        const EFFECT_BIOTIC_NADE: u64 = 0x04a0_0000_0000_0267;
+        const EFFECT_SLEEP_DART: u64 = 0x04a0_0000_0000_026f;
+        const EFFECT_MOIRA_HOT: u64 = 0x04a0_0000_0000_02c8;
+        const EFFECT_ACCRETION: u64 = 0x04a0_0000_0000_030e;
+
+        let apply_stun = |sim: &mut Self, wire: u32, ticks: u32| {
+            if let Ok(Some(state)) = sim.state_mut(wire) {
+                if !state.bot.dead {
+                    state.bot.stun_for(tick, ticks);
+                }
+            } else if let Some(id) = sim.player_handle_for_wire(wire) {
+                if let Some(player) = sim.player_body_mut(id) {
+                    if player.alive() {
+                        player.mover.clear_pending_script_motion();
+                        player.mover.queue_velocity_change(
+                            tick.saturating_add(1),
+                            crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
+                        );
+                    }
+                }
+            }
+        };
+
+        match effect_guid {
+            EFFECT_FLASHBANG | EFFECT_ACCRETION if !is_ally => {
+                apply_stun(self, target_wire, 50); // 0.8s stun
+            }
+            EFFECT_SLEEP_DART if !is_ally => {
+                let sleep_ticks = 312; // 5.0s sleep
+                apply_stun(self, target_wire, sleep_ticks);
+                self.actor_statuses
+                    .entry(target_wire)
+                    .or_default()
+                    .sleep_until = Some(tick.saturating_add(sleep_ticks));
+            }
+            EFFECT_MEI_FREEZE if !is_ally => {
+                let entry = self.actor_statuses.entry(target_wire).or_default();
+                if tick.saturating_sub(entry.chill_last_tick) > 62 {
+                    entry.chill_stacks = 0;
+                }
+                entry.chill_last_tick = tick;
+                entry.chill_stacks = entry.chill_stacks.saturating_add(1);
+                if entry.chill_stacks >= 20 {
+                    entry.chill_stacks = 0;
+                    apply_stun(self, target_wire, 94); // 1.5s freeze
+                }
+            }
+            EFFECT_BIOTIC_NADE => {
+                let until = tick.saturating_add(250); // 4.0s duration
+                let entry = self.actor_statuses.entry(target_wire).or_default();
+                if is_ally {
+                    entry.heal_boost_until = Some(until);
+                } else {
+                    entry.anti_heal_until = Some(until);
+                }
+            }
+            EFFECT_MOIRA_HOT if is_ally => {
+                let entry = self.actor_statuses.entry(target_wire).or_default();
+                entry.hot_ticks = 125; // 2.0s lingering HoT (35 HP total)
+                entry.hot_per_tick = 35.0 / 125.0;
+                entry.hot_source = source_wire;
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn step_status_effects(&mut self, tick: u32) {
+        if self.actor_statuses.is_empty() {
+            return;
+        }
+        let mut heals = Vec::new();
+        self.actor_statuses.retain(|&wire, status| {
+            if status.anti_heal_until.is_some_and(|until| tick >= until) {
+                status.anti_heal_until = None;
+            }
+            if status.heal_boost_until.is_some_and(|until| tick >= until) {
+                status.heal_boost_until = None;
+            }
+            if status.sleep_until.is_some_and(|until| tick >= until) {
+                status.sleep_until = None;
+            }
+            if status.chill_stacks > 0 && tick.saturating_sub(status.chill_last_tick) > 94 {
+                status.chill_stacks = 0;
+            }
+            if status.hot_ticks > 0 {
+                status.hot_ticks -= 1;
+                heals.push((status.hot_source, wire, status.hot_per_tick));
+            }
+            status.anti_heal_until.is_some()
+                || status.heal_boost_until.is_some()
+                || status.sleep_until.is_some()
+                || status.chill_stacks > 0
+                || status.hot_ticks > 0
+        });
+        let now =
+            Duration::from_secs_f64(f64::from(tick) * crate::game_clock::TICK_PERIOD.as_secs_f64());
+        for (source, target, amount) in heals {
+            let death = Death {
+                time: now.as_secs_f64(),
+                frame: tick,
+                killer: source,
+            };
+            if let Ok(Some(outcome)) =
+                self.apply_health(target, HealthEffect::Heal(amount), death, now, None)
+            {
+                if outcome.delta > 0.0 {
+                    self.deliver_applied_heal(source, target, outcome.delta);
+                }
+            }
+        }
     }
 }
 

@@ -59,6 +59,10 @@ pub enum VelocityChange {
 impl VelocityChange {
     /// Apply this edit and report a positive launch that should leave the ground.
     pub(crate) fn apply(self, velocity: &mut [f64; 3]) -> bool {
+        self.apply_with_jump(velocity, 6.0)
+    }
+
+    pub(crate) fn apply_with_jump(self, velocity: &mut [f64; 3], jump_speed: f64) -> bool {
         match self {
             Self::Delta(delta) => {
                 for (axis, delta) in velocity.iter_mut().zip(delta) {
@@ -129,7 +133,9 @@ impl VelocityChange {
                     return velocity[1] > 0.0;
                 }
                 VelocityAxis::VerticalUp => {
-                    let next = f64::from(value as f32);
+                    // Retail `STU_9AF0FA80` with `m_A9561CA0 == 3` encodes a jump_speed
+                    // multiplier (e.g. Genji Double Jump 1.5x, Lucio wallride hop 1.15x).
+                    let next = f64::from((value * jump_speed) as f32);
                     if next > velocity[1] {
                         velocity[1] = next;
                         return velocity[1] > 0.0;
@@ -264,6 +270,7 @@ pub struct Mover {
     modifiers: ModifierTimeline,
     cinematic_aim: Option<[i32; 2]>,
     authored_facing: Option<[i32; 2]>,
+    move_request: Option<([f64; 3], f64)>,
     player_input_blocked: bool,
     velocity_changes: Vec<(u32, VelocityChange)>,
     scripted_motion: Option<(u32, ScriptedMotion)>,
@@ -300,6 +307,7 @@ impl Mover {
             modifiers: ModifierTimeline::default(),
             cinematic_aim: None,
             authored_facing: None,
+            move_request: None,
             player_input_blocked: false,
             velocity_changes: Vec::new(),
             scripted_motion: None,
@@ -413,6 +421,10 @@ impl Mover {
 
     pub(crate) fn set_authored_facing(&mut self, facing: Option<[i32; 2]>) {
         self.authored_facing = facing;
+    }
+
+    pub(crate) fn set_move_request(&mut self, request: Option<([f64; 3], f64)>) {
+        self.move_request = request;
     }
 
     pub(crate) fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) {
@@ -614,14 +626,38 @@ impl Mover {
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
                 let before = self.pose.velocity;
-                launched |= change.apply(&mut self.pose.velocity);
+                launched |= change.apply_with_jump(&mut self.pose.velocity, settings.jump_speed);
+                if self.pose.velocity[1] > 0.0 && before[1] <= 0.0 {
+                    launched = true;
+                }
                 scripted_motion_changed |=
-                    matches!(change, VelocityChange::Impulse(_)) && self.pose.velocity != before;
+                    !matches!(change, VelocityChange::Delta(_)) && self.pose.velocity != before;
                 false
             } else {
                 true
             }
         });
+        let move_to_velocity = self.move_request.and_then(|(dest, speed)| {
+            let delta = [
+                dest[0] - self.pose.position[0],
+                dest[1] - self.pose.position[1],
+                dest[2] - self.pose.position[2],
+            ];
+            let dist = delta[0].hypot(delta[1]).hypot(delta[2]);
+            if dist <= 0.1 || !dist.is_finite() || speed <= 0.0 {
+                return None;
+            }
+            let step_speed = speed.min(dist / dt.max(1e-4));
+            let scale = step_speed / dist;
+            Some([delta[0] * scale, delta[1] * scale, delta[2] * scale])
+        });
+        if let Some(mv) = move_to_velocity {
+            self.pose.velocity = mv;
+            if mv[1] > 0.0 {
+                launched = true;
+            }
+            scripted_motion_changed = true;
+        }
         if launched && self.pose.velocity[1] > 0.0 {
             self.posture.begin_velocity_launch();
         }
@@ -678,16 +714,20 @@ impl Mover {
             |radius, top| self.body.try_resize(radius, top),
         )?;
         let ground = self.posture.ground();
-        let velocity = VelocityStep {
-            base: &self.base,
-            settings: &settings,
-            input,
-            ground,
-            crouched: self.posture.crouched(),
-            dt,
-        }
-        .advance(self.pose.velocity);
-        if ground != Ground::Standing {
+        let velocity = if let Some(mv) = move_to_velocity {
+            mv
+        } else {
+            VelocityStep {
+                base: &self.base,
+                settings: &settings,
+                input,
+                ground,
+                crouched: self.posture.crouched(),
+                dt,
+            }
+            .advance(self.pose.velocity)
+        };
+        if ground != Ground::Standing && move_to_velocity.is_none() {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);

@@ -2478,6 +2478,10 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             target_policy: Default::default(),
             piercing: false,
             impact_spawn: None,
+            post_bounce_fuse: None,
+            sticky_delay: None,
+            direct_effect: None,
+            blast_effect: None,
         },
         launches,
     );
@@ -2569,6 +2573,10 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 target_policy: Default::default(),
                 piercing: false,
                 impact_spawn: None,
+                post_bounce_fuse: None,
+                sticky_delay: None,
+                direct_effect: None,
+                blast_effect: None,
             },
             launches,
         );
@@ -3414,6 +3422,10 @@ fn fixture_projectile_flight(
         target_policy: Default::default(),
         piercing: false,
         impact_spawn: None,
+        post_bounce_fuse: None,
+        sticky_delay: None,
+        direct_effect: None,
+        blast_effect: None,
     };
     let flight =
         ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();

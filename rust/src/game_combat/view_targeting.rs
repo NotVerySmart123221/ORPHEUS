@@ -194,9 +194,8 @@ impl RoomSpatialFrame {
         let [any, all, exclude] = query.masks;
         let cosine = (query.aperture.to_radians() * 0.5).cos();
         let mut ranked = Vec::new();
-        // The view tracker body filter selects participating player bodies.
-        // Bots may still occlude a sight sample when the supplied profile admits them.
-        for &entity in self.player_wires.values() {
+        for candidate in &self.candidates {
+            let entity = candidate.entity;
             if entity == query.source {
                 continue;
             }

@@ -659,5 +659,17 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::GenericTrackedTargets => ("GenericTrackedTargets", None),
         StateKind::GenericModifyHealth { .. } => ("GenericModifyHealth", None),
         StateKind::Pet { .. } => ("Pet", None),
+        StateKind::CombatModFilter { .. } => ("CombatModFilter", None),
+        StateKind::DeflectProjectiles { .. } => ("DeflectProjectiles", None),
+        StateKind::GenericContactSweep => ("GenericContactSweep", None),
+        StateKind::TargetAura { .. } => ("TargetAura", None),
+        StateKind::TargetSubScript { .. } => ("TargetSubScript", None),
+        StateKind::ConstantAccel => ("ConstantAccel", None),
+        StateKind::WallClimb => ("WallClimb", None),
+        StateKind::Grapple => ("Grapple", None),
+        StateKind::FilterArray => ("FilterArray", None),
+        StateKind::RecallHistory => ("RecallHistory", None),
+        StateKind::RecallRewind => ("RecallRewind", None),
+        StateKind::BallRoll { .. } => ("BallRoll", None),
     }
 }

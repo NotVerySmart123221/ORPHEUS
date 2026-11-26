@@ -253,13 +253,13 @@ pub use types::{
 };
 pub use types::{SprayAttachment, SprayPlacement};
 pub use world::{
-    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
-    ContactVolume, CreationKind, EmptyWorld, EntityCreation, GenericBeamContact, GroundWave,
-    HealthTargetFacts, HitTags, HostEvent, HostHealthContext, LandingSelection, MovementSample,
-    NamedPoolLoss, PetSpawn, PlayScript, Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker,
-    RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
-    TargetTagEffects, TargetTagSnapshot, VelocityAxis, VelocityOp, ViewSightProfile,
-    ViewTargetQuery, World, named_pool_records,
+    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CombatModEntry,
+    ContactTarget, ContactVolume, CreationKind, DeflectState, EmptyWorld, EntityCreation,
+    GenericBeamContact, GroundWave, HealthTargetFacts, HitTags, HostEvent, HostHealthContext,
+    LandingSelection, MovementSample, NamedPoolLoss, PetSpawn, PlayScript, Relocation,
+    RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
+    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, VelocityAxis,
+    VelocityOp, ViewSightProfile, ViewTargetQuery, World, named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};

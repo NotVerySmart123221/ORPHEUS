@@ -175,7 +175,12 @@ impl Volley {
             return self.ammo0;
         };
         let due = if permit_shots {
-            Self::due_shots(elapsed, self.rate)
+            let due = Self::due_shots(elapsed, self.rate);
+            if self.planned > 0 {
+                due.min(i64::from(self.planned))
+            } else {
+                due
+            }
         } else {
             i64::from(self.reported)
         };

@@ -111,8 +111,11 @@ impl ProjectileBallistics {
             None => None,
         };
         let radius = authored_number(field("m_6396149F.m_57DAE1B5"), 0.0, &mut evaluate)?;
+        let ally_radius = authored_number(field("m_6396149F.m_71A4B759"), 0.0, &mut evaluate)?;
         let radius = if radius.is_finite() && radius > 0.0 {
             radius
+        } else if ally_radius.is_finite() && ally_radius > 0.0 {
+            ally_radius
         } else {
             0.0
         };
@@ -287,6 +290,12 @@ impl Blast {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StuckState {
+    anchor: Option<(u32, Vec3)>,
+    remaining: f64,
+}
+
 pub struct ProjectileFlight {
     ballistics: ProjectileBallistics,
     position: Vec3,
@@ -300,6 +309,11 @@ pub struct ProjectileFlight {
     gravity: f32,
     velocity: Vec3,
     terrain_rebounds: u32,
+    post_bounce_fuse: Option<f64>,
+    sticky_delay: Option<f64>,
+    stuck: Option<StuckState>,
+    direct_effect: Option<u64>,
+    blast_effect: Option<u64>,
     piercing: bool,
     hit_actors: Vec<u32>,
     piercing_impacts: Vec<Impact>,
@@ -343,6 +357,49 @@ impl ProjectileFlight {
     pub(crate) fn with_piercing(mut self, piercing: bool) -> Self {
         self.piercing = piercing;
         self
+    }
+
+    pub(crate) fn with_post_bounce_fuse(mut self, fuse: Option<f64>) -> Self {
+        self.post_bounce_fuse = fuse.filter(|f| f.is_finite() && *f > 0.0);
+        if self.post_bounce_fuse.is_some() && self.ballistics.blast.is_some() {
+            self.expiry_blast = true;
+        }
+        self
+    }
+
+    pub(crate) fn with_sticky_delay(mut self, delay: Option<f64>) -> Self {
+        self.sticky_delay = delay.filter(|d| d.is_finite() && *d > 0.0);
+        self
+    }
+
+    pub(crate) fn with_effects(
+        mut self,
+        direct_effect: Option<u64>,
+        blast_effect: Option<u64>,
+    ) -> Self {
+        self.direct_effect = direct_effect;
+        self.blast_effect = blast_effect;
+        self
+    }
+
+    pub(crate) fn position(&self) -> Vec3 {
+        self.position
+    }
+
+    pub(crate) fn velocity(&self) -> Vec3 {
+        self.velocity
+    }
+
+    pub(crate) fn definition(&self) -> Option<u64> {
+        self.ballistics.definition
+    }
+
+    pub(crate) fn direct_effect(&self) -> Option<u64> {
+        self.direct_effect
+    }
+
+    pub(crate) fn blast_effect(&self) -> Option<u64> {
+        self.blast_effect
     }
 
     pub(crate) fn drain_piercing_impacts(&mut self) -> Vec<Impact> {
@@ -394,6 +451,11 @@ impl ProjectileFlight {
             expiry_blast,
             gravity: 0.0,
             terrain_rebounds: 0,
+            post_bounce_fuse: None,
+            sticky_delay: None,
+            stuck: None,
+            direct_effect: None,
+            blast_effect: None,
             piercing: false,
             hit_actors: Vec::new(),
             piercing_impacts: Vec::new(),
@@ -461,6 +523,33 @@ impl ProjectileFlight {
         }
         let seconds = TICK_PERIOD.as_secs_f64();
         self.last_tick = Some(tick);
+        if let Some(mut stuck) = self.stuck {
+            let dt = f64::from(elapsed) * seconds;
+            if let Some((anchor_entity, offset)) = stuck.anchor {
+                if let Some(&(_, pose)) = targets.iter().find(|&&(e, _)| e == anchor_entity) {
+                    let feet = pose.into().feet();
+                    self.position = [
+                        feet[0] + offset[0],
+                        feet[1] + offset[1],
+                        feet[2] + offset[2],
+                    ];
+                }
+            }
+            self.travelled += dt;
+            stuck.remaining -= dt;
+            if stuck.remaining <= 0.0 {
+                self.stuck = None;
+                let impacts =
+                    self.splash(self.position, self.position, targets, shooter, &mut wall)?;
+                return Ok(Some(self.finish(
+                    impacts,
+                    false,
+                    stuck.anchor.map(|(entity, _)| entity),
+                )));
+            }
+            self.stuck = Some(stuck);
+            return Ok(None);
+        }
         let kinetic = self.gravity != 0.0 || self.ballistics.terrain_rebound.is_some();
         let steps = if kinetic { elapsed } else { 1 };
         let step_time = if kinetic {
@@ -616,11 +705,22 @@ impl ProjectileFlight {
                 gravity_step(self.velocity, self.gravity, spent)
             };
             self.velocity = rebound.reflect(incident, normal);
-            self.position = along(point, normal, REBOUND_SEPARATION);
+            let separation = if self.ballistics.terrain_radius > 0.0 {
+                f64::from(self.ballistics.terrain_radius) + REBOUND_SEPARATION
+            } else {
+                REBOUND_SEPARATION
+            };
+            self.position = along(point, normal, separation);
             self.terrain_rebounds += 1;
             self.distance_travelled += distance;
             self.travelled += spent;
             self.remaining -= spent;
+            if self.terrain_rebounds == 1 {
+                if let Some(fuse) = self.post_bounce_fuse {
+                    self.remaining = self.remaining.min(fuse);
+                    self.expiry_blast = true;
+                }
+            }
             return Ok(Segment::Rebounded(spent.min(duration)));
         }
         let mut impacts = Vec::new();
@@ -644,6 +744,36 @@ impl ProjectileFlight {
                     normal: contact.hit.normal,
                 }),
             });
+        }
+        if let Some(delay) = self
+            .sticky_delay
+            .filter(|_| self.ballistics.blast.is_some())
+        {
+            // Sticky projectile (e.g. Echo Sticky Bombs `m_12654E6E`): apply direct
+            // impact immediately, adhere to the contacted target or world surface,
+            // and detonate splash after the authored fuse delay.
+            self.piercing_impacts.extend(impacts);
+            let anchor = target.as_ref().and_then(|(entity, _)| {
+                targets
+                    .iter()
+                    .find(|&&(e, _)| e == *entity)
+                    .map(|&(_, pose)| {
+                        let feet = pose.into().feet();
+                        (
+                            *entity,
+                            [point[0] - feet[0], point[1] - feet[1], point[2] - feet[2]],
+                        )
+                    })
+            });
+            self.position = point;
+            self.velocity = [0.0; 3];
+            self.distance_travelled += distance;
+            self.travelled += spent;
+            self.stuck = Some(StuckState {
+                anchor,
+                remaining: delay,
+            });
+            return Ok(Segment::Complete);
         }
         let origin = match wall_hit {
             // Offset perpendicular to the hit surface. At a glancing angle an

@@ -154,6 +154,62 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("generic modify health state");
                         self.apply_generic_modify_health(key, node, Some(elapsed_ms))?;
                     }
+                    Some(StateKind::GenericContactSweep) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic contact sweep state");
+                        self.refresh_generic_contact_sweep(key, node)?;
+                    }
+                    Some(StateKind::TargetAura { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("target aura state");
+                        self.refresh_target_aura(key, node)?;
+                    }
+                    Some(StateKind::ConstantAccel) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("constant accel state");
+                        self.tick_constant_accel(key, node, elapsed_ms)?;
+                    }
+                    Some(StateKind::WallClimb) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("wall climb state");
+                        self.tick_wall_climb(key, node)?;
+                    }
+                    Some(StateKind::Grapple) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("grapple state");
+                        self.tick_grapple(key, node)?;
+                    }
+                    Some(StateKind::FilterArray) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("filter array state");
+                        self.refresh_filter_array(key, node)?;
+                    }
+                    Some(StateKind::RecallHistory) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("recall history state");
+                        self.tick_recall_history(key, node)?;
+                    }
+                    Some(StateKind::BallRoll { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("ball roll state");
+                        self.tick_ball_roll(key, node)?;
+                    }
                     Some(StateKind::PlacementSelector { .. }) => {
                         self.tick_placement_selector(key)?
                     }
@@ -833,10 +889,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .graph(key.instance)
                     .state(usize::from(key.raw))
                     .expect("active health pool");
-                self.report(
-                    self.site(key.instance, node),
-                    Issue::UnsupportedField("changing health pool capacity"),
-                );
+                let site = self.site(key.instance, node);
+                if !self.world.admits_generic_player_runtime(site) {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("changing health pool capacity"),
+                    );
+                }
             }
         }
         if let Some(state) = self.state(key).filter(|state| state.active) {
@@ -1495,7 +1554,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             field(&node.fields, "m_262AE982"),
             Some(key),
         )?;
-        for (index, case) in array_field(&node.fields, "m_05706D1C").iter().enumerate() {
+        let cases = array_field(&node.fields, "m_05706D1C");
+        // Retail `m_F0F0720B == 1` marks a 0-based indexed switch (e.g. Brigitte
+        // LMB alternating swings `1248:81`, Sigma LMB `187F:62`) where every case
+        // row has `m_value: null` and the integer value selects `cases[index]`.
+        if field(&node.fields, "m_F0F0720B").as_u64() == Some(1) {
+            let idx = script_expr::to_int(&value, -1);
+            if idx >= 0 {
+                let idx = idx as usize;
+                if cases.get(idx).is_some_and(Json::is_object) {
+                    return Some(Some(idx));
+                }
+            }
+            return Some(None);
+        }
+        for (index, case) in cases.iter().enumerate() {
             if case.is_object() {
                 let candidate = self.evaluate(key.instance, node, field(case, "m_value"), None)?;
                 if equal(&value, &candidate) {
@@ -1767,6 +1840,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             } => {
                 self.end_pet(key, node, pet_id)?;
             }
+            StateKind::CombatModFilter { registered: true } => {
+                self.world.set_combat_mod(self.site(id, node), None);
+            }
+            StateKind::DeflectProjectiles { .. } => {
+                self.world.set_deflect_state(self.site(id, node), None);
+            }
+            StateKind::TargetAura { effect } => {
+                self.world
+                    .set_target_aura(self.site(id, node), &[], effect, None);
+            }
+            StateKind::TargetSubScript { child: Some(child) } => {
+                self.destroy(child)?;
+            }
+            StateKind::BallRoll { .. } => {
+                self.world
+                    .set_ball_roll_state(self.site(id, node), false, 0.0);
+                self.machine
+                    .movement_modifiers
+                    .retain(|entry, _| entry.instance != key.instance || entry.state != key.raw);
+            }
             StateKind::BooleanSwitch(branch) => {
                 self.exit_subgraph(id, node, branch_path(branch), depth + 1)?
             }
@@ -1838,6 +1931,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         if matches!(kind, StateKind::Pet { .. }) {
             state.kind = StateKind::Pet { entity: None };
+        }
+        if matches!(kind, StateKind::CombatModFilter { .. }) {
+            state.kind = StateKind::CombatModFilter { registered: false };
+        }
+        if matches!(kind, StateKind::TargetSubScript { .. }) {
+            state.kind = StateKind::TargetSubScript { child: None };
+        }
+        if kind == StateKind::Grapple {
+            state.grapple = None;
+        }
+        if matches!(kind, StateKind::BallRoll { .. }) {
+            state.kind = StateKind::BallRoll { fireball: false };
         }
         if matches!(kind, StateKind::DisplayName { .. }) {
             state.kind = StateKind::DisplayName { binding: None };
@@ -2019,6 +2124,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 | StateKind::ButtonBlock(Some(_))
                                 | StateKind::HealthPool { pool: Some(_) }
                                 | StateKind::Pet { entity: Some(_) }
+                                | StateKind::CombatModFilter { registered: true }
+                                | StateKind::DeflectProjectiles { .. }
+                                | StateKind::TargetAura { .. }
+                                | StateKind::BallRoll { .. }
                                 | StateKind::DisplayName { binding: Some(_) }
                                 | StateKind::TargetTag { effect: Some(_) }
                                 | StateKind::AiWeaponOverride { record: Some(_) }
@@ -2138,6 +2247,32 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 {
                     let node = self.graph(id).state(usize::from(raw)).expect("pet state");
                     self.world.despawn_pet(self.site(id, node), pet_id);
+                } else if let StateKind::CombatModFilter { registered: true } = kind {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("combat mod state");
+                    self.world.set_combat_mod(self.site(id, node), None);
+                } else if matches!(kind, StateKind::DeflectProjectiles { .. }) {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("deflect state");
+                    self.world.set_deflect_state(self.site(id, node), None);
+                } else if let StateKind::TargetAura { effect } = kind {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("target aura state");
+                    self.world
+                        .set_target_aura(self.site(id, node), &[], effect, None);
+                } else if matches!(kind, StateKind::BallRoll { .. }) {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("ball roll state");
+                    self.world
+                        .set_ball_roll_state(self.site(id, node), false, 0.0);
                 } else if matches!(kind, StateKind::WeaponVolley { .. }) {
                     self.finish_volley(key, 0)?;
                 } else if kind == StateKind::ChaseVar {

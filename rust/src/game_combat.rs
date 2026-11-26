@@ -228,6 +228,24 @@ pub(crate) struct PosedProjectile {
     pub target_policy: crate::game_hitscan::HitTargetPolicy,
     pub piercing: bool,
     pub impact_spawn: Option<crate::game_projectiles::ImpactSpawn>,
+    pub post_bounce_fuse: Option<f64>,
+    pub sticky_delay: Option<f64>,
+    pub direct_effect: Option<u64>,
+    pub blast_effect: Option<u64>,
+}
+
+/// Room-authoritative per-actor combat status effects driven by retail `m_277A4ECA`
+/// effect GUIDs (anti-heal / heal-boost, sleep, freeze buildup, lingering HoT).
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ActorStatus {
+    pub(super) anti_heal_until: Option<u32>,
+    pub(super) heal_boost_until: Option<u32>,
+    pub(super) sleep_until: Option<u32>,
+    pub(super) chill_stacks: u8,
+    pub(super) chill_last_tick: u32,
+    pub(super) hot_ticks: u16,
+    pub(super) hot_per_tick: f64,
+    pub(super) hot_source: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -361,13 +379,11 @@ impl RoomSpatialFrame {
         query: &crate::script_init::ViewTargetQuery<'_>,
     ) -> Option<Vec<u32>> {
         self.actor_sample(query.source)?;
-        // The view tracker filters for living player bodies. Other actors
-        // can block sight but cannot turn an empty search into a selection.
         (query.limit == 0
             || self
-                .player_wires
-                .values()
-                .all(|&entity| entity == query.source || self.actor_sample(entity).is_none()))
+                .candidates
+                .iter()
+                .all(|c| c.entity == query.source || self.actor_sample(c.entity).is_none()))
         .then(Vec::new)
     }
 
@@ -460,12 +476,21 @@ impl RoomSpatialFrame {
         forward: Vec3,
         radius: f64,
         angle: f64,
+        cylinder_radius: f64,
         visible: bool,
         relation: u64,
     ) -> Option<Vec<u32>> {
         let own_team = self.actor_sample(source)?.0.team;
         let check_cone = angle < 359.999;
-        let threshold = (angle * 0.5).to_radians().cos();
+        // Retail `m_A30B383E` is already authored as a half-angle in degrees
+        // (e.g. Winston Tesla Cannon = 40 deg each side = 80 deg total cone;
+        // Moira Biotic Grasp RMB = 0 deg with `m_16BDE607` lock-on cylinder radius).
+        let half_angle_rad = angle.to_radians();
+        let cyl = if cylinder_radius.is_finite() && cylinder_radius > 0.0 {
+            cylinder_radius
+        } else {
+            0.0
+        };
         let mut matches = Vec::new();
         for candidate in &self.candidates {
             let team_ok = match relation {
@@ -479,19 +504,26 @@ impl RoomSpatialFrame {
                 continue;
             }
             let target = self.actor_target_pose(candidate.entity, candidate.position);
-            let [_, top] = target.segment();
+            let [bottom, top] = target.segment();
+            let centre_y = 0.5 * (bottom[1] + top[1]);
             let delta = [
                 target.feet[0] - origin[0],
-                (target.feet[1] + target.eye).min(top[1]) - origin[1],
+                centre_y - origin[1],
                 target.feet[2] - origin[2],
             ];
             let distance = crate::static_ray::norm(delta);
-            if distance == 0.0 || distance > radius {
+            if distance <= 1e-6 || distance > radius + target.radius {
                 continue;
             }
             if check_cone {
                 let projection: f64 = delta.iter().zip(forward).map(|(a, b)| a * b).sum();
-                if projection < threshold * distance {
+                if projection <= 0.0 {
+                    continue;
+                }
+                let perp_sq = (distance * distance - projection * projection).max(0.0);
+                let allowed_radius =
+                    target.radius + cyl + projection * half_angle_rad.tan().max(0.0);
+                if perp_sq > allowed_radius * allowed_radius {
                     continue;
                 }
             }
@@ -519,8 +551,8 @@ impl RoomSpatialFrame {
         maximum: bool,
     ) -> Option<f64> {
         let amount = self
-            .actor_sample(entity)?
-            .1
+            .script_targets
+            .get(&entity)?
             .health_snapshot?
             .amount(kind, maximum);
         (amount.is_finite() && amount >= 0.0).then_some(amount)
@@ -948,16 +980,19 @@ pub(crate) struct RoomSimulation {
     mode_voice_set: Option<u64>,
     mode_boss_pause: bool,
     spawn_anchors: Option<Arc<crate::scene_assets::SpawnAnchors>>,
+    script_graphs: Option<(Arc<crate::script_graph::GraphStore>, u64)>,
     stock_bots: Option<stock_bot::StockBotCatalog>,
     gate_handle: Option<GateHandle>,
     encounter_entity: Option<Entity>,
     // Handle lists preserve launch order within the worker's ordered peer turns.
     projectiles: HashMap<u32, FlightBatch>,
+    server_projectile_wires: HashMap<Entity, u32>,
     enemy_projectiles: Vec<Entity>,
     projectile_reports: observed_projectiles::RoomProjectileReports,
     witch_staff_links: IndexMap<u32, (u32, u16)>,
     room_pets: IndexMap<u32, deployables::RoomPet>,
     room_deployables: IndexMap<u32, deployables::RoomDeployable>,
+    actor_statuses: HashMap<u32, ActorStatus>,
     interactive_props: crate::room_primitives::InteractivePropRuntime,
     interactive_prop_floor_y: f64,
     pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
@@ -1189,12 +1224,21 @@ impl RoomSimulation {
         }
     }
 
+    pub(crate) fn set_script_graphs(
+        &mut self,
+        graphs: Arc<crate::script_graph::GraphStore>,
+        mode: u64,
+    ) {
+        self.script_graphs = Some((graphs, mode));
+    }
+
     pub(crate) fn enable_stock_bot_scripts(
         &mut self,
         graphs: Arc<crate::script_graph::GraphStore>,
         codecs: Arc<crate::script_codecs::CodecTable>,
         mode: u64,
     ) {
+        self.script_graphs = Some((Arc::clone(&graphs), mode));
         let catalog = stock_bot::StockBotCatalog {
             graphs,
             codecs,
@@ -1431,15 +1475,18 @@ impl RoomSimulation {
             mode_voice_set: None,
             mode_boss_pause: false,
             spawn_anchors: None,
+            script_graphs: None,
             stock_bots: None,
             gate_handle: None,
             encounter_entity: None,
             projectiles: HashMap::new(),
+            server_projectile_wires: HashMap::new(),
             enemy_projectiles: Vec::new(),
             projectile_reports: Default::default(),
             witch_staff_links: IndexMap::new(),
             room_pets: IndexMap::new(),
             room_deployables: IndexMap::new(),
+            actor_statuses: HashMap::new(),
             interactive_props: crate::room_primitives::InteractivePropRuntime::default(),
             interactive_prop_floor_y: 0.0,
             pvp_objective: None,
@@ -1801,6 +1848,48 @@ impl RoomSimulation {
                     position: pose.position,
                     team,
                 });
+            }
+        }
+        for (&wire, pet) in &self.room_pets {
+            if pet.vitals.as_ref().is_none_or(|v| v.death().is_none()) {
+                script_targets.insert(
+                    wire,
+                    RoomScriptTarget {
+                        entity: pet.ecs_entity,
+                        candidate_index: usize::MAX,
+                        angles: [pet.yaw, 0],
+                        velocity: [0.0; 3],
+                        eye_position: None,
+                        filter_flags: None,
+                        script_state: crate::script_entity_state::EntityScriptState::Unavailable,
+                        health: pet.vitals.is_some(),
+                        health_snapshot: pet.vitals.as_ref().map(ActorHealthSnapshot::from_vitals),
+                        messages: pet.component.is_some(),
+                        cue_listener: false,
+                        voice: None,
+                    },
+                );
+            }
+        }
+        for (&wire, dep) in &self.room_deployables {
+            if dep.vitals.as_ref().is_none_or(|v| v.death().is_none()) {
+                script_targets.insert(
+                    wire,
+                    RoomScriptTarget {
+                        entity: dep.ecs_entity,
+                        candidate_index: usize::MAX,
+                        angles: [dep.yaw, 0],
+                        velocity: [0.0; 3],
+                        eye_position: None,
+                        filter_flags: None,
+                        script_state: crate::script_entity_state::EntityScriptState::Unavailable,
+                        health: dep.vitals.is_some(),
+                        health_snapshot: dep.vitals.as_ref().map(ActorHealthSnapshot::from_vitals),
+                        messages: dep.component.is_some(),
+                        cue_listener: false,
+                        voice: None,
+                    },
+                );
             }
         }
 
@@ -2424,6 +2513,45 @@ impl RoomSimulation {
         Ok(())
     }
 
+    pub(super) fn actor_combat_modifiers(&self, wire: u32) -> (f64, f64, f64, f64, bool) {
+        if let Some(&entity) = self.players_by_wire.get(&wire) {
+            if let Some(player) = self.world.get::<PlayerBodyState>(entity) {
+                if let Some(runtime) = player.runtime.as_deref() {
+                    return runtime.combat_modifiers();
+                }
+            }
+        }
+        (1.0, 1.0, 1.0, 1.0, false)
+    }
+
+    pub(super) fn check_player_deflect(
+        &self,
+        target_wire: u32,
+        incoming_dir: Vec3,
+    ) -> Option<(bool, Vec3, Vec3)> {
+        let &entity = self.players_by_wire.get(&target_wire)?;
+        let player = self.world.get::<PlayerBodyState>(entity)?;
+        if !player.alive() {
+            return None;
+        }
+        let deflect = player.runtime.as_deref()?.deflect_state()?;
+        let pose = player.mover.pose();
+        let aim = crate::game_hitscan::direction_for_angles(pose.yaw, pose.pitch);
+        let in_len = crate::static_ray::norm(incoming_dir);
+        if in_len > 1e-5 {
+            // Incoming projectile travels toward defender, so `-incoming_dir` points back at shooter.
+            let dot =
+                (-incoming_dir[0] * aim[0] - incoming_dir[1] * aim[1] - incoming_dir[2] * aim[2])
+                    / in_len;
+            let min_dot = deflect.half_angle_deg.to_radians().cos();
+            if dot < min_dot {
+                return None;
+            }
+        }
+        let eye = player.script_eye_position().unwrap_or(pose.position);
+        Some((deflect.reflect, eye, aim))
+    }
+
     pub(super) fn actor_team(&self, wire: u32) -> Option<u8> {
         if let Some(&entity) = self.by_wire.get(&wire) {
             return self.world.get::<BotState>(entity).map(|s| s.bot.spawn.team);
@@ -2524,6 +2652,22 @@ impl RoomSimulation {
                     }
                     hit.wall
                 });
+            let wall_dist = wall.map_or(ray.reach, |s| s.distance);
+            if policy.affects_enemies
+                && (!self.room_pets.is_empty() || !self.room_deployables.is_empty())
+            {
+                let _ = self.intercept_barrier_ray(
+                    Some(context.team),
+                    ffa,
+                    ray.origin,
+                    ray.direction,
+                    wall_dist,
+                    shot.hit.damage_at(0.0, false),
+                    shot.source,
+                    context.tick,
+                    context.now,
+                );
+            }
             #[cfg(any(test, feature = "inspector"))]
             {
                 let wall = blocking_wall.or(wall);
@@ -2588,13 +2732,17 @@ impl RoomSimulation {
                 frame: context.tick,
                 killer: shot.source,
             };
-            let _ = self.apply_health(
+            if let Some(outcome) = self.apply_health(
                 impact.entity,
                 HealthEffect::Heal(impact.damage),
                 death,
                 context.now,
                 None,
-            )?;
+            )? {
+                if outcome.delta > 0.0 {
+                    self.deliver_applied_heal(shot.source, impact.entity, outcome.delta);
+                }
+            }
             return Ok(None);
         }
         if self.players_by_wire.contains_key(&impact.entity) {
@@ -2632,6 +2780,7 @@ impl RoomSimulation {
             .and_then(|id| self.sample_health_body(id.entity));
         #[cfg(feature = "lua-mods")]
         let healing_scale = self.mod_healing_scale();
+        let mut credited_heals = Vec::new();
         for (&wire, &entity) in &self.by_wire {
             let state = self
                 .world
@@ -2654,6 +2803,9 @@ impl RoomSimulation {
                 script.on_heal(state.vitals.total());
             }
             self.scripted_health.push(bot_health_update(state, false));
+            if let Some(owner_body) = source {
+                credited_heals.push((owner_body.wire, wire, healed));
+            }
             let target = SampledBody { wire, entity };
             let room_status = self.sample_health_target_room_status(target);
             self.health_events.stage(
@@ -2667,6 +2819,9 @@ impl RoomSimulation {
                 },
                 room_status,
             );
+        }
+        for (healer, target, healed) in credited_heals {
+            self.deliver_applied_heal(healer, target, healed);
         }
         self.heal_player_bodies(team, skip_player_wire, source, pulses);
         Ok(())
@@ -2760,11 +2915,29 @@ impl RoomSimulation {
             .projectiles
             .remove(&connection)
             .map_or_else(Vec::new, |batch| batch.order);
-        order.extend(
-            launches
-                .into_iter()
-                .map(|launch| self.world.spawn(launch).id()),
-        );
+        for launch in launches {
+            let server_visual = launch
+                .token
+                .is_server_only()
+                .then(|| {
+                    launch
+                        .flight
+                        .definition()
+                        .map(|def| (def, launch.flight.position(), launch.flight.velocity()))
+                })
+                .flatten();
+            let ecs_id = self.world.spawn(launch).id();
+            if let Some((def, pos, vel)) = server_visual {
+                let wire = deployables::next_server_projectile_wire_id();
+                if let Some(update) =
+                    deployables::server_projectile_create_update(wire, context.team, def, pos, vel)
+                {
+                    self.server_projectile_wires.insert(ecs_id, wire);
+                    self.created.push(update);
+                }
+            }
+            order.push(ecs_id);
+        }
         let mut outcomes = Vec::new();
         let mut hits = Vec::new();
         if order.is_empty() {
@@ -2814,12 +2987,24 @@ impl RoomSimulation {
             } else {
                 None
             };
-            let (token, stun, hit_effect, impact_spawn, blast_radius, piercing_impacts, result) = {
+            let (
+                token,
+                stun,
+                hit_effect,
+                impact_spawn,
+                blast_radius,
+                direct_effect,
+                blast_effect,
+                piercing_impacts,
+                result,
+            ) = {
                 let mut active = self
                     .world
                     .get_mut::<AdmittedFlight>(entity)
                     .ok_or(CombatError::MissingFlight { connection, entity })?;
                 let blast_radius = active.flight.blast_radius();
+                let direct_effect = active.flight.direct_effect();
+                let blast_effect = active.flight.blast_effect();
                 let result = active.flight.advance_combat(
                     context.tick,
                     &candidates,
@@ -2835,6 +3020,8 @@ impl RoomSimulation {
                     active.hit_effect,
                     active.impact_spawn,
                     blast_radius,
+                    direct_effect,
+                    blast_effect,
                     piercing_impacts,
                     result,
                 )
@@ -2850,13 +3037,17 @@ impl RoomSimulation {
                         frame: context.tick,
                         killer: owner.entity,
                     };
-                    let _ = self.apply_health(
+                    if let Some(outcome) = self.apply_health(
                         impact.entity,
                         HealthEffect::Heal(impact.damage),
                         death,
                         context.now,
                         None,
-                    )?;
+                    )? {
+                        if outcome.delta > 0.0 {
+                            self.deliver_applied_heal(owner.entity, impact.entity, outcome.delta);
+                        }
+                    }
                 } else if self.players_by_wire.contains_key(&impact.entity) {
                     if let Some(hit) =
                         self.apply_player_impact(owner.entity, context.tick, context, impact)?
@@ -2868,6 +3059,15 @@ impl RoomSimulation {
                 {
                     hits.push(hit);
                 }
+                if let Some(effect_guid) = direct_effect {
+                    self.apply_projectile_status_effect(
+                        effect_guid,
+                        owner.entity,
+                        impact.entity,
+                        is_ally_heal,
+                        context.tick,
+                    );
+                }
             }
             match result {
                 Ok(None) => {
@@ -2875,7 +3075,7 @@ impl RoomSimulation {
                     continue;
                 }
                 Ok(Some(end)) => {
-                    if end.impact {
+                    if end.impact || (end.expired && impact_spawn.is_some()) {
                         if let Some(spawn) = impact_spawn {
                             let yaw = self
                                 .player_body(owner)
@@ -2890,14 +3090,16 @@ impl RoomSimulation {
                                 context.tick,
                             );
                         }
-                        if blast_radius > 0.0 {
+                        if end.impact && blast_radius > 0.0 {
                             queries.break_in_sphere(end.point, blast_radius);
                         }
-                        self.interactive_props.hit_props_in_sphere(
-                            end.point,
-                            blast_radius.max(1.5),
-                            14.0,
-                        );
+                        if end.impact {
+                            self.interactive_props.hit_props_in_sphere(
+                                end.point,
+                                blast_radius.max(1.5),
+                                14.0,
+                            );
+                        }
                     }
                     #[cfg(feature = "inspector")]
                     {
@@ -2931,26 +3133,58 @@ impl RoomSimulation {
                         if let Some(delta) = impact.impulse {
                             self.queue_combat_impulse(impact.entity, context.tick, delta)?;
                         }
-                        if impact.damage == 0.0 {
-                            continue;
-                        }
                         let is_ally_heal = policy.healing
                             || (policy.affects_allies
                                 && !ffa
                                 && self.actor_team(impact.entity) == Some(context.team));
+                        let effect_guid = match impact.geometry {
+                            Some(crate::game_hitscan::ImpactGeometry::Blast { .. }) => {
+                                blast_effect.or(direct_effect)
+                            }
+                            _ => direct_effect.or(blast_effect),
+                        };
+                        if impact.damage == 0.0 {
+                            if let Some(effect_guid) = effect_guid {
+                                self.apply_projectile_status_effect(
+                                    effect_guid,
+                                    owner.entity,
+                                    impact.entity,
+                                    is_ally_heal,
+                                    context.tick,
+                                );
+                            }
+                            continue;
+                        }
                         if is_ally_heal {
                             let death = Death {
                                 time: context.now.as_secs_f64(),
                                 frame: context.tick,
                                 killer: owner.entity,
                             };
-                            let _ = self.apply_health(
+                            if let Some(outcome) = self.apply_health(
                                 impact.entity,
                                 HealthEffect::Heal(impact.damage),
                                 death,
                                 context.now,
                                 None,
-                            )?;
+                            )? {
+                                if outcome.delta > 0.0 {
+                                    self.deliver_applied_heal(
+                                        owner.entity,
+                                        impact.entity,
+                                        outcome.delta,
+                                    );
+                                }
+                            }
+                            if let Some(effect_guid) = effect_guid {
+                                self.apply_projectile_status_effect(
+                                    effect_guid,
+                                    owner.entity,
+                                    impact.entity,
+                                    true,
+                                    context.tick,
+                                );
+                            }
                             continue;
                         }
                         if self.players_by_wire.contains_key(&impact.entity) {
@@ -2961,6 +3195,28 @@ impl RoomSimulation {
                                 impact,
                             )? {
                                 hits.push(hit);
+                            }
+                            if let Some(_stun) = stun {
+                                if let Some(id) = self.player_handle_for_wire(impact.entity) {
+                                    if let Some(state) = self.player_body_mut(id) {
+                                        state.mover.clear_pending_script_motion();
+                                        state.mover.queue_velocity_change(
+                                            context.tick.saturating_add(1),
+                                            crate::mover::VelocityChange::SetHorizontalVelocity([
+                                                0.0, 0.0,
+                                            ]),
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(effect_guid) = effect_guid {
+                                self.apply_projectile_status_effect(
+                                    effect_guid,
+                                    owner.entity,
+                                    impact.entity,
+                                    false,
+                                    context.tick,
+                                );
                             }
                             continue;
                         }
@@ -2996,6 +3252,15 @@ impl RoomSimulation {
                                     }
                                 }
                             }
+                            if let Some(effect_guid) = effect_guid {
+                                self.apply_projectile_status_effect(
+                                    effect_guid,
+                                    owner.entity,
+                                    impact.entity,
+                                    false,
+                                    context.tick,
+                                );
+                            }
                             hits.push(hit);
                         }
                     }
@@ -3020,6 +3285,9 @@ impl RoomSimulation {
                     }
                 }
             }
+            if let Some(wire) = self.server_projectile_wires.remove(&entity) {
+                self.retired_enemies.push(wire);
+            }
             if !self.world.despawn(entity) {
                 return Err(CombatError::MissingFlight { connection, entity });
             }
@@ -3039,6 +3307,9 @@ impl RoomSimulation {
     pub(crate) fn retire_projectiles(&mut self, connection: u32) {
         if let Some(batch) = self.projectiles.remove(&connection) {
             for entity in batch.order {
+                if let Some(wire) = self.server_projectile_wires.remove(&entity) {
+                    self.retired_enemies.push(wire);
+                }
                 // Cleanup must remain usable while retiring a damaged room.
                 self.world.despawn(entity);
             }
@@ -3047,6 +3318,9 @@ impl RoomSimulation {
 
     pub(crate) fn clear_projectiles(&mut self) {
         for entity in self.projectiles.drain().flat_map(|(_, batch)| batch.order) {
+            if let Some(wire) = self.server_projectile_wires.remove(&entity) {
+                self.retired_enemies.push(wire);
+            }
             self.world.despawn(entity);
         }
     }
@@ -3773,27 +4047,36 @@ impl RoomSimulation {
         let mut impulses = Vec::new();
         let mut candidates = Vec::with_capacity(targets.len());
         for handle in std::mem::take(&mut self.enemy_projectiles) {
-            let seed = self
-                .world
-                .get::<EnemyProjectile>(handle)
-                .expect("live enemy projectile");
-            let shooter_pose = if seed.flight.affects_shooter() {
-                self.by_wire
-                    .get(&seed.source)
-                    .and_then(|&body| self.world.get::<BotState>(body))
-                    .filter(|state| !state.bot.dead && state.vitals.death().is_none())
-                    .map(|state| {
-                        (
-                            seed.source,
-                            queries.hurt_pose(state.bot.spawn.body, queries.target(&state.bot)),
-                        )
-                    })
-            } else {
-                None
+            let (prev_pos, seed_source, seed_team) = {
+                let seed = self
+                    .world
+                    .get::<EnemyProjectile>(handle)
+                    .expect("live enemy projectile");
+                (seed.flight.position(), seed.source, seed.team)
+            };
+            let shooter_pose = {
+                let seed = self
+                    .world
+                    .get::<EnemyProjectile>(handle)
+                    .expect("live enemy projectile");
+                if seed.flight.affects_shooter() {
+                    self.by_wire
+                        .get(&seed.source)
+                        .and_then(|&body| self.world.get::<BotState>(body))
+                        .filter(|state| !state.bot.dead && state.vitals.death().is_none())
+                        .map(|state| {
+                            (
+                                seed.source,
+                                queries.hurt_pose(state.bot.spawn.body, queries.target(&state.bot)),
+                            )
+                        })
+                } else {
+                    None
+                }
             };
             candidates.clear();
             candidates.extend(targets.iter().filter_map(|target| {
-                target.hostile_to(seed.source, seed.team, queries.free_for_all())
+                target.hostile_to(seed_source, seed_team, queries.free_for_all())
             }));
             let mut projectile = self
                 .world
@@ -3808,8 +4091,46 @@ impl RoomSimulation {
                     queries.projectile_wall_readonly(origin, direction, reach, radius)
                 },
             );
+            let next_pos = projectile.flight.position();
+            let step_delta = [
+                next_pos[0] - prev_pos[0],
+                next_pos[1] - prev_pos[1],
+                next_pos[2] - prev_pos[2],
+            ];
+            let step_dist = crate::static_ray::norm(step_delta);
+            let barrier_hit = if step_dist > 1e-5
+                && (!self.room_pets.is_empty() || !self.room_deployables.is_empty())
+            {
+                let dir = step_delta.map(|v| v / step_dist);
+                self.intercept_barrier_ray(
+                    Some(seed_team),
+                    queries.free_for_all(),
+                    prev_pos,
+                    dir,
+                    step_dist,
+                    15.0,
+                    seed_source,
+                    tick,
+                    Duration::from_secs_f64(
+                        f64::from(tick) * crate::game_clock::TICK_PERIOD.as_secs_f64(),
+                    ),
+                )
+                .map(|(_, dist)| crate::static_ray::along(prev_pos, dir, dist))
+            } else {
+                None
+            };
+            if let Some(hit_pt) = barrier_hit {
+                self.complete_observed_projectile(handle, tick, true, Some(hit_pt));
+                self.world.despawn(handle);
+                continue;
+            }
+            let mut projectile = self
+                .world
+                .get_mut::<EnemyProjectile>(handle)
+                .expect("live enemy projectile");
             let mut prop_blast_point = None;
             let mut impact_hit = false;
+            let mut end_point = None;
             match advanced {
                 Ok(None) => {
                     self.enemy_projectiles.push(handle);
@@ -3817,6 +4138,7 @@ impl RoomSimulation {
                 }
                 Ok(Some(end)) => {
                     impact_hit = end.impact;
+                    end_point = Some(end.point);
                     if end.impact {
                         if blast_radius > 0.0 {
                             queries.break_in_sphere(end.point, blast_radius);
@@ -3846,6 +4168,23 @@ impl RoomSimulation {
                         .and_then(|&body| self.world.get::<BotState>(body))
                         .and_then(|state| state.enemy.as_ref());
                     for impact in end.impacts {
+                        if let Some((reflect, _eye, _aim)) =
+                            self.check_player_deflect(impact.entity, step_delta)
+                        {
+                            if reflect && impact.damage > 0.0 && source != impact.entity {
+                                // Genji Deflect reflects enemy projectile damage back to the shooter.
+                                let reflected_amount = impact.damage;
+                                let mut reflected = impact;
+                                reflected.entity = source;
+                                damage.push(EnemyDamage {
+                                    source: impact.entity,
+                                    target: source,
+                                    impact: Some(reflected),
+                                    amount: reflected_amount,
+                                });
+                            }
+                            continue;
+                        }
                         if let Some(delta) = impact.impulse {
                             impulses.push((impact.entity, delta));
                         }
@@ -3869,7 +4208,7 @@ impl RoomSimulation {
                     ));
                 }
             }
-            self.complete_observed_projectile(handle, tick, impact_hit);
+            self.complete_observed_projectile(handle, tick, impact_hit, end_point);
             self.world.despawn(handle);
             if let Some(point) = prop_blast_point {
                 self.interactive_props

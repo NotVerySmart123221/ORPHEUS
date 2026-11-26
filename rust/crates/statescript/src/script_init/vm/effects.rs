@@ -666,7 +666,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 return Ok(());
             }
         }
-        let knockback = if elapsed_ms.is_none() {
+        let direct_knockback = if elapsed_ms.is_none() {
+            match self.evaluate(id, node, field(effect, "m_1376B4DF"), None) {
+                Some(Value::Vector(v))
+                    if v.iter().all(|c| c.is_finite()) && {
+                        let mag = v[0].hypot(v[1]).hypot(v[2]);
+                        mag > 1e-4 && mag <= 45.0
+                    } =>
+                {
+                    Some(v)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let knockback = if elapsed_ms.is_none() && direct_knockback.is_none() {
             crate::script_init::Knockback::from_authored(effect, &mut |cfg| {
                 self.evaluate(id, node, cfg, None).ok_or_else(|| {
                     script_expr::EvalError::UnsupportedConfig("modify health knockback".into())
@@ -675,7 +690,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         } else {
             None
         };
-        if amount <= 0.0 && knockback.is_none() {
+        if amount <= 0.0 && knockback.is_none() && direct_knockback.is_none() {
             return Ok(());
         }
         let target_field = field(&node.fields, "m_FA3ECC43");
@@ -732,19 +747,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         for item in targets {
             if let Value::Entity(target) = item {
                 if script_expr::valid_entity(target) {
-                    let impulse = knockback.as_ref().and_then(|kb| {
-                        let target_pos = self.world.position(target)?;
-                        let origin = kb_origin.unwrap_or(target_pos);
-                        let dx = target_pos[0] - origin[0];
-                        let dy = target_pos[1] - origin[1];
-                        let dz = target_pos[2] - origin[2];
-                        let dist = dx.hypot(dy).hypot(dz);
-                        if kb_mode == Some(6) || dx.hypot(dz) < 1e-4 {
-                            let fwd = caster_forward.unwrap_or([dx, 0.0, dz]);
-                            kb.radial_delta([fwd[0], fwd[2]], dist, true, 1.0)
-                        } else {
-                            kb.delta(origin, target_pos, dist, true, 1.0)
-                        }
+                    let impulse = direct_knockback.or_else(|| {
+                        knockback.as_ref().and_then(|kb| {
+                            let target_pos = self.world.position(target)?;
+                            let origin = kb_origin.unwrap_or(target_pos);
+                            let dx = target_pos[0] - origin[0];
+                            let dy = target_pos[1] - origin[1];
+                            let dz = target_pos[2] - origin[2];
+                            let dist = dx.hypot(dy).hypot(dz);
+                            if kb_mode == Some(6) || dx.hypot(dz) < 1e-4 {
+                                let fwd = caster_forward.unwrap_or([dx, 0.0, dz]);
+                                kb.radial_delta([fwd[0], fwd[2]], dist, true, 1.0)
+                            } else {
+                                kb.delta(origin, target_pos, dist, true, 1.0)
+                            }
+                        })
                     });
                     if delta != 0.0 || impulse.is_some() {
                         let _ = self.world.queue_modify_health(site, target, delta, impulse);
@@ -796,27 +813,56 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if radius <= 0.0 {
             return self.publish_tracked_targets(key, node, Vec::new());
         }
+        let local_space = origin != 0 && field(&node.fields, "m_0297060F").as_u64() == Some(1);
+        let end_field = field(&node.fields, "m_B3A77CD0");
+        let end_offset = if end_field.is_null() {
+            None
+        } else {
+            match self.evaluate(id, node, end_field, None) {
+                Some(Value::Vector(v)) if v.iter().all(|a| a.is_finite()) => Some(v),
+                _ => None,
+            }
+        };
+        let cylinder_radius = self
+            .evaluate(id, node, field(&node.fields, "m_16BDE607"), None)
+            .and_then(pool_number)
+            .filter(|r| r.is_finite() && *r > 0.0)
+            .unwrap_or(0.0);
         let filter = field(&node.fields, "m_filter");
         let angle_field = field(&node.fields, "m_A30B383E");
-        let candidates = if !angle_field.is_null() {
-            let angle = self
-                .evaluate(id, node, angle_field, None)
-                .and_then(pool_number)
-                .filter(|a| (0.0..=360.0).contains(a))
-                .unwrap_or(360.0);
+        let candidates = if !angle_field.is_null() || cylinder_radius > 0.0 {
+            let angle = if angle_field.is_null() {
+                0.0
+            } else {
+                self.evaluate(id, node, angle_field, None)
+                    .and_then(pool_number)
+                    .filter(|a| (0.0..=360.0).contains(a))
+                    .unwrap_or(360.0)
+            };
             let visible = field(&node.fields, "m_32AFE9AA").as_u64() == Some(1);
-            let Some(candidates) = self
-                .world
-                .cone_targets(site, origin, offset, radius, angle, visible, filter)
-            else {
+            let Some(candidates) = self.world.cone_targets_with_cylinder(
+                site,
+                origin,
+                offset,
+                radius,
+                angle,
+                cylinder_radius,
+                visible,
+                filter,
+            ) else {
                 return self.publish_tracked_targets(key, node, Vec::new());
             };
             candidates
         } else {
-            let Some(candidates) = self
-                .world
-                .tracked_targets(site, origin, offset, radius, filter)
-            else {
+            let Some(candidates) = self.world.swept_tracked_targets(
+                site,
+                origin,
+                offset,
+                end_offset,
+                local_space,
+                radius,
+                filter,
+            ) else {
                 return self.publish_tracked_targets(key, node, Vec::new());
             };
             candidates
@@ -1670,11 +1716,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     ) -> Result<(), InitFault> {
         let id = key.instance;
         let site = self.site(id, node);
-        if !matches!(
-            self.evaluate(id, node, field(&node.fields, "m_FA3ECC43"), None),
-            Some(Value::Entity(target)) if target == site.entity
-        ) {
-            self.report(site, Issue::UnsupportedField("health pool target"));
+        let generic_player = self.world.admits_generic_player_runtime(site);
+        let target_field = field(&node.fields, "m_FA3ECC43");
+        let target_ok = (generic_player && target_field.is_null())
+            || matches!(
+                self.evaluate(id, node, target_field, None),
+                Some(Value::Entity(target)) if target == site.entity
+            );
+        if !target_ok {
+            if !generic_player {
+                self.report(site, Issue::UnsupportedField("health pool target"));
+            }
             return Ok(());
         }
         if wave_bonus {
@@ -1684,9 +1736,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .evaluate(id, node, field(&node.fields, "m_amount"), Some(key))
             .and_then(pool_number)
         else {
-            self.report(site, Issue::UnsupportedField("health pool capacity"));
+            if !generic_player {
+                self.report(site, Issue::UnsupportedField("health pool capacity"));
+            }
             return Ok(());
         };
+        if generic_player && (!maximum.is_finite() || maximum <= 0.0) {
+            return Ok(());
+        }
         if let Some(identifier) = named_temporary_shield(node, key.raw) {
             let instance = &self.machine.snapshot.instances[&id];
             let stacked = instance.parent.is_none() && instance.retire_after_frame.is_some();
@@ -1700,10 +1757,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .world
                 .add_temporary_shield(site, identifier, maximum, stacked)
             else {
-                self.report(
-                    site,
-                    Issue::UnsupportedField("temporary shield registration"),
-                );
+                if !generic_player {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("temporary shield registration"),
+                    );
+                }
                 return Ok(());
             };
             self.state_mut(key).expect("active temporary shield").kind =
@@ -1718,14 +1777,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             maximum
         } else {
             let Some(current) = self.evaluate(id, node, initial, None).and_then(pool_number) else {
-                self.report(site, Issue::UnsupportedField("health pool initial amount"));
+                if !generic_player {
+                    self.report(site, Issue::UnsupportedField("health pool initial amount"));
+                }
                 return Ok(());
             };
             current
         };
-        let kind = pool_kind(field(&node.fields, "m_7E8B666C")).expect("validated pool kind");
+        let Some(kind) = pool_kind(field(&node.fields, "m_7E8B666C")) else {
+            if !generic_player {
+                self.report(site, Issue::UnsupportedField("health pool kind"));
+            }
+            return Ok(());
+        };
         let Some(pool) = self.world.add_health_pool(site, kind, maximum, current) else {
-            self.report(site, Issue::UnsupportedField("health pool registration"));
+            if !generic_player {
+                self.report(site, Issue::UnsupportedField("health pool registration"));
+            }
             return Ok(());
         };
         self.state_mut(key).expect("active health pool").kind =
@@ -1799,9 +1867,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // The reference exposes the named value through the pool query.
             return self.publish_health_totals(self.site(key.instance, node));
         }
-        let output = script_expr::lvalue(field(&node.fields, "m_CEAB19E8"))
-            .expect("validated health pool output");
-        if let Some(output) = output {
+        if let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "m_CEAB19E8")) {
             let output = source_key(key.instance, output);
             let current = Value::Float(current);
             if !same(&self.machine.value(output, None), &current) {
@@ -2742,12 +2808,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             _ => None,
         };
+        let bone_attached = !field(&node.fields, "m_888BCD8B").is_null();
+        let possessable = matches!(
+            self.evaluate(id, node, field(&node.fields, "m_E5312022"), Some(key)),
+            Some(Value::Bool(true)) | Some(Value::Integer(1))
+        );
         let Some(pet_id) = self.world.spawn_pet(
             site,
             PetSpawn {
                 definition,
                 attach,
                 position,
+                bone_attached,
+                possessable,
             },
         ) else {
             return Ok(());
@@ -2913,7 +2986,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 );
                             }
                         };
-                        if let Some(v) = component.get("m_19452F15").and_then(Json::as_f64) {
+                        if let Some(v) = component
+                            .get("m_CFD3E635")
+                            .or_else(|| component.get("m_19452F15"))
+                            .and_then(Json::as_f64)
+                        {
                             if v.is_finite() && v > 0.0 && (v - 5.5).abs() > 1e-4 {
                                 push(0, SPEED_SLOT, Operation::Multiply, v / 5.5);
                             }
@@ -3261,17 +3338,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        if (site.graph, node.pos) != (0x0B27, 15) {
-            if self.world.admits_generic_player_runtime(site) {
-                return Ok(());
-            }
+        let generic = self.world.admits_generic_player_runtime(site);
+        if (site.graph, node.pos) != (0x0B27, 15) && !generic {
             self.report(site, Issue::UnsupportedState(node.class.clone()));
             return Ok(());
         }
-        let enabled = !field(&node.fields, "m_B02B1FD7").is_null()
-            && self
-                .evaluate(key.instance, node, field(&node.fields, "m_A6BB0869"), None)
-                .is_some_and(|value| truthy(&value));
+        let enabled = if generic {
+            let toggle = field(&node.fields, "m_A6BB0869");
+            toggle.is_null()
+                || self
+                    .evaluate(key.instance, node, toggle, None)
+                    .is_none_or(|value| truthy(&value))
+        } else {
+            !field(&node.fields, "m_B02B1FD7").is_null()
+                && self
+                    .evaluate(key.instance, node, field(&node.fields, "m_A6BB0869"), None)
+                    .is_some_and(|value| truthy(&value))
+        };
         if enabled {
             self.register_tick(key, self.machine.now_ms);
         }
@@ -3287,7 +3370,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .state(usize::from(key.raw))
             .expect("placement selector state");
         let site = self.site(key.instance, node);
-        if (site.graph, node.pos) != (0x0B27, 15) {
+        let generic = self.world.admits_generic_player_runtime(site);
+        if (site.graph, node.pos) != (0x0B27, 15) && !generic {
             return Ok(());
         }
         let sampled = matches!(
@@ -3296,11 +3380,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         );
         let frame_ms = crate::script_runtime::FRAME_MS;
         let at_frame_end = self.machine.now_ms % frame_ms == frame_ms - 1;
-        if (sampled && !at_frame_end)
-            || !self
-                .evaluate(key.instance, node, field(&node.fields, "m_B02B1FD7"), None)
+        let ready_field = field(&node.fields, "m_B02B1FD7");
+        let ready = if generic && ready_field.is_null() {
+            true
+        } else {
+            self.evaluate(key.instance, node, ready_field, None)
                 .is_some_and(|value| truthy(&value))
-        {
+        };
+        if (sampled && !at_frame_end) || !ready {
             return Ok(());
         }
         if let Some(StateKind::PlacementSelector { sampled, .. }) =
@@ -3363,11 +3450,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             return Ok(());
         }
+        let site = self.site(key.instance, node);
+        let generic_player = self.world.admits_generic_player_runtime(site);
         let speed_config = field(&node.fields, "m_speed");
-        if field(&node.fields, "m_B060F688").as_u64() != Some(0)
-            || speed_config.is_null()
-            || !field(&node.fields, "m_destinationBone").is_null()
-            || !field(&node.fields, "m_5BEFF040").is_null()
+        if speed_config.is_null()
+            || (!generic_player
+                && (field(&node.fields, "m_B060F688").as_u64() != Some(0)
+                    || !field(&node.fields, "m_destinationBone").is_null()
+                    || !field(&node.fields, "m_5BEFF040").is_null()))
         {
             return Ok(());
         }
@@ -3419,5 +3509,694 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 };
             }
         }
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn run_create_entity(
+        &mut self,
+        id: u16,
+        node: &Node,
+        caller: Option<StateKey>,
+    ) -> Result<(), InitFault> {
+        let site = self.site(id, node);
+        let mut spawned = Value::Null;
+        if let Some(Value::Asset(definition)) =
+            self.evaluate(id, node, field(&node.fields, "m_entityDefinition"), caller)
+        {
+            if definition >> 48 == 0x0400 && definition & 0x0000_ffff_ffff_ffff != 0 {
+                let attach =
+                    match self.evaluate(id, node, field(&node.fields, "m_AA26E7DD"), caller) {
+                        Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                            Some(entity)
+                        }
+                        _ => None,
+                    };
+                let position =
+                    match self.evaluate(id, node, field(&node.fields, "m_position"), caller) {
+                        Some(Value::Vector(pos)) if pos.iter().all(|c| c.is_finite()) => Some(pos),
+                        Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                            self.world.position(entity)
+                        }
+                        _ => None,
+                    };
+                let bone_attached = !field(&node.fields, "m_888BCD8B").is_null();
+                let possessable = matches!(
+                    self.evaluate(id, node, field(&node.fields, "m_E5312022"), caller),
+                    Some(Value::Bool(true)) | Some(Value::Integer(1))
+                );
+                if let Some(pet_id) = self.world.spawn_pet(
+                    site,
+                    crate::script_init::PetSpawn {
+                        definition,
+                        attach,
+                        position,
+                        bone_attached,
+                        possessable,
+                    },
+                ) {
+                    spawned = Value::Entity(pet_id);
+                }
+            }
+        }
+        if let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "m_B3019338")) {
+            let target = source_key(id, output);
+            if spawned != Value::Null || stored(&self.machine.snapshot, target) == Value::Null {
+                self.write(target, spawned)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn refresh_filter_array(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let Ok(Some(output)) = script_expr::lvalue(field(&node.fields, "m_F2805C84")) else {
+            return Ok(());
+        };
+        let source = self
+            .evaluate(id, node, field(&node.fields, "m_814F8EC3"), Some(key))
+            .unwrap_or(Value::Null);
+        let items = match source {
+            Value::Array(items) => items,
+            Value::Null => Vec::new(),
+            other => vec![other],
+        };
+        let filter = field(&node.fields, "m_filter");
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+        let own_team = self.world.entity_team(site, site.entity);
+        let mut filtered = Vec::with_capacity(items.len());
+        for item in items {
+            let keep = match item {
+                Value::Entity(entity) if script_expr::valid_entity(entity) => {
+                    if !self.world.entity_alive(site, entity) {
+                        false
+                    } else {
+                        let target_team = self.world.entity_team(site, entity);
+                        match (team_mode, hostile_flag) {
+                            (1, 0) => own_team.is_some() && target_team == own_team,
+                            (2, 0) | (0, 1) => own_team.is_none() || target_team != own_team,
+                            _ => true,
+                        }
+                    }
+                }
+                Value::Entity(_) | Value::Null => false,
+                _ => true,
+            };
+            if keep {
+                filtered.push(item);
+            }
+        }
+        let target_key = source_key(id, output);
+        let result = Value::Array(filtered);
+        if !same(&self.machine.value(target_key, None), &result) {
+            self.write(target_key, result)?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_combat_mod(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let stat = asset_guid(field(&node.fields, "m_60703B1E")).unwrap_or(0);
+        let multiplicative = field(&node.fields, "m_41B10FF2").as_u64() == Some(1);
+        let value = self
+            .evaluate(id, node, field(&node.fields, "m_50530EAB"), None)
+            .and_then(pool_number)
+            .filter(|v| v.is_finite())
+            .unwrap_or(if multiplicative { 1.0 } else { 0.0 });
+        let cc_immune = self
+            .evaluate(id, node, field(&node.fields, "m_941C56C2"), None)
+            .is_some_and(|v| truthy(&v));
+        if self.world.set_combat_mod(
+            site,
+            Some(crate::script_init::CombatModEntry {
+                stat,
+                multiplicative,
+                value,
+                cc_immune,
+            }),
+        ) {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::CombatModFilter { registered: true };
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_deflect(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let reflect = field(&node.fields, "m_82DA44E0").as_u64() == Some(1);
+        let half_angle_deg = self
+            .evaluate(id, node, field(&node.fields, "m_025D0C39"), None)
+            .and_then(pool_number)
+            .filter(|a| a.is_finite() && *a > 0.0 && *a <= 180.0)
+            .unwrap_or(90.0);
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::DeflectProjectiles {
+                reflect,
+                half_angle_deg,
+            };
+        }
+        let _ = self.world.set_deflect_state(
+            site,
+            Some(crate::script_init::DeflectState {
+                reflect,
+                half_angle_deg,
+            }),
+        );
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn refresh_generic_contact_sweep(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let reach = self
+            .evaluate(id, node, field(&node.fields, "m_3B671E99"), None)
+            .and_then(pool_number)
+            .filter(|r| r.is_finite() && *r > 0.0)
+            .unwrap_or(2.5)
+            .clamp(0.5, 22.0);
+        let origin = match self.evaluate(id, node, field(&node.fields, "m_5BC939F0"), None) {
+            Some(Value::Vector(v)) if v.iter().all(|c| c.is_finite()) => Some(v),
+            _ => self
+                .world
+                .body_eye_position(site.entity)
+                .or_else(|| self.world.position(site.entity)),
+        };
+        let direction = match self.evaluate(id, node, field(&node.fields, "m_04732804"), None) {
+            Some(Value::Vector(v)) if v.iter().all(|c| c.is_finite()) => {
+                let len = v[0].hypot(v[1]).hypot(v[2]);
+                if len > 1e-4 {
+                    Some([v[0] / len, v[1] / len, v[2] / len])
+                } else {
+                    self.world.forward(site.entity)
+                }
+            }
+            _ => self.world.forward(site.entity),
+        };
+        let hostile_filter = serde_json::json!({ "m_66747E7D": 2, "m_89831602": 1 });
+        if let Some(contact) = self.world.generic_beam_contact(
+            site,
+            origin,
+            direction,
+            Some(reach),
+            0.55,
+            &hostile_filter,
+        ) {
+            if let Some(target_entity) = contact.entity {
+                if let Ok(Some(out_var)) = script_expr::lvalue(field(&node.fields, "m_53FCEDBF")) {
+                    let target_key = source_key(id, out_var);
+                    let next_val = Value::Entity(target_entity);
+                    if !same(&self.machine.value(target_key, None), &next_val) {
+                        self.write(target_key, next_val)?;
+                    }
+                }
+                if let Some(pt) = contact.point {
+                    if let Ok(Some(pt_var)) = script_expr::lvalue(field(&node.fields, "m_7AD5153D"))
+                    {
+                        self.write(source_key(id, pt_var), Value::Vector(pt))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn refresh_target_aura(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let effect =
+            asset_guid(field(field(&node.fields, "m_A76A8CF6"), "m_A76A8CF6")).unwrap_or(0);
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::TargetAura { effect };
+        }
+        let target_field = field(&node.fields, "m_targets");
+        let target_val = if target_field.is_null() {
+            Value::Entity(site.entity)
+        } else {
+            self.evaluate(id, node, target_field, None)
+                .unwrap_or(Value::Null)
+        };
+        let mut targets = Vec::new();
+        match target_val {
+            Value::Entity(e) if script_expr::valid_entity(e) => targets.push(e),
+            Value::Array(items) => {
+                for item in items {
+                    if let Value::Entity(e) = item {
+                        if script_expr::valid_entity(e) {
+                            targets.push(e);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        let param = array_field(&node.fields, "m_params")
+            .first()
+            .and_then(|row| self.evaluate(id, node, field(row, "m_value"), None))
+            .and_then(pool_number)
+            .filter(|v| v.is_finite());
+        let _ = self.world.set_target_aura(site, &targets, effect, param);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_target_subscript(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let graph_guid =
+            asset_guid(field(field(&node.fields, "m_script"), "m_graph")).or_else(|| {
+                asset_guid(field(
+                    field(field(&node.fields, "m_69F4B52C"), "m_6525E98B"),
+                    "m_graph",
+                ))
+            });
+        let Some(guid) = graph_guid else {
+            return Ok(());
+        };
+        let graph = u32::from(guid as u16);
+        if self.graphs.graph(graph).is_none() {
+            return Ok(());
+        }
+        let scope = self.instance_scope(id);
+        let Ok(child) = self.machine.next_instance_id(scope.is_isolated()) else {
+            return Ok(());
+        };
+        if self
+            .create(
+                child,
+                graph,
+                Some((id, key.raw)),
+                Variables::new(),
+                crate::script_init::Startup::Ordinary,
+                scope,
+            )
+            .is_ok()
+        {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::TargetSubScript { child: Some(child) };
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn tick_constant_accel(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+        elapsed_ms: u64,
+    ) -> Result<(), InitFault> {
+        if self.machine.owner_dead || elapsed_ms == 0 {
+            return Ok(());
+        }
+        let id = key.instance;
+        let site = self.site(id, node);
+        let dt = (elapsed_ms as f64 / 1000.0).min(0.05);
+        let accel = match self.evaluate(id, node, field(&node.fields, "m_16882D22"), None) {
+            Some(Value::Vector(v)) if v.iter().all(|c| c.is_finite()) => v,
+            _ => [0.0, 26.0, 0.0],
+        };
+        let max_up = self
+            .evaluate(id, node, field(&node.fields, "m_B74245E8"), None)
+            .and_then(pool_number)
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(5.5);
+        let frame = self.machine.frame.saturating_add(1);
+        let ops = [
+            crate::script_init::VelocityOp::AddVector([
+                accel[0] * dt,
+                accel[1] * dt,
+                accel[2] * dt,
+            ]),
+            crate::script_init::VelocityOp::CapSpeed {
+                axis: crate::script_init::VelocityAxis::VerticalUp,
+                max: max_up,
+            },
+        ];
+        let _ = self.world.apply_velocity_ops(site, frame, &ops);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn tick_wall_climb(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        if self.machine.owner_dead {
+            return Ok(());
+        }
+        let id = key.instance;
+        let site = self.site(id, node);
+        let Some(pos) = self.world.position(site.entity) else {
+            return Ok(());
+        };
+        let Some(fwd) = self.world.forward(site.entity) else {
+            return Ok(());
+        };
+        let origin = [pos[0], pos[1] + 1.0, pos[2]];
+        let probe_dist = self
+            .evaluate(id, node, field(&node.fields, "m_1190FA0E"), None)
+            .and_then(pool_number)
+            .filter(|d| d.is_finite() && *d > 0.2 && *d < 4.0)
+            .unwrap_or(0.95)
+            .max(0.95);
+        let right = [fwd[2], 0.0, -fwd[0]];
+        let dirs = if node.class == "STU_92ED01D0" {
+            vec![
+                fwd,
+                [
+                    fwd[0] * 0.866 + right[0] * 0.5,
+                    0.0,
+                    fwd[2] * 0.866 + right[2] * 0.5,
+                ],
+                [
+                    fwd[0] * 0.866 - right[0] * 0.5,
+                    0.0,
+                    fwd[2] * 0.866 - right[2] * 0.5,
+                ],
+            ]
+        } else {
+            vec![
+                right,
+                [-right[0], 0.0, -right[2]],
+                [
+                    fwd[0] * 0.707 + right[0] * 0.707,
+                    0.0,
+                    fwd[2] * 0.707 + right[2] * 0.707,
+                ],
+                [
+                    fwd[0] * 0.707 - right[0] * 0.707,
+                    0.0,
+                    fwd[2] * 0.707 - right[2] * 0.707,
+                ],
+                fwd,
+            ]
+        };
+        let mut wall_normal = None;
+        for dir in dirs {
+            if let Some(Some(hit)) =
+                self.world
+                    .spatial_ray_cast(site, self.machine.frame, origin, dir, probe_dist)
+            {
+                if hit.normal[1].abs() < 0.55 {
+                    wall_normal = Some(hit.normal);
+                    break;
+                }
+            }
+        }
+        let touching = wall_normal.is_some();
+        if let Ok(Some(flag_var)) = script_expr::lvalue(field(&node.fields, "m_7F8E47ED")) {
+            let var_key = source_key(id, flag_var);
+            let val = Value::Bool(touching);
+            if !same(&self.machine.value(var_key, None), &val) {
+                self.write(var_key, val)?;
+            }
+        }
+        if let Some(normal) = wall_normal {
+            for field_name in ["m_DF4A5F82", "m_068B20CE", "m_24680BA9"] {
+                if let Ok(Some(n_var)) = script_expr::lvalue(field(&node.fields, field_name)) {
+                    let var_key = source_key(id, n_var);
+                    let val = Value::Vector(normal);
+                    if !same(&self.machine.value(var_key, None), &val) {
+                        self.write(var_key, val)?;
+                    }
+                }
+            }
+            let frame = self.machine.frame.saturating_add(1);
+            if node.class == "STU_92ED01D0" {
+                let speed = self
+                    .evaluate(id, node, field(&node.fields, "m_4E3BB2CE"), None)
+                    .and_then(pool_number)
+                    .filter(|s| s.is_finite() && *s > 0.0 && *s <= 20.0)
+                    .unwrap_or(7.5);
+                let _ = self.world.apply_velocity_ops(
+                    site,
+                    frame,
+                    &[crate::script_init::VelocityOp::SetSpeed {
+                        axis: crate::script_init::VelocityAxis::Vertical,
+                        value: speed,
+                    }],
+                );
+            } else if !field(&node.fields, "m_4573AFA0").is_null() {
+                // WallRide (Lúcio): counter downward fall and maintain tangent glide along wall.
+                let _ = self.world.apply_velocity_ops(
+                    site,
+                    frame,
+                    &[
+                        crate::script_init::VelocityOp::SetSpeed {
+                            axis: crate::script_init::VelocityAxis::Vertical,
+                            value: 0.4,
+                        },
+                        crate::script_init::VelocityOp::AddVector([
+                            fwd[0] * 1.4,
+                            0.0,
+                            fwd[2] * 1.4,
+                        ]),
+                    ],
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_grapple(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let max_range = self
+            .evaluate(id, node, field(&node.fields, "m_2AFC083F"), None)
+            .and_then(pool_number)
+            .filter(|r| r.is_finite() && *r > 1.0 && *r <= 60.0)
+            .unwrap_or(20.0);
+        let speed = self
+            .evaluate(id, node, field(&node.fields, "m_2C40C158"), None)
+            .and_then(pool_number)
+            .filter(|s| s.is_finite() && *s > 1.0 && *s <= 60.0)
+            .unwrap_or(22.0);
+        let pendulum = node.class == "STU_8B4B379C"
+            || self
+                .evaluate(id, node, field(&node.fields, "m_2E7D290A"), None)
+                .is_some_and(|v| truthy(&v));
+        let origin = self
+            .world
+            .body_eye_position(site.entity)
+            .or_else(|| self.world.position(site.entity));
+        let dir = self.world.forward(site.entity);
+        let anchor = if let (Some(origin), Some(dir)) = (origin, dir) {
+            if let Some(Some(hit)) =
+                self.world
+                    .spatial_ray_cast(site, self.machine.frame, origin, dir, max_range)
+            {
+                Some((hit.point, hit.distance.max(2.0)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some((point, dist)) = anchor {
+            if let Ok(Some(anchor_var)) = script_expr::lvalue(field(&node.fields, "m_58B4C4D7")) {
+                self.write(source_key(id, anchor_var), Value::Vector(point))?;
+            }
+            if let Ok(Some(latch_var)) = script_expr::lvalue(field(&node.fields, "m_5ED803CF")) {
+                self.write(source_key(id, latch_var), Value::Bool(true))?;
+            }
+            if let Some(state) = self.state_mut(key) {
+                state.grapple = Some(Box::new(crate::script_init::types::GrappleState {
+                    anchor: point,
+                    speed,
+                    pendulum,
+                    rope_len: dist,
+                }));
+            }
+            self.register_tick(key, self.machine.now_ms);
+        } else {
+            self.post(id, Event::Finish(key.raw))?;
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn tick_grapple(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let Some(grapple) = self.state(key).and_then(|s| s.grapple.as_deref().copied()) else {
+            return Ok(());
+        };
+        let anchor = grapple.anchor;
+        let speed = grapple.speed;
+        let pendulum = grapple.pendulum;
+        let rope_len = grapple.rope_len;
+        let id = key.instance;
+        let site = self.site(id, node);
+        let Some(pos) = self.world.position(site.entity) else {
+            return Ok(());
+        };
+        let dx = anchor[0] - pos[0];
+        let dy = anchor[1] - pos[1];
+        let dz = anchor[2] - pos[2];
+        let dist = dx.hypot(dy).hypot(dz);
+        if !pendulum {
+            if dist <= 1.8 {
+                let frame = self.machine.frame.saturating_add(1);
+                let _ = self.world.apply_velocity_ops(
+                    site,
+                    frame,
+                    &[crate::script_init::VelocityOp::SetSpeed {
+                        axis: crate::script_init::VelocityAxis::Vertical,
+                        value: 7.0,
+                    }],
+                );
+                self.post(id, Event::Finish(key.raw))?;
+            }
+        } else if dist > rope_len.max(2.5) && dist > 1e-4 {
+            let pull = ((dist - rope_len) * 6.0).min(speed);
+            let frame = self.machine.frame.saturating_add(1);
+            let _ = self.world.apply_velocity_ops(
+                site,
+                frame,
+                &[crate::script_init::VelocityOp::AddVector([
+                    dx / dist * pull,
+                    (dy / dist * pull).max(0.5),
+                    dz / dist * pull,
+                ])],
+            );
+        }
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn tick_recall_history(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let site = self.site(key.instance, node);
+        let window_secs = field(&node.fields, "m_F0BE865D")
+            .as_f64()
+            .filter(|w| w.is_finite() && *w > 0.5 && *w <= 10.0)
+            .unwrap_or(3.0);
+        let _ = self.world.record_recall_sample(site, window_secs);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_recall_rewind(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let frame = self.machine.frame.saturating_add(1);
+        if let Some(pos) = self.world.execute_recall(site, frame) {
+            if let Ok(Some(out_var)) = script_expr::lvalue(field(&node.fields, "m_6B5DA460")) {
+                self.write(source_key(id, out_var), Value::Vector(pos))?;
+            }
+        }
+        // Retail Tracer Recall completes rewind in ~0.9s (56 ticks) instead of stalling indefinitely.
+        self.post_after(id, 900, Event::Timer(key.raw, 1))?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn begin_ball_roll(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let max_speed = self
+            .evaluate(id, node, field(&node.fields, "m_A289F9A2"), None)
+            .and_then(pool_number)
+            .filter(|s| s.is_finite() && *s > 5.0 && *s <= 40.0)
+            .unwrap_or(10.0);
+        let _ = self.world.set_ball_roll_state(site, true, max_speed);
+        self.machine.movement_modifiers.insert(
+            ModifierKey {
+                instance: id,
+                state: key.raw,
+                slot: 0,
+            },
+            Modifier {
+                index: SPEED_SLOT,
+                operation: Operation::Multiply,
+                value: narrow(1.8),
+                priority: 0.0,
+            },
+        );
+        self.register_tick(key, self.machine.now_ms);
+        Ok(())
+    }
+
+    #[inline(never)]
+    pub(in crate::script_init) fn tick_ball_roll(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        let id = key.instance;
+        let site = self.site(id, node);
+        let speed = match self.world.entity_velocity(site.entity) {
+            script_expr::VelocityQuery::Present(v) => v[0].hypot(v[2]),
+            _ => 0.0,
+        };
+        let was_fireball = matches!(
+            self.state(key).map(|s| s.kind),
+            Some(StateKind::BallRoll { fireball: true })
+        );
+        let now_fireball = speed >= 13.5;
+        if now_fireball != was_fireball {
+            if let Some(state) = self.state_mut(key) {
+                state.kind = StateKind::BallRoll {
+                    fireball: now_fireball,
+                };
+            }
+            if now_fireball {
+                self.follow(id, node, "m_3AF0D54C", Some(key), 0)?;
+            } else {
+                self.follow(id, node, "m_3DD55449", Some(key), 0)?;
+            }
+        }
+        Ok(())
     }
 }

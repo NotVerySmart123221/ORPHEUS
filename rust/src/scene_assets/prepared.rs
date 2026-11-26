@@ -194,6 +194,16 @@ impl PreparedScene {
             .spawn_point(team, 0)
             .ok_or_else(|| invalid("no spawn for the selected hero"))?;
         let yaw = (yaw * 65536.0 / 360.0).round_ties_even() as i32;
+        self.player_spawn_mover_at(body, team, position, yaw)
+    }
+
+    pub(crate) fn player_spawn_mover_at(
+        &self,
+        body: u64,
+        team: u8,
+        position: [f64; 3],
+        yaw: i32,
+    ) -> io::Result<Mover> {
         let contacts = self.contacts.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,

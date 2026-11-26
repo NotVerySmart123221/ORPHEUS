@@ -214,6 +214,8 @@ enum ScriptEffect {
         attach: Option<u32>,
         position: Vec3,
         yaw: i32,
+        max_health: Option<f64>,
+        local_offset: Option<Vec3>,
     },
     DespawnPet {
         pet_id: u32,
@@ -375,6 +377,7 @@ impl RoomScriptRequests {
         true
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn queue_spawn_pet(
         &mut self,
         frame: &RoomSpatialFrame,
@@ -384,6 +387,8 @@ impl RoomScriptRequests {
         attach: Option<u32>,
         position: Vec3,
         yaw: i32,
+        max_health: Option<f64>,
+        local_offset: Option<Vec3>,
     ) -> bool {
         if definition == 0 || !position.iter().all(|c| c.is_finite()) {
             return false;
@@ -397,6 +402,8 @@ impl RoomScriptRequests {
                 attach,
                 position,
                 yaw,
+                max_health,
+                local_offset,
             },
         )
     }
@@ -521,7 +528,12 @@ impl RoomSimulation {
         };
         match request.effect {
             ScriptEffect::Health(effect) => {
-                self.settle_health(request.wire, effect, death, now)?;
+                let is_heal = matches!(effect, HealthEffect::Heal(_));
+                if let Some(outcome) = self.apply_health(request.wire, effect, death, now, None)? {
+                    if is_heal && outcome.delta > 0.0 {
+                        self.deliver_applied_heal(source.wire, request.wire, outcome.delta);
+                    }
+                }
             }
             ScriptEffect::Contact {
                 source_frame,
@@ -560,28 +572,56 @@ impl RoomSimulation {
                     damage
                 };
                 if damage > 0.0 {
+                    let target_facts = self
+                        .sample_health_body(request.wire)
+                        .and_then(|body| body.health_target_facts(&self.world));
+                    let contact_impact = crate::game_hitscan::Impact {
+                        tags: crate::game_hitscan::DamageTags::EMPTY,
+                        entity: request.wire,
+                        distance: 0.0,
+                        damage,
+                        critical: false,
+                        loadout: None,
+                        impulse,
+                        geometry: None,
+                    };
                     let settled = self.apply_health(
                         request.wire,
                         HealthEffect::Damage(damage),
                         death,
                         now,
-                        None,
+                        Some(&contact_impact),
                     )?;
                     if let Some(outcome) = settled.filter(|outcome| outcome.delta < 0.0) {
+                        let dealt = -outcome.delta;
                         self.record_contact_feedback(
                             source,
                             request.wire,
                             source_frame,
-                            -outcome.delta,
+                            dealt,
                             outcome.killed,
                         );
+                        if source.wire != request.wire {
+                            if let Some(mut facts) = target_facts {
+                                if let Some(body) = self.sample_health_body(request.wire) {
+                                    facts.room_status = self.sample_health_target_room_status(body);
+                                }
+                                self.deliver_applied_damage_by_wire(super::AppliedDamage {
+                                    source: source.wire,
+                                    amount: dealt,
+                                    named_pool_losses: Vec::new(),
+                                    tags: contact_impact.tags,
+                                    target_facts: facts,
+                                });
+                            }
+                        }
                         if let Some(id) = self.player_handle_for_wire(request.wire) {
                             if let Some(owner) = self.player_body(id).map(|p| p.owner) {
                                 self.record_received_damage(
                                     owner,
                                     id,
                                     source.wire,
-                                    (-outcome.delta) as f32,
+                                    dealt as f32,
                                     None,
                                 );
                             }
@@ -597,7 +637,7 @@ impl RoomSimulation {
                 }
             }
             ScriptEffect::Message(message) => {
-                self.route_room_message(request.entity, source.wire, message);
+                self.route_room_message(request.wire, request.entity, source.wire, message);
             }
             ScriptEffect::SpawnPet {
                 pet_id,
@@ -605,9 +645,22 @@ impl RoomSimulation {
                 attach,
                 position,
                 yaw,
+                max_health,
+                local_offset,
             } => {
                 let team = self.actor_team(source.wire).unwrap_or(0);
-                self.spawn_room_pet(source.wire, team, pet_id, definition, attach, position, yaw);
+                self.spawn_room_pet(
+                    source.wire,
+                    team,
+                    pet_id,
+                    definition,
+                    attach,
+                    position,
+                    yaw,
+                    max_health,
+                    local_offset,
+                    tick,
+                );
             }
             ScriptEffect::DespawnPet { pet_id } => {
                 self.despawn_room_pet(pet_id);
@@ -636,7 +689,11 @@ impl RoomSimulation {
                 } else if let Some(mut player) =
                     self.world.get_mut::<PlayerBodyState>(request.entity)
                 {
-                    if player.alive() {
+                    let cc_immune = player
+                        .runtime
+                        .as_deref()
+                        .is_some_and(|rt| rt.combat_modifiers().4);
+                    if player.alive() && !cc_immune {
                         player.mover.clear_pending_script_motion();
                         player.mover.queue_velocity_change(
                             tick.saturating_add(1),
@@ -762,6 +819,14 @@ impl RoomSimulation {
             .get(&wire)
             .or_else(|| self.players_by_wire.get(&wire))
             == Some(&entity)
+            || self
+                .room_pets
+                .get(&wire)
+                .is_some_and(|pet| pet.ecs_entity == entity)
+            || self
+                .room_deployables
+                .get(&wire)
+                .is_some_and(|dep| dep.ecs_entity == entity)
     }
 
     pub(crate) fn room_cue_listener_current(&self, owner: u32, listener: BodyId) -> bool {
@@ -787,12 +852,10 @@ impl RoomSimulation {
         killed: bool,
         frame: u32,
     ) {
-        if !self.combat_voice.has_hurt_cues()
-            || !crate::script_expr::valid_entity(speaker_wire)
-            || (is_bot
-                && crate::script_expr::valid_entity(attacker)
-                && !self.players_by_wire.contains_key(&attacker))
-        {
+        if !self.combat_voice.has_hurt_cues() || !crate::script_expr::valid_entity(speaker_wire) {
+            return;
+        }
+        if is_bot && !self.players_by_wire.contains_key(&attacker) {
             return;
         }
         let prev = self.hurt_voice_history.get(&speaker_wire).copied();
@@ -939,7 +1002,7 @@ impl RoomSimulation {
         }
     }
 
-    fn route_room_message(&mut self, entity: Entity, source: u32, message: RoomMessage) {
+    fn route_room_message(&mut self, wire: u32, entity: Entity, source: u32, message: RoomMessage) {
         // A full or halted recipient can drop the message. Scheduling does
         // not execute that VM or turn its local queue rejection into a room fault.
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
@@ -959,6 +1022,14 @@ impl RoomSimulation {
                 } else if let Some(script) = &mut state.stock_script {
                     script.receive_room_message(source, message);
                 }
+            }
+        } else if let Some(pet) = self.room_pets.get_mut(&wire) {
+            if let Some(component) = pet.component.as_mut() {
+                let _ = component.queue_room_message_from(source, message);
+            }
+        } else if let Some(dep) = self.room_deployables.get_mut(&wire) {
+            if let Some(component) = dep.component.as_mut() {
+                let _ = component.queue_room_message_from(source, message);
             }
         }
     }

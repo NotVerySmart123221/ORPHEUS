@@ -56,7 +56,7 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         script_init::ViewTargetQuery,
     };
 
-    let mut room = RoomSimulation::new(fixture_bots()).unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
     let query = ViewTargetQuery {
         source: 9,
@@ -101,6 +101,37 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         let expected = (slot == 0).then(Vec::new);
         assert_eq!(snapshot.empty_view_targets(&query), expected);
     }
+
+    // Bots are also valid view targets (e.g. Mercy/Zen/Sombra/Zarya on Practice Range bots),
+    // so a solo player in a room with living bots must not short-circuit to an empty result.
+    let mut bot_room = RoomSimulation::new(fixture_bots()).unwrap();
+    bot_room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [4.0, 0.0, 2.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    bot_room
+        .spawn_player_body(PlayerBodyState::new(
+            BodyId {
+                entity: 9,
+                generation: 1,
+            },
+            109,
+            0,
+            0,
+            1,
+            mover,
+            None,
+            frame,
+            None,
+        ))
+        .unwrap();
+    let bot_snapshot = bot_room.capture_spatial_frame(frame).unwrap().unwrap();
+    assert_eq!(bot_snapshot.empty_view_targets(&query), None);
 }
 
 fn check_spatial_candidates_frame(free_for_all: bool) {

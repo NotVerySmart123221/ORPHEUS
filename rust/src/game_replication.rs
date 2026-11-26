@@ -108,6 +108,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         &mut self,
         damage: crate::game_combat::AppliedDamage,
     ) -> io::Result<()>;
+    fn receive_applied_heal(&mut self, _source: u32, _target: u32, _amount: f64) -> io::Result<()> {
+        Ok(())
+    }
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
         Vec::new()
     }
@@ -179,6 +182,23 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
 
     fn authored_facing(&self) -> Option<[i32; 2]> {
         None
+    }
+
+    fn move_request(&self) -> Option<([f64; 3], f64)> {
+        None
+    }
+
+    fn take_body_swap(&mut self) -> Option<u64> {
+        None
+    }
+
+    fn deflect_state(&self) -> Option<crate::script_init::DeflectState> {
+        None
+    }
+
+    /// `(outgoing_damage, incoming_damage, outgoing_heal, incoming_heal, cc_immune)`
+    fn combat_modifiers(&self) -> (f64, f64, f64, f64, bool) {
+        (1.0, 1.0, 1.0, 1.0, false)
     }
 
     #[cfg(test)]

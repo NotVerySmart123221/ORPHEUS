@@ -487,7 +487,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
                 .unwrap(),
         )
     };
-    let (mut factory, spawn) = fixture_body_factory();
+    let (_, spawn) = fixture_body_factory();
     let damage = AppliedDamage {
         source: spawn.entity,
         amount: 1.0,
@@ -503,62 +503,99 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
     };
     let admission =
         |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
-    let require_live_graph = |runtime: &mut PlayerBodyRuntime| {
-        assert!(
-            runtime
-                .receive_applied_damage(damage.clone())
-                .unwrap_err()
-                .to_string()
-                .contains("authored common charge graph")
-        );
+
+    // A body without a mounted 0x004B/0x0B8B common charge root does not bind charge.
+    let (plain_factory, _) = fixture_body_factory();
+    let mut plain = plain_factory.start(spawn).unwrap();
+    assert_eq!(admission(&plain), None);
+    plain.receive_applied_damage(damage.clone()).unwrap();
+
+    // A body mounting the retail common charge root (0x004B) binds data-driven charge
+    // for every hero and mode (encounter-gated in Junkenstein, regular-admitted elsewhere).
+    let make_common_factory = |mode: u64, hero_guid: u64| {
+        let body = 0x0400_0000_0000_0002;
+        let hero = Hero {
+            guid: hero_guid,
+            name: "CommonChargeFixture".into(),
+            role: "Damage".into(),
+            body,
+        };
+        let empty_graph = |index: u32| {
+            serde_json::json!({
+                "index": index, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+                "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+                "header": {"m_nodesBitCount":4, "m_statesBitCount":4,
+                    "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4}
+            })
+        };
+        let bundle = serde_json::json!({
+            "version": 1, "missing": [],
+            "graphs": [empty_graph(42), empty_graph(0x004b), empty_graph(0x0ca5)],
+            "bodies": {
+                format!("0x{body:016X}"): {
+                    "hero": format!("0x{hero_guid:016X}"),
+                    "name": "CommonChargeFixture",
+                    "graphs": [{"graph": 0x004b, "m_75408640": 0}],
+                    "manager": 42,
+                    "weapons": [null, 42]
+                }
+            }
+        });
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            mode,
+            &hero,
+            None,
+            false,
+            (spawn, OwnerBodySetup::default()),
+        )
+        .unwrap()
     };
-    for (mode, hero, admitted) in [
+
+    for (mode, hero, require_encounter) in [
         (JUNKENSTEIN_REVENGE, CASSIDY, true),
         (JUNKENSTEIN_ENDLESS, CASSIDY, true),
-        (JUNKENSTEIN_REVENGE, SOLDIER, false),
+        (JUNKENSTEIN_REVENGE, SOLDIER, true),
         (PRACTICE_RANGE_MODE, CASSIDY, false),
+        (PRACTICE_RANGE_MODE, SOLDIER, false),
     ] {
-        factory.mode = mode;
-        factory.hero = hero;
+        let factory = make_common_factory(mode, hero);
         let mut runtime = factory.start(spawn).unwrap();
         assert_eq!(runtime.world.room_activity, None);
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("bootstrap"))
-        );
-        if admitted {
-            require_live_graph(&mut runtime);
-            let mut inactive = factory
-                .start_with_setup(
-                    spawn,
-                    OwnerBodySetup {
-                        room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
-                        ..OwnerBodySetup::default()
-                    },
-                )
-                .unwrap();
-            assert_eq!(admission(&inactive), Some(projected("bootstrap")));
-            inactive.receive_applied_damage(damage.clone()).unwrap();
+        assert_eq!(admission(&runtime), Some(projected("bootstrap")));
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+
+        let mut inactive = factory
+            .start_with_setup(
+                spawn,
+                OwnerBodySetup {
+                    room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
+                    ..OwnerBodySetup::default()
+                },
+            )
+            .unwrap();
+        let expected_inactive = if require_encounter {
+            projected("bootstrap")
         } else {
-            runtime.receive_applied_damage(damage.clone()).unwrap();
-        }
+            projected("inactive_room")
+        };
+        assert_eq!(admission(&inactive), Some(expected_inactive));
+        inactive.receive_applied_damage(damage.clone()).unwrap();
 
         runtime.set_encounter_active(true).unwrap();
         assert_eq!(
             runtime.world.room_activity,
-            admitted.then_some(OwnerRoomActivity::Encounter { active: true })
+            Some(OwnerRoomActivity::Encounter { active: true })
         );
         runtime.set_room_activity(OwnerRoomActivity::Encounter { active: false });
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("bootstrap"))
-        );
+        assert_eq!(admission(&runtime), Some(projected("bootstrap")));
         runtime.receive_applied_damage(damage.clone()).unwrap();
         runtime.set_encounter_active(false).unwrap();
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("inactive_room"))
-        );
+        assert_eq!(admission(&runtime), Some(projected("inactive_room")));
 
         runtime.set_room_activity(OwnerRoomActivity::Regular);
         runtime.set_encounter_active(false).unwrap();
@@ -566,27 +603,27 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
             runtime.world.room_activity,
             Some(OwnerRoomActivity::Regular)
         );
+        assert_eq!(admission(&runtime), Some(Value::Bool(!require_encounter)));
         runtime.receive_applied_damage(damage.clone()).unwrap();
 
-        if admitted {
-            runtime.set_encounter_active(true).unwrap();
-            require_live_graph(&mut runtime);
-            let outcome = runtime.receive_damage(
-                contract["input"]["lethal_damage"].as_f64().unwrap(),
-                Death {
-                    time: 0.0,
-                    frame: spawn.frame,
-                    killer: damage.target_facts.target,
-                },
-            );
-            assert!(outcome.killed);
-            assert_eq!(admission(&runtime), Some(projected("after_death")));
-            assert_eq!(
-                runtime.world.room_activity,
-                Some(OwnerRoomActivity::Encounter { active: true })
-            );
-            runtime.receive_applied_damage(damage.clone()).unwrap();
-        }
+        runtime.set_encounter_active(true).unwrap();
+        let outcome = runtime.receive_damage(
+            contract["input"]["lethal_damage"].as_f64().unwrap(),
+            Death {
+                time: 0.0,
+                frame: spawn.frame,
+                killer: damage.target_facts.target,
+            },
+        );
+        assert!(outcome.killed);
+        assert_eq!(admission(&runtime), Some(projected("after_death")));
+        let expected_activity = if require_encounter {
+            Some(OwnerRoomActivity::Encounter { active: true })
+        } else {
+            Some(OwnerRoomActivity::Regular)
+        };
+        assert_eq!(runtime.world.room_activity, expected_activity);
+        runtime.receive_applied_damage(damage.clone()).unwrap();
     }
 }
 
@@ -684,6 +721,17 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         Err(OwnerBodyPreparationError::AuthoredChargeRoot(0x0ca5))
     ));
 
+    bundle["graphs"].as_array_mut().unwrap().push(json!({
+        "index": 0x004b, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+        "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+        "header": {
+            "m_nodesBitCount":4, "m_statesBitCount":4, "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4
+        }
+    }));
+    bundle["bodies"][BODY]["graphs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"graph": 0x004b, "m_75408640": 0}));
     bundle["bodies"][BODY]
         .as_object_mut()
         .unwrap()
@@ -708,13 +756,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         Value::Bool(true)
     );
     authored.receive_applied_damage(damage.clone()).unwrap();
-    assert!(
-        compatibility
-            .receive_applied_damage(damage)
-            .unwrap_err()
-            .to_string()
-            .contains("authored common charge graph")
-    );
+    compatibility.receive_applied_damage(damage).unwrap();
     assert_eq!(
         authored
             .receive_host_event(
@@ -3499,6 +3541,12 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         scripted_motion: None,
         voice_variant_counter: 0,
         pet_positions: BTreeMap::new(),
+        spawned_possessables: BTreeMap::new(),
+        pending_body_swap: None,
+        combat_mods: Default::default(),
+        deflect: Default::default(),
+        recall_history: Default::default(),
+        active_auras: Default::default(),
     };
     let mut component = Component::start(
         graphs,
@@ -4851,6 +4899,12 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             scripted_motion: None,
             voice_variant_counter: 0,
             pet_positions: BTreeMap::new(),
+            spawned_possessables: BTreeMap::new(),
+            pending_body_swap: None,
+            combat_mods: Default::default(),
+            deflect: Default::default(),
+            recall_history: Default::default(),
+            active_auras: Default::default(),
         };
         let component = Component::start(
             Arc::clone(&graphs),
@@ -5063,6 +5117,12 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
         scripted_motion: None,
         voice_variant_counter: 0,
         pet_positions: BTreeMap::new(),
+        spawned_possessables: BTreeMap::new(),
+        pending_body_swap: None,
+        combat_mods: Default::default(),
+        deflect: Default::default(),
+        recall_history: Default::default(),
+        active_auras: Default::default(),
     };
     let mut component = Component::start(
         Arc::clone(&graphs),

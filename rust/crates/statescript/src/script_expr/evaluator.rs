@@ -1311,8 +1311,97 @@ impl Evaluator {
                     _ => return Err(EvalError::MalformedConfig("asset category operand")),
                 }
             }
-            "STU_8556841E" => literal_asset(config, class, "m_entityDef", 0x0400)
-                .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_8556841E" => {
+                if child(config, "m_entityDef").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_entityDef", 0x0400)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            "STU_20DB8AB5"
+                if native_fields(config, &["m_C1903771", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_C1903771").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_C1903771", 0x0690)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            // 3-component vector / Euler angle builder (`m_3DCE8650`, `m_447C0E2E`, `m_25252423`).
+            // Used by Hanzo Wall Climb/Lunge (010C:109), Reinhardt (00F8:1), and cosmetic anchors.
+            "STU_A4F22D6B"
+                if native_fields(config, &["m_3DCE8650", "m_447C0E2E", "m_25252423"]) =>
+            {
+                let x = to_float(&self.config(child(config, "m_3DCE8650"), context, nested)?);
+                let y = to_float(&self.config(child(config, "m_447C0E2E"), context, nested)?);
+                let z = to_float(&self.config(child(config, "m_25252423"), context, nested)?);
+                Value::Vector([rounded(x), rounded(y), rounded(z)])
+            }
+            // Hardpoint world position / basis vectors for any entity (self, hooked targets, pets).
+            "STU_FC99C77E" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let pos = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => context
+                        .body_eye_position(*entity)
+                        .or_else(|| context.authored_position(*entity))
+                        .unwrap_or([0.0; 3]),
+                    _ => [0.0; 3],
+                };
+                Value::Vector(pos.map(rounded))
+            }
+            "STU_24087C9E" | "STU_021D01CD" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let fwd = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0])
+                    }
+                    _ => [0.0, 0.0, 1.0],
+                };
+                Value::Vector(fwd.map(rounded))
+            }
+            "STU_EE66D6C3" => {
+                let _ = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                Value::Vector([0.0, 1.0, 0.0])
+            }
+            "STU_66F3B89E" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let fwd = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0])
+                    }
+                    _ => [0.0, 0.0, 1.0],
+                };
+                let len = fwd[0].hypot(fwd[2]);
+                let right = if len > 1e-6 {
+                    [fwd[2] / len, 0.0, -fwd[0] / len]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
+                Value::Vector(right.map(rounded))
+            }
             "STUConfigVarAnimation"
                 if native_fields(config, &["m_animation", "m_resourceKey"])
                     && child(config, "m_resourceKey").is_null() =>
@@ -1717,7 +1806,7 @@ impl Evaluator {
                             .body_health(entity, None, true)
                             .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
                     ),
-                    Value::Entity(_) | Value::Null => Value::Float(0.0),
+                    Value::Entity(_) | Value::Integer(0) | Value::Null => Value::Float(0.0),
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
             }
@@ -1822,18 +1911,20 @@ impl Evaluator {
             }
             "STU_D0E0DA18" => {
                 let value = self.config(child(config, "m_3ABD589C"), context, nested)?;
-                let degrees = match value {
+                let angles = match value {
                     Value::Vector(v) if v.iter().all(|a| a.is_finite()) => {
                         let len = v[0].hypot(v[1]).hypot(v[2]);
                         if len > 1e-9 {
-                            rounded((v[1] / len).clamp(-1.0, 1.0).asin().to_degrees())
+                            let yaw = rounded(v[0].atan2(v[2]).to_degrees());
+                            let pitch = rounded((v[1] / len).clamp(-1.0, 1.0).asin().to_degrees());
+                            [yaw, pitch, 0.0]
                         } else {
-                            0.0
+                            [0.0; 3]
                         }
                     }
-                    _ => 0.0,
+                    _ => [0.0; 3],
                 };
-                Value::Float(degrees)
+                Value::Vector(angles)
             }
             "STU_93DCDDFD"
                 if native_fields(config, &["m_entity", "m_resourceKey"])

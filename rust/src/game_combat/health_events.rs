@@ -361,6 +361,8 @@ impl RoomSimulation {
                         .scripts
                         .body
                         .queue_host_event_with_context(event, context);
+                } else if let Some(stock) = state.stock_script.as_mut() {
+                    stock.receive_host_event(event, context);
                 }
             }
         }

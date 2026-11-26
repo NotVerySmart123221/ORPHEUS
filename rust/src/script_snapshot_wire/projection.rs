@@ -586,6 +586,16 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::ModifyHealth
             | StateKind::GenericModifyHealth { .. }
             | StateKind::Pet { .. }
+            | StateKind::DeflectProjectiles { .. }
+            | StateKind::GenericContactSweep
+            | StateKind::TargetAura { .. }
+            | StateKind::TargetSubScript { .. }
+            | StateKind::ConstantAccel
+            | StateKind::WallClimb
+            | StateKind::Grapple
+            | StateKind::RecallHistory
+            | StateKind::BallRoll { .. }
+            | StateKind::FilterArray
             | StateKind::Shockwave { .. }
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }
@@ -643,6 +653,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (
             StateKind::Plain
             | StateKind::ButtonBlock(_)
+            | StateKind::CombatModFilter { .. }
             | StateKind::OutgoingDamageFilter { .. }
             | StateKind::RollMovementParameter,
             Some("link"),
@@ -705,10 +716,11 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
         | (StateKind::PhaseTransition, Some("bit"))
         | (StateKind::Plain, Some("blink" | "time16+s64" | "two_vectors+s64"))
+        | (StateKind::RecallRewind, Some("time16+s64"))
         | (StateKind::Plain | StateKind::PlacementSelector { .. }, Some("none+u8")) => {
             StatePayload::new()
         }
-        (StateKind::Plain, Some("start")) => StatePayload::from([(
+        (StateKind::Plain | StateKind::Grapple, Some("start")) => StatePayload::from([(
             "start".into(),
             Value::Integer(i64::try_from(state.start_ms).ok()?),
         )]),

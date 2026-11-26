@@ -233,6 +233,10 @@ impl ProjectileToken {
     pub(crate) const fn server_only(seq: u64) -> Self {
         Self(seq | (1u64 << 63))
     }
+
+    pub(crate) const fn is_server_only(self) -> bool {
+        self.0 & (1u64 << 63) != 0
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

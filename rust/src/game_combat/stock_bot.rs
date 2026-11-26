@@ -632,15 +632,56 @@ impl StockBotScript {
         Some(script)
     }
 
+    pub(super) fn receive_host_event(
+        &mut self,
+        event: crate::script_init::HostEvent,
+        context: crate::script_init::HostHealthContext,
+    ) {
+        if self.faulted {
+            return;
+        }
+        let result = self
+            .component
+            .queue_host_event_with_context(event, context)
+            .and_then(|count| {
+                if count == 0 {
+                    Ok(())
+                } else {
+                    self.component.run_now(&mut self.world)
+                }
+            });
+        self.check_projection(result);
+    }
+
     pub(super) fn on_damage(&mut self, remaining_health: f64, source: Death) {
         if self.faulted {
             return;
         }
         let current = self.world.vitals.total();
-        if current > remaining_health {
-            self.world.vitals.damage(current - remaining_health, source);
+        let dealt = (current - remaining_health).max(0.0);
+        if dealt > 0.0 {
+            self.world.vitals.damage(dealt, source);
         }
-        let result = self.publish_health(remaining_health);
+        let result = self.publish_health(remaining_health).and_then(|()| {
+            if dealt > 0.0 && !self.world.dead {
+                // Retail damage-taken message (`0x0240000000000011`, params 0x13=amount, 0x3D=tags):
+                // triggers `0x08B6:6` hurt-flinch `ChaseVar_12` animation on both friendly and enemy bots.
+                const DAMAGE_TAKEN_MESSAGE: u64 = 0x0240_0000_0000_0011;
+                let params = Variables::from([
+                    (0x13, Value::Float(f64::from(dealt as f32))),
+                    (0x3d, Value::Array(Vec::new())),
+                ]);
+                if self.component.queue_entity_message_from(
+                    source.killer,
+                    DAMAGE_TAKEN_MESSAGE,
+                    params,
+                )? > 0
+                {
+                    self.component.run_now(&mut self.world)?;
+                }
+            }
+            Ok(())
+        });
         self.check_projection(result);
     }
 

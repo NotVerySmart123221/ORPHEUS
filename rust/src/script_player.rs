@@ -126,6 +126,12 @@ impl PlayerBodyFactory {
             .bodies()
             .get(&hero.body)
             .filter(|body| body.hero.as_deref().and_then(parse_guid) == Some(hero.guid))
+            .or_else(|| {
+                graphs.entity_body(hero.body).filter(|body| {
+                    body.hero.is_none()
+                        || body.hero.as_deref().and_then(parse_guid) == Some(hero.guid)
+                })
+            })
             .ok_or(OwnerBodyPreparationError::MissingBody)?;
         let mut roots = crate::script_init::player_roots(body, &graphs)
             .map_err(OwnerBodyPreparationError::RootLayout)?;
@@ -151,23 +157,26 @@ impl PlayerBodyFactory {
                 return Err(OwnerBodyPreparationError::AuthoredChargeRoot(graph));
             }
         }
+        let pools = if body.hero.is_none() || pools.is_none() {
+            crate::game_pools::authored_pools(&graphs, body)
+                .ok()
+                .flatten()
+                .or(pools)
+        } else {
+            pools
+        };
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
-        let mut variables = crate::script_init::player_entity_variables(body, health, health);
-        // Pilot D.Va (0x040A) graph 0x026A fades the screen to black (UXPresenter_175)
-        // while awaiting STU_B6E3C77D possession transfer to MEKA (0x0407) unless
-        // retail shared_var[12428] ("Spawn Without Mech") is set. When the runtime
-        // bundle does not contain MEKA 0x0407, set shared_var[12428] = true so D.Va
-        // spawns cleanly as Pilot D.Va instead of locking in a permanent black screen.
-        const DVA_PILOT_BODY: u64 = 0x0400_0000_0000_040a;
-        const DVA_MEKA_BODY: u64 = 0x0400_0000_0000_0407;
-        const DVA_SPAWN_WITHOUT_MECH_VAR: u32 = 12_428;
-        if hero.body == DVA_PILOT_BODY && graphs.entity_body(DVA_MEKA_BODY).is_none() {
-            variables.insert(
-                DVA_SPAWN_WITHOUT_MECH_VAR,
-                crate::script_wire::Value::Bool(true),
-            );
-        }
-        let target_tags = body.target_tags.clone();
+        let variables = crate::script_init::player_entity_variables(body, health, health);
+        let target_tags = body.target_tags.clone().or_else(|| {
+            if body.hero.is_some() {
+                return None;
+            }
+            graphs
+                .bodies()
+                .values()
+                .find(|primary| primary.hero.as_deref().and_then(parse_guid) == Some(hero.guid))
+                .and_then(|primary| primary.target_tags.clone())
+        });
         let charge_route = charge::ChargeRoute::prepare(body, mode, &roots)?;
         Ok(Self {
             graphs,
@@ -300,6 +309,12 @@ impl PlayerBodyFactory {
             scripted_motion: None,
             voice_variant_counter: 0,
             pet_positions: Default::default(),
+            spawned_possessables: Default::default(),
+            pending_body_swap: None,
+            combat_mods: Default::default(),
+            deflect: Default::default(),
+            recall_history: Default::default(),
+            active_auras: Default::default(),
         };
         let mut component = Component::start_with_public_schema(
             Arc::clone(&self.graphs),

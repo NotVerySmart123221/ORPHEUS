@@ -40,7 +40,11 @@ enum Phase {
 #[derive(Clone, Copy)]
 enum Flight {
     Active,
-    Finished { frame: u32, impact: bool },
+    Finished {
+        frame: u32,
+        impact: bool,
+        point: Option<[f32; 3]>,
+    },
     Retiring,
 }
 
@@ -105,12 +109,14 @@ impl ProjectileView {
         mut queue: impl FnMut(EntityUpdate, ProjectileDelivery),
     ) {
         for (&entity, flight) in self.entities.iter().zip(&mut self.flights) {
-            let (due, impact_frame) = match *flight {
+            let (due, impact_info) = match *flight {
                 Flight::Retiring => (false, None),
                 Flight::Active => (all, None),
-                Flight::Finished { frame, impact } => {
-                    (all || frame <= through, impact.then_some(frame))
-                }
+                Flight::Finished {
+                    frame,
+                    impact,
+                    point,
+                } => (all || frame <= through, impact.then_some((frame, point))),
             };
             if due {
                 *flight = Flight::Retiring;
@@ -119,8 +125,9 @@ impl ProjectileView {
                     EntityUpdate {
                         entity,
                         operation: Some(Operation::Destroy),
-                        ch2: impact_frame.and_then(|frame| {
-                            projectile_wire::release(frame.saturating_add(4096), 1).ok()
+                        ch2: impact_info.and_then(|(frame, point)| match point {
+                            Some(pos) => projectile_wire::release_at(frame, pos, 1).ok(),
+                            None => projectile_wire::release(frame.saturating_add(4096), 1).ok(),
                         }),
                         ..Default::default()
                     },
@@ -230,6 +237,7 @@ impl ObservedProjectiles {
                 ordinal,
                 frame,
                 impact,
+                point,
             } => {
                 if let Some(flight @ Flight::Active) = self
                     .views
@@ -239,6 +247,7 @@ impl ObservedProjectiles {
                     *flight = Flight::Finished {
                         frame: *frame,
                         impact: *impact,
+                        point: *point,
                     };
                 }
             }
@@ -694,12 +703,14 @@ mod tests {
                 ordinal: 1,
                 frame: launch + input.early_contact_ticks,
                 impact: true,
+                point: None,
             },
             ObservedProjectileEvent::Completed {
                 id,
                 ordinal: 0,
                 frame: finished,
                 impact: false,
+                point: None,
             },
         ]);
         world.advance_observed_projectiles(finished).unwrap();
@@ -862,6 +873,7 @@ mod tests {
                 ordinal: 0,
                 frame: 102,
                 impact: true,
+                point: None,
             },
         ]);
         world.advance_observed_projectiles(100).unwrap();

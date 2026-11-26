@@ -1775,7 +1775,6 @@ impl WorldDelivery {
         simulation: &mut RoomSimulation,
     ) -> Option<(BodyId, Vec<AdmittedFlight>)> {
         let script = self.body_script.as_ref()?;
-        script.projectiles.as_ref()?;
         let launches = simulation.take_player_projectile_launches(script.id)?;
         Some((script.id, launches))
     }
@@ -2142,6 +2141,57 @@ impl WorldDelivery {
             })
     }
 
+    pub(crate) fn advance_body_swap(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        now: Duration,
+    ) -> io::Result<()> {
+        let Some(body) = self.body else {
+            return Ok(());
+        };
+        let swap = {
+            let Some(state) = scene.simulation_mut().player_body_mut(body.id) else {
+                return Ok(());
+            };
+            if !state.alive() {
+                return Ok(());
+            }
+            let Some(new_body) = state
+                .runtime
+                .as_mut()
+                .and_then(|runtime| runtime.take_body_swap())
+            else {
+                return Ok(());
+            };
+            if new_body == state.body_template {
+                return Ok(());
+            }
+            let pose = state.mover.pose();
+            (new_body, pose.position, pose.yaw)
+        };
+        let Some(entity) = self.next_body(now) else {
+            return Ok(());
+        };
+        let mut hero = scene
+            .heroes()
+            .get(body.hero)
+            .cloned()
+            .ok_or_else(|| invalid("active player hero is absent from the scene catalog"))?;
+        hero.body = swap.0;
+        self.switch_at(
+            scene,
+            viewer,
+            tick,
+            quanta,
+            entity,
+            (&hero, body.skin),
+            Some((swap.1, swap.2)),
+        )
+    }
+
     pub(super) fn switch(
         &mut self,
         scene: &mut PreparedScene,
@@ -2151,57 +2201,85 @@ impl WorldDelivery {
         entity: u32,
         selection: (&Hero, SkinTheme),
     ) -> io::Result<()> {
-        let (hero, skin) = selection;
-        let mover = scene.player_spawn_mover(hero.body, viewer.team)?;
-        let movement = mover.pose();
-        let pose = owner_pose(movement);
+        self.switch_at(scene, viewer, tick, quanta, entity, selection, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn switch_at(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        entity: u32,
+        selection: (&Hero, SkinTheme),
+        override_pose: Option<([f64; 3], i32)>,
+    ) -> io::Result<()> {
+        let (initial_hero, skin) = selection;
+        let mut effective_hero = initial_hero.clone();
+        let make_mover = |body_def: u64| -> io::Result<Mover> {
+            match override_pose {
+                Some((position, yaw)) => {
+                    scene.player_spawn_mover_at(body_def, viewer.team, position, yaw)
+                }
+                None => scene.player_spawn_mover(body_def, viewer.team),
+            }
+        };
+        let mut mover = make_mover(effective_hero.body)?;
+        let mut movement = mover.pose();
         let generation = scene
             .simulation()
             .next_player_generation(self.owner, self.generation)?;
         let id = BodyId { entity, generation };
         let body = Body {
             id,
-            hero: hero.guid,
+            hero: effective_hero.guid,
             skin,
         };
-        let body_filter = team_bit(viewer.team)?;
+        let body_filter = crate::match_scene::HERO_BIT | team_bit(viewer.team)?;
         let start_frame = self.input.processed.unwrap_or(tick);
         let slot = u8::try_from(viewer.slot).map_err(invalid)?;
-        let candidate = scene
-            .owner_body_runtime(
-                hero,
-                OwnerBodySpawn {
-                    slot,
-                    controller: self.owner,
-                    entity,
-                    body_filter,
-                    frame: start_frame,
-                    pose: movement,
-                    eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
-                    skin: skin.guid,
-                    quanta,
-                },
-            )
-            .and_then(|mut runtime| {
-                if let Some(runtime) = &mut runtime {
-                    runtime.set_wheel_cosmetics(
-                        viewer
-                            .card
-                            .wheel_cosmetics
-                            .get(&hero.guid)
-                            .copied()
-                            .unwrap_or_default(),
-                    );
-                }
-                let script = runtime
-                    .as_deref()
-                    .map(|runtime| {
-                        BodyScript::new(body, start_frame, self.input.processed, runtime)
-                    })
-                    .transpose()?;
-                Ok((runtime, script))
-            });
-        let (runtime, script) = match candidate {
+        let start_candidate = |hero_def: &Hero, current_mover: &Mover, current_pose: Movement| {
+            scene
+                .owner_body_runtime(
+                    hero_def,
+                    OwnerBodySpawn {
+                        slot,
+                        controller: self.owner,
+                        entity,
+                        body_filter,
+                        frame: start_frame,
+                        pose: current_pose,
+                        eye_position: crate::game_combat::script_eye_position(
+                            hero_def.guid,
+                            current_mover,
+                        ),
+                        skin: skin.guid,
+                        quanta,
+                    },
+                )
+                .and_then(|mut runtime| {
+                    if let Some(runtime) = &mut runtime {
+                        runtime.set_wheel_cosmetics(
+                            viewer
+                                .card
+                                .wheel_cosmetics
+                                .get(&hero_def.guid)
+                                .copied()
+                                .unwrap_or_default(),
+                        );
+                    }
+                    let script = runtime
+                        .as_deref()
+                        .map(|runtime| {
+                            BodyScript::new(body, start_frame, self.input.processed, runtime)
+                        })
+                        .transpose()?;
+                    Ok((runtime, script))
+                })
+        };
+        let candidate = start_candidate(&effective_hero, &mover, movement);
+        let (mut runtime, mut script) = match candidate {
             Ok(candidate) => candidate,
             Err(error) => {
                 eprintln!(
@@ -2211,6 +2289,50 @@ impl WorldDelivery {
                 return Ok(());
             }
         };
+        // If startup statescript immediately requested possession of an authored alternate
+        // hero body (e.g. STU_B6E3C77D + STU_CA861E44), swap directly before creating on wire.
+        if let Some(swap_body) = runtime
+            .as_mut()
+            .and_then(|rt| rt.take_body_swap())
+            .filter(|&b| b != effective_hero.body)
+        {
+            let mut swapped_hero = effective_hero.clone();
+            swapped_hero.body = swap_body;
+            match make_mover(swapped_hero.body) {
+                Ok(swapped_mover) => {
+                    let swapped_movement = swapped_mover.pose();
+                    match start_candidate(&swapped_hero, &swapped_mover, swapped_movement) {
+                        Ok((Some(swapped_rt), swapped_script)) => {
+                            effective_hero = swapped_hero;
+                            mover = swapped_mover;
+                            movement = swapped_movement;
+                            runtime = Some(swapped_rt);
+                            script = swapped_script;
+                        }
+                        Ok((None, _)) => {
+                            eprintln!(
+                                "body swap startup returned None for {:016X} -> {:016X}",
+                                effective_hero.body, swap_body
+                            );
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "body swap startup rejected for {:016X} -> {:016X}: {error}",
+                                effective_hero.body, swap_body
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!(
+                        "body swap mover rejected for {:016X} -> {:016X}: {error}",
+                        effective_hero.body, swap_body
+                    );
+                }
+            }
+        }
+        let pose = owner_pose(movement);
+        let hero = &effective_hero;
         let body_create_input = BodyCreate {
             entity,
             hero,

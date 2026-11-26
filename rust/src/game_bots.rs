@@ -1262,7 +1262,7 @@ impl Bot {
         }
         let to = std::array::from_fn(|axis| from[axis] + travel_velocity[axis] * dt);
         let mut velocity = velocity;
-        let after = match collision.try_advance(
+        let mut after = match collision.try_advance(
             tick,
             from,
             to,
@@ -1276,6 +1276,22 @@ impl Bot {
                 from
             }
         };
+        // Clamp combat-motion vertical position against walkable ground so knockback
+        // impulses and landing ticks can never push bots below the floor plane.
+        if let Some(floor_y) = ground(
+            after[0],
+            after[2],
+            after[1].max(from[1]) + STEP_UP,
+            after[1].min(from[1]) - STEP_UP,
+        ) {
+            if after[1] <= floor_y + 0.02 {
+                after[1] = floor_y;
+                if velocity[1] < 0.0 {
+                    velocity[1] = 0.0;
+                }
+                self.movement_flags &= !IN_AIR;
+            }
+        }
         self.position = after;
         if after != from {
             self.walk_route = None;
@@ -1330,19 +1346,34 @@ impl Bot {
                     self.stand();
                     self.keys = false;
                 } else {
-                    let pace = self.walk.speed.min(self.pace + self.walk.acceleration * dt);
-                    let stride = (pace * dt).min(distance);
                     self.direction = offset.map(|axis| axis / distance);
-                    self.turn(dt);
-                    self.pace = pace;
-                    self.held = throttles(self.yaw, self.direction);
-                    self.last_held = self.held;
-                    self.input_tick = Some(at);
-                    let moved = self.advance(at, stride, distance, ground, blockers);
-                    if moved <= EPSILON {
-                        self.stand();
-                        self.keys = false;
+                    let desired_yaw = heading(self.direction);
+                    let yaw_error = s16(desired_yaw - self.yaw);
+                    let return_turn = (TURN_RATE * 3.0) * dt;
+                    if yaw_error.abs() <= return_turn + EPSILON {
+                        self.yaw = s16(desired_yaw);
+                    } else {
+                        self.yaw = s16(self.yaw + yaw_error.clamp(-return_turn, return_turn));
+                    }
+                    // Turn toward the return path before walking so knocked-back bots
+                    // do not backpedal facing away from their destination.
+                    if s16(desired_yaw - self.yaw).abs() > 8192.0 {
+                        self.pace = 0.0;
+                        self.velocity = [0.0; 3];
                         self.held = [0; 2];
+                    } else {
+                        let pace = self.walk.speed.min(self.pace + self.walk.acceleration * dt);
+                        let stride = (pace * dt).min(distance);
+                        self.pace = pace;
+                        self.held = throttles(self.yaw, self.direction);
+                        self.last_held = self.held;
+                        self.input_tick = Some(at);
+                        let moved = self.advance(at, stride, distance, ground, blockers);
+                        if moved <= EPSILON {
+                            self.stand();
+                            self.keys = false;
+                            self.held = [0; 2];
+                        }
                     }
                 }
             } else {

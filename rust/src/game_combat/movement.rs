@@ -113,6 +113,13 @@ impl RoomSimulation {
         }
         if let Some(id) = self.player_handle_for_wire(wire) {
             if let Some(player) = self.player_body_mut(id).filter(|state| state.alive()) {
+                if player
+                    .runtime
+                    .as_deref()
+                    .is_some_and(|rt| rt.combat_modifiers().4)
+                {
+                    return Ok(());
+                }
                 // Input frames can run ahead of the room clock. Apply once at
                 // the next actual pose so correction carries that pose's frame.
                 let frame = player.mover.pose().frame.unwrap_or(player.frame);

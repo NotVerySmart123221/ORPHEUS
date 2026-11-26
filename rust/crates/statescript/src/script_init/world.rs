@@ -13,7 +13,7 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Site {
     pub entity: u32,
     pub instance: u16,
@@ -527,6 +527,22 @@ pub struct PetSpawn {
     pub definition: u64,
     pub attach: Option<u32>,
     pub position: Option<[f64; 3]>,
+    pub bone_attached: bool,
+    pub possessable: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeflectState {
+    pub reflect: bool,
+    pub half_angle_deg: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CombatModEntry {
+    pub stat: u64,
+    pub multiplicative: bool,
+    pub value: f64,
+    pub cc_immune: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -644,6 +660,40 @@ pub trait World {
         false
     }
 
+    fn request_possess_entity(&mut self, _site: Site, _target: u32) -> bool {
+        false
+    }
+
+    fn set_combat_mod(&mut self, _site: Site, _entry: Option<CombatModEntry>) -> bool {
+        false
+    }
+
+    fn set_deflect_state(&mut self, _site: Site, _state: Option<DeflectState>) -> bool {
+        false
+    }
+
+    fn set_target_aura(
+        &mut self,
+        _site: Site,
+        _targets: &[u32],
+        _effect: u64,
+        _param: Option<f64>,
+    ) -> bool {
+        false
+    }
+
+    fn record_recall_sample(&mut self, _site: Site, _window_secs: f64) -> bool {
+        false
+    }
+
+    fn execute_recall(&mut self, _site: Site, _frame: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    fn set_ball_roll_state(&mut self, _site: Site, _active: bool, _max_speed: f64) -> bool {
+        false
+    }
+
     fn summoner_beam_damage(&mut self, _site: Site, _target: u32, _amount: f64) -> bool {
         false
     }
@@ -698,6 +748,20 @@ pub trait World {
         None
     }
 
+    fn cone_targets_with_cylinder(
+        &self,
+        site: Site,
+        origin: u32,
+        offset: [f64; 3],
+        radius: f64,
+        angle: f64,
+        _cylinder_radius: f64,
+        visible: bool,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        self.cone_targets(site, origin, offset, radius, angle, visible, filter)
+    }
+
     fn entity_alive(&self, _site: Site, _entity: u32) -> bool {
         false
     }
@@ -711,6 +775,20 @@ pub trait World {
         _filter: &Json,
     ) -> Option<Vec<u32>> {
         None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn swept_tracked_targets(
+        &mut self,
+        site: Site,
+        origin: u32,
+        start_offset: [f64; 3],
+        _end_offset: Option<[f64; 3]>,
+        _local_space: bool,
+        radius: f64,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        self.tracked_targets(site, origin, start_offset, radius, filter)
     }
 
     /// None leaves the view query unavailable. An empty list is a completed query.

@@ -58,6 +58,7 @@ pub(crate) enum ObservedProjectileEvent {
         ordinal: usize,
         frame: u32,
         impact: bool,
+        point: Option<[f32; 3]>,
     },
 }
 
@@ -111,6 +112,7 @@ impl RoomSimulation {
         entity: Entity,
         frame: u32,
         impact: bool,
+        point: Option<Vec3>,
     ) {
         let Some(&ObservedFlight { batch, ordinal }) = self.world.get::<ObservedFlight>(entity)
         else {
@@ -123,6 +125,7 @@ impl RoomSimulation {
                 ordinal,
                 frame,
                 impact,
+                point: point.map(|p| p.map(|v| v as f32)),
             });
     }
 

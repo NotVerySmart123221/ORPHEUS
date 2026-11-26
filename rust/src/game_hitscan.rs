@@ -52,7 +52,7 @@ impl HitTargetPolicy {
         let healing =
             modify.is_object() && modify.get("m_93CDFD2F").and_then(Json::as_u64) == Some(0);
         let ally_flag = config.get("m_09528B11").and_then(Json::as_u64) == Some(1);
-        let ally_heal_flag = config.get("m_50C84E9E").and_then(Json::as_u64) == Some(1);
+        let ally_heal_flag = config.get("m_50C84E9E").and_then(Json::as_u64).unwrap_or(1) == 1;
         let affects_allies = healing || (ally_flag && ally_heal_flag);
         let affects_enemies =
             !healing && config.get("m_3E7A533D").and_then(Json::as_u64).unwrap_or(1) != 0;

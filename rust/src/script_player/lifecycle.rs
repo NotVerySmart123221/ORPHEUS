@@ -50,6 +50,7 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) charge_binding: Option<super::charge::ChargeBinding>,
 }
 
+#[allow(dead_code)]
 pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
 
 impl PlayerBodyRuntime {
@@ -70,10 +71,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
         if self
             .charge_binding
-            .is_some_and(|binding| binding.is_configured())
+            .is_some_and(|binding| binding.admits_regular_room())
             && self.world.room_activity == Some(OwnerRoomActivity::Regular)
         {
-            // Regular rooms report no encounter and still admit configured charge.
+            // Regular rooms report no encounter and still admit configured/common charge.
             return self.sync_charge_admission(true);
         }
         // The room normally supplies this phase before synchronizing charge.
@@ -95,6 +96,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         damage: crate::game_combat::AppliedDamage,
     ) -> io::Result<()> {
         self.credit_applied_damage(damage)
+    }
+
+    fn receive_applied_heal(&mut self, source: u32, target: u32, amount: f64) -> io::Result<()> {
+        self.credit_applied_heal(source, target, amount)
     }
 
     fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
@@ -251,6 +256,63 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         }
         let (_, record) = crate::facing::winner(self.world.facing_claims.iter())?;
         crate::facing::angles(record.direction)
+    }
+
+    fn move_request(&self) -> Option<([f64; 3], f64)> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.component
+            .snapshot()?
+            .instances
+            .values()
+            .flat_map(|instance| instance.states.values())
+            .filter(|state| state.active)
+            .filter_map(|state| state.move_request())
+            .next()
+    }
+
+    fn take_body_swap(&mut self) -> Option<u64> {
+        self.world.pending_body_swap.take()
+    }
+
+    fn deflect_state(&self) -> Option<crate::script_init::DeflectState> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.world.deflect.values().last().copied()
+    }
+
+    fn combat_modifiers(&self) -> (f64, f64, f64, f64, bool) {
+        const OUT_DMG: u64 = 0x0d80_0000_0000_0317;
+        const IN_DMG: u64 = 0x0d80_0000_0000_0318;
+        const OUT_HEAL: u64 = 0x0d80_0000_0000_0319;
+        const IN_HEAL: u64 = 0x0d80_0000_0000_031a;
+        let (mut out_d, mut in_d, mut out_h, mut in_h, mut cc_immune) = (1.0, 1.0, 1.0, 1.0, false);
+        for entry in self.world.combat_mods.values() {
+            cc_immune |= entry.cc_immune;
+            let apply = |slot: &mut f64| {
+                if entry.multiplicative {
+                    *slot *= entry.value.max(0.0);
+                } else {
+                    *slot = (*slot + entry.value).max(0.0);
+                }
+            };
+            match entry.stat {
+                OUT_DMG => apply(&mut out_d),
+                IN_DMG => apply(&mut in_d),
+                OUT_HEAL => apply(&mut out_h),
+                IN_HEAL => apply(&mut in_h),
+                _ => {}
+            }
+        }
+        (
+            out_d.clamp(0.0, 5.0),
+            in_d.clamp(0.0, 5.0),
+            out_h.clamp(0.0, 5.0),
+            in_h.clamp(0.0, 5.0),
+            cc_immune,
+        )
     }
 
     fn vitals(&self) -> Option<&Vitals> {
@@ -546,6 +608,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             // In retail 104319 data, every non-headshotting weapon explicitly sets
             // `m_A872C70E = 1`, while headshotting weapons omit it and default to 2.0x.
             let default_critical = 2.0;
+            let graphs_ref = Arc::clone(&self.world.graphs);
             let mut evaluate = |config: &Json| {
                 self.component
                     .evaluate_shot_config(&shot, config, &mut self.world)
@@ -612,6 +675,60 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         .blast
                         .as_ref()
                         .is_none_or(|b| b.hit.amount <= 0.0 && b.knockback.is_none());
+                let post_bounce_fuse = node
+                    .field("m_B752FBAE")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .map(|v| to_float(&v))
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                let sticky_delay = node
+                    .field("m_55E8761C.m_12654E6E")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v))
+                    .then_some(1.0);
+                let persist_entity = node
+                    .field("m_55E8761C.m_147777B3")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v));
+                let direct_effect = node
+                    .field("m_6396149F.m_modifyHealth.m_277A4ECA")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .and_then(|v| match v {
+                        Value::Asset(guid) if guid != 0 => Some(guid),
+                        _ => None,
+                    });
+                let blast_effect = node
+                    .field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .and_then(|v| match v {
+                        Value::Asset(guid) if guid != 0 => Some(guid),
+                        _ => None,
+                    });
+                // If the volley specifies a persistent projectile entity (`m_147777B3 = true`)
+                // without an explicit `m_49CBA3BC` impact spawn (e.g. Concussion Mine,
+                // Dynamite, Translocator, Sentry Turret, Pulse Bomb), promote its authored
+                // entity definition and primary graph from the retail entity catalog.
+                let impact_spawn = impact_spawn.or_else(|| {
+                    if !persist_entity {
+                        return None;
+                    }
+                    let definition = ballistics.definition?;
+                    let on_spawn_graph = graphs_ref.entity_body(definition).and_then(|b| {
+                        b.graphs
+                            .iter()
+                            .filter_map(|binding| binding.graph)
+                            .find(|&g| !matches!(g, 0x0015 | 0x0033 | 0x0043 | 0x004b | 0x08b6))
+                            .map(|idx| 0x0580_0000_0000_0000 | u64::from(idx))
+                    });
+                    Some(ImpactSpawn {
+                        definition,
+                        on_spawn_graph,
+                    })
+                });
                 if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
                     || ballistics
                         .blast
@@ -621,6 +738,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     return None;
                 }
                 if impact_spawn.is_none()
+                    && ballistics.definition.is_none()
                     && !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
                     && !ballistics
                         .blast
@@ -661,6 +779,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         target_policy,
                         piercing,
                         impact_spawn,
+                        post_bounce_fuse,
+                        sticky_delay,
+                        direct_effect,
+                        blast_effect,
                     })));
                 } else {
                     if !node.field("m_5EC1EB38").is_some_and(Json::is_object) {
@@ -683,6 +805,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                                 target_policy,
                                 piercing,
                                 impact_spawn,
+                                post_bounce_fuse,
+                                sticky_delay,
+                                direct_effect,
+                                blast_effect,
                             })));
                         },
                     );

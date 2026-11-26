@@ -588,7 +588,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             || (early
                 && (button.is_some_and(|button| self.logical_button_blocked(key, node, button))
                     || !self.logical_button_allows_press(key.instance, node)));
-        let held = !blocked && self.button_held(key, node);
+        let require_fresh_press = self
+            .evaluate(key.instance, node, field(&node.fields, "m_4B925089"), None)
+            .is_some_and(|value| truthy(&value));
+        let held = !require_fresh_press && !blocked && self.button_held(key, node);
         let buffered = early && !blocked;
         let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
