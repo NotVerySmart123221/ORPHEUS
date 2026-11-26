@@ -17,8 +17,13 @@ use super::{OwnerBodyPreparationError, lifecycle::PlayerBodyRuntime, unsupported
 const COMMON_CHARGE_PARENT_GRAPH: u32 = 0x004b;
 const COMMON_CHARGE_GRAPH: u32 = 0x0b8b;
 const COMMON_CHARGE_ADMISSION_VAR: u32 = 2426;
+const COMMON_ULT_CHARGE_VAR: u32 = 342;
+const COMMON_ULT_CAP_VAR: u32 = 338;
 const COMMON_DAMAGE_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0012;
 const COMMON_HEAL_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0044;
+const COMMON_DIRECT_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0148;
+#[allow(dead_code)]
+const COMMON_PASSIVE_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_00eb;
 
 #[derive(Clone, Copy)]
 pub(super) struct ChargeBinding {
@@ -239,8 +244,12 @@ impl PlayerBodyRuntime {
                 "damage credit requires the authored common charge graph",
             ));
         };
+        let scaled_amount = damage.amount * self.ult_charge_scale;
+        if !scaled_amount.is_finite() || scaled_amount <= 0.0 {
+            return Ok(());
+        }
         let parameters = Variables::from([
-            (0x13, Value::Float(f64::from(damage.amount as f32))),
+            (0x13, Value::Float(f64::from(scaled_amount as f32))),
             (0x15, Value::Entity(damage.target_facts.target)),
             (
                 0x3d,
@@ -292,9 +301,13 @@ impl PlayerBodyRuntime {
         // Deliver to ALL matching instances on the healer so `0x0B8B` (ult charge),
         // `0x01D8` (on-fire), and hero-specific healing graphs (`0x0B94`, `0x1932`,
         // `0x0F76`, `0x006B`, `0x0263`, `0x02F3`, etc.) all receive the heal event.
+        let scaled_amount = amount * self.ult_charge_scale;
+        if !scaled_amount.is_finite() || scaled_amount <= 0.0 {
+            return Ok(());
+        }
         let parameters = Variables::from([
             (0x3f, Value::Entity(target)),
-            (0x40, Value::Float(f64::from(amount as f32))),
+            (0x40, Value::Float(f64::from(scaled_amount as f32))),
             (0x41, Value::Array(Vec::new())),
         ]);
         let queued = self
@@ -307,6 +320,94 @@ impl PlayerBodyRuntime {
                 .map_err(unsupported)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn ult_charge_percent(&self) -> f64 {
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cur_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CHARGE_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        let cur = self
+            .component
+            .resolved_variable(0, cur_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        ((cur / cap) * 100.0).clamp(0.0, 100.0)
+    }
+
+    /// Credit direct ultimate charge via retail `GameMessage 0x0240000000000148`
+    /// or direct entity variable update (`#342` capped by `#338`).
+    pub(crate) fn add_ult_charge_points(&mut self, points: f64) -> io::Result<()> {
+        if !points.is_finite() || points == 0.0 {
+            return Ok(());
+        }
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cur_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CHARGE_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        let cur = self
+            .component
+            .resolved_variable(0, cur_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        let next = (cur + points).clamp(0.0, cap);
+        self.component
+            .set_entity_variable(COMMON_ULT_CHARGE_VAR, Value::Float(next), &mut self.world)
+            .map_err(unsupported)?;
+        let _ = self
+            .component
+            .queue_entity_message(COMMON_DIRECT_CHARGE_MESSAGE, Variables::new());
+        self.component.run_now(&mut self.world).map_err(unsupported)
+    }
+
+    pub(crate) fn set_ult_charge_percent(&mut self, percent: f64) -> io::Result<()> {
+        if !percent.is_finite() {
+            return Ok(());
+        }
+        let frac = (percent / 100.0).clamp(0.0, 1.0);
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        self.component
+            .set_entity_variable(
+                COMMON_ULT_CHARGE_VAR,
+                Value::Float(cap * frac),
+                &mut self.world,
+            )
+            .map_err(unsupported)?;
+        let _ = self
+            .component
+            .queue_entity_message(COMMON_DIRECT_CHARGE_MESSAGE, Variables::new());
+        self.component.run_now(&mut self.world).map_err(unsupported)
     }
 }
 

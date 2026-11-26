@@ -17,6 +17,35 @@ const HERO_ASSET_TYPE: u16 = 0x02e0;
 const WHEEL_ACTION_PREFIX: u64 = 0x0a90_0000_0000_0000;
 const WHEEL_SELECTION: u64 = 0x0240_0000_0000_02a3;
 
+/// Retail 1.74 wheel action GUIDs (matches `script_expr/wheel_slots.json`).
+#[cfg(feature = "lua-mods")]
+pub(crate) const EMOTE_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_0172,
+    0x0a90_0000_0000_01a1,
+    0x0a90_0000_0000_01a0,
+    0x0a90_0000_0000_019f,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const VOICELINE_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_016f,
+    0x0a90_0000_0000_019d,
+    0x0a90_0000_0000_019c,
+    0x0a90_0000_0000_019b,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const SPRAY_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_0173,
+    0x0a90_0000_0000_01a5,
+    0x0a90_0000_0000_01a4,
+    0x0a90_0000_0000_01a3,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const GREETING_WHEEL_ACTION: u64 = 0x0a90_0000_0000_016b;
+#[cfg(feature = "lua-mods")]
+pub(crate) const NEED_HEALING_WHEEL_ACTION: u64 = 0x0a90_0000_0000_016c;
+#[cfg(feature = "lua-mods")]
+pub(crate) const THANKS_WHEEL_ACTION: u64 = 0x0a90_0000_0000_0171;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ClientWheelAction {
     action: u64,
@@ -25,6 +54,14 @@ pub(crate) struct ClientWheelAction {
 }
 
 impl ClientWheelAction {
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn synthetic(action: u64) -> Self {
+        Self {
+            action,
+            confirmed: true,
+            target: None,
+        }
+    }
     pub(crate) fn read(message: &Message) -> Option<Self> {
         if message.id != CLIENT_WHEEL_ACTION {
             return None;

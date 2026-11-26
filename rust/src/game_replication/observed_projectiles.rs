@@ -254,6 +254,17 @@ impl ObservedProjectiles {
         }
     }
 
+    pub(super) fn has_active_volleys_for(&self, source: u32) -> bool {
+        self.views.values().any(|view| {
+            view.source() == source
+                && !view.cancelled
+                && matches!(
+                    view.phase,
+                    Phase::AwaitingSource | Phase::Creating | Phase::Launching { .. }
+                )
+        })
+    }
+
     pub(super) fn retain_volleys(&self, snapshot: &mut ProjectedSnapshot) {
         let source = snapshot.entity();
         let mut retained = BTreeSet::new();

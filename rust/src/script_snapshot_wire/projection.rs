@@ -595,6 +595,22 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::Grapple
             | StateKind::RecallHistory
             | StateKind::BallRoll { .. }
+            | StateKind::SpatialQuery
+            | StateKind::PhysicsExplosion
+            | StateKind::HitTracker { .. }
+            | StateKind::RayCast
+            | StateKind::EntityAttach { .. }
+            | StateKind::ModifierControl { .. }
+            | StateKind::KinematicsControl { .. }
+            | StateKind::PlacementCast { .. }
+            | StateKind::TeleportEffect
+            | StateKind::ProximityTrigger { .. }
+            | StateKind::EntityStatus { .. }
+            | StateKind::UxPresenter
+            | StateKind::SyncVars
+            | StateKind::HeroOverride
+            | StateKind::AiTactic
+            | StateKind::FieldDrivenState
             | StateKind::FilterArray
             | StateKind::Shockwave { .. }
             | StateKind::PlacementSelector { .. }
@@ -646,7 +662,10 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (StateKind::MovementSample { flags: mask, .. }, Some("flags13")) => {
             StatePayload::from([("value".into(), Value::Integer(i64::from(mask)))])
         }
-        (StateKind::SubScript { child }, Some("subscript")) => StatePayload::from([(
+        (
+            StateKind::SubScript { child } | StateKind::TargetSubScript { child },
+            Some("subscript"),
+        ) => StatePayload::from([(
             "child".into(),
             Value::Integer(i64::from(child.unwrap_or_default())),
         )]),
@@ -655,6 +674,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::ButtonBlock(_)
             | StateKind::CombatModFilter { .. }
             | StateKind::OutgoingDamageFilter { .. }
+            | StateKind::ModifierControl { .. }
             | StateKind::RollMovementParameter,
             Some("link"),
         )
@@ -713,13 +733,26 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                 Value::Bool(fresh_at.is_some_and(|at| now_ms.saturating_sub(at) <= 500)),
             ),
         ]),
-        (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
+        (
+            StateKind::Plain | StateKind::PhaseScriptList | StateKind::HitTracker { .. },
+            Some("hits"),
+        )
         | (StateKind::PhaseTransition, Some("bit"))
-        | (StateKind::Plain, Some("blink" | "time16+s64" | "two_vectors+s64"))
+        | (
+            StateKind::Plain | StateKind::TeleportEffect,
+            Some("blink" | "time16+s64" | "two_vectors+s64"),
+        )
         | (StateKind::RecallRewind, Some("time16+s64"))
-        | (StateKind::Plain | StateKind::PlacementSelector { .. }, Some("none+u8")) => {
-            StatePayload::new()
-        }
+        | (
+            StateKind::Plain
+            | StateKind::PlacementSelector { .. }
+            | StateKind::PlacementCast { .. },
+            Some("none+u8"),
+        )
+        | (
+            StateKind::SyncVars | StateKind::FieldDrivenState | StateKind::Plain,
+            Some("none+u16" | "63B7ADFD" | "239B1E64"),
+        ) => StatePayload::new(),
         (StateKind::Plain | StateKind::Grapple, Some("start")) => StatePayload::from([(
             "start".into(),
             Value::Integer(i64::try_from(state.start_ms).ok()?),

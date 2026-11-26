@@ -3802,7 +3802,8 @@ fn spatial_frame_honors_weapon_terrain_category() {
             target,
             RoomScriptTarget {
                 entity: Entity::from_raw(target),
-                candidate_index: 0,
+                candidate_index: Some(0),
+                position: [0.0, 0.0, 4.0],
                 health: true,
                 health_snapshot: None,
                 angles: [0, 0],
@@ -3819,6 +3820,7 @@ fn spatial_frame_honors_weapon_terrain_category() {
         ground,
         breakables: None,
         actor_voice: None,
+        retired: Arc::default(),
         #[cfg(any(test, feature = "inspector"))]
         captured_tick: 1,
         #[cfg(any(test, feature = "inspector"))]
@@ -4490,4 +4492,168 @@ fn live_room_lua_mods_apply_rules_hooks_actions_and_hot_reload() {
         room.interactive_props().props[&77].position,
         [1.0, 2.0, 3.0]
     );
+}
+
+#[cfg(feature = "lua-mods")]
+#[test]
+fn lua_mod_abi_v2_dance_party_chat_bots_status_and_voice_cues() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_heroes::HeroCatalog,
+        mod_script::ModHost,
+        mover_settings::{MoverCatalog, MoverSettings},
+        vitals::Vitals,
+    };
+    use std::sync::Mutex;
+
+    let dance_src = include_str!("../../scripts/mods/dance_party_workshop.lua");
+    let host = Arc::new(Mutex::new(
+        ModHost::from_source("dance_party_workshop.lua", dance_src).unwrap(),
+    ));
+    let heroes = Arc::new(
+        HeroCatalog::from_json(
+            r#"{
+                "0x02E000000000006E": {"name":"Soldier: 76", "class":"Damage", "body":"0x04000000000003CF"},
+                "0x02E0000000000003": {"name":"Tracer", "class":"Damage", "body":"0x040000000000002B"}
+            }"#,
+        )
+        .unwrap(),
+    );
+
+    let bots = fixture_bots();
+    let bot_entity = bots[0].entity;
+    let initial_bot_yaw = bots[0].yaw;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    room.enable_spatial_queries(false, Arc::clone(&ground), RoomSpatialNeeds::Queries);
+    room.set_mod_world_assets(Arc::clone(&heroes), Arc::clone(&ground));
+    room.set_player_names(HashMap::from([(1, String::from("HeroTester"))]));
+    room.attach_mod_host(
+        Arc::clone(&host),
+        0x0800_0000_0000_0688,
+        0x0230_0000_0000_0012,
+    );
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    let mut player_state = PlayerBodyState::new(owner, 1, 0, 0, SOLDIER, mover, None, 1, None);
+    player_state.set_test_halted_vitals(Vitals::new(200.0, 0.0, 0.0));
+    room.spawn_player_body(player_state).unwrap();
+    assert_eq!(room.player_body(owner).unwrap().name, "HeroTester");
+
+    // 1. Live in-room chat `!danceall` makes bots enter dance mode and returns broadcast replies!
+    let replies = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!danceall",
+        2,
+        Duration::from_secs(1),
+    );
+    assert!(
+        replies.iter().any(|r| r.contains("DANCE PARTY")),
+        "expected dance party reply, got {replies:?}"
+    );
+    room.finish_tick(&queries, 3, Duration::from_millis(1016))
+        .unwrap();
+    let danced_yaw = room.state_mut(bot_entity).unwrap().unwrap().bot.yaw;
+    assert_ne!(
+        danced_yaw, initial_bot_yaw,
+        "dancing bot must visibly rotate/animate"
+    );
+
+    // 2. `!hero tracer` resolves Tracer via HeroCatalog and queues a live hero switch for owner 1!
+    let replies = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!hero tracer",
+        4,
+        Duration::from_millis(1032),
+    );
+    assert!(replies.iter().any(|r| r.contains("Tracer")));
+    assert_eq!(room.take_mod_hero_switch(1), Some(0x02E0_0000_0000_0003));
+
+    // 3. `!slowmo 0.5` sets time_scale to 0.5x and scales mover speed & gravity proportionally!
+    let _ = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!slowmo 0.5",
+        5,
+        Duration::from_millis(1048),
+    );
+    assert!((room.mod_active_rules().time_scale - 0.5).abs() < 1e-6);
+    let (g_scale, s_scale) = room.player_body(owner).unwrap().mover.mod_scales();
+    assert!((g_scale - 0.25).abs() < 1e-6 && (s_scale - 0.5).abs() < 1e-6);
+
+    // 4. `!bot tracer 1` spawns a brand-new bot dynamically and queues its EntityUpdate create!
+    let bot_count_before = room.by_wire.len();
+    let _ = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!bot tracer 1",
+        6,
+        Duration::from_millis(1064),
+    );
+    assert_eq!(room.by_wire.len(), bot_count_before + 1);
+    assert!(!room.take_created().is_empty());
+
+    // 5. Verify OW 1.74 ability1 (0x0008) -> PlayVoiceCue, and reload (0x0400) -> lethal Kill -> PlayerDeath!
+    host.lock()
+        .unwrap()
+        .reload_source(
+            "abi2_edges.lua",
+            r#"
+            return {
+                abi = 2,
+                on_button = function(ctx, player, button, pressed)
+                    if pressed and button == "ability1" then
+                        return {
+                            { kind = "play_voice_cue", entity = player.entity, stimulus = 12345 },
+                        }
+                    elseif pressed and button == "reload" then
+                        return {
+                            { kind = "kill", entity = player.entity },
+                        }
+                    end
+                    return {}
+                end,
+            }
+            "#,
+        )
+        .unwrap();
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = 0x0008; // OW 1.74 ability1
+    room.finish_tick(&queries, 7, Duration::from_millis(1080))
+        .unwrap();
+    let cues = room.take_player_cues();
+    assert!(
+        cues.iter().any(|c| matches!(
+            c.notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                stimulus: 12345,
+                ..
+            }
+        )),
+        "PlayVoiceCue must emit CombatNotice::Voice, got {cues:?}"
+    );
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = 0x0400; // OW 1.74 reload
+    room.finish_tick(&queries, 8, Duration::from_millis(1096))
+        .unwrap();
+    let deaths = room.take_player_deaths();
+    assert_eq!(
+        deaths.len(),
+        1,
+        "lethal ModAction::Kill must emit PlayerDeath"
+    );
+    assert_eq!(deaths[0].body, owner);
 }

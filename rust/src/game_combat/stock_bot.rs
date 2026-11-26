@@ -171,6 +171,17 @@ impl World for StockBotWorld {
         self.forward(entity)
     }
 
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return Some([
+                self.position[0],
+                self.position[1] + super::eye_height(self.hero, false),
+                self.position[2],
+            ]);
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
+    }
+
     fn movement_sample(&self, site: Site) -> Option<MovementSample> {
         (site.entity == self.entity)
             .then_some(self.movement)

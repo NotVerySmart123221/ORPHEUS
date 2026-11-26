@@ -201,6 +201,30 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         (1.0, 1.0, 1.0, 1.0, false)
     }
 
+    fn set_ult_charge_scale(&mut self, _scale: f64) {}
+
+    fn set_cooldown_scale(&mut self, _scale: f64) {}
+
+    fn ult_charge_percent(&self) -> f64 {
+        0.0
+    }
+
+    fn add_ult_charge_points(&mut self, _points: f64) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn set_ult_charge_percent(&mut self, _percent: f64) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn reset_all_cooldowns(&mut self) -> io::Result<usize> {
+        Ok(0)
+    }
+
+    fn is_emoting(&self) -> bool {
+        false
+    }
+
     #[cfg(test)]
     fn has_deadeye(&self) -> bool {
         false

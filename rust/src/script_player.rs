@@ -352,6 +352,7 @@ impl PlayerBodyFactory {
             frame: spawn.frame,
             wheel_delivery_frame: spawn.frame,
             charge_binding: self.charge_route.bind(self.mode, self.hero),
+            ult_charge_scale: 1.0,
         };
         runtime
             .sync_charge_admission(true)

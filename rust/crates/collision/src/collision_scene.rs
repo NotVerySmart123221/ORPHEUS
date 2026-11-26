@@ -157,12 +157,24 @@ pub struct WeaponRayHit {
     pub breakables: Vec<(f64, usize)>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct BreakableTriSpan {
+    placement: usize,
+    start_tri: usize,
+    end_tri: usize,
+    min: Vec3,
+    max: Vec3,
+}
+
 #[derive(Debug)]
 pub struct CollisionScene {
     triangles: TriangleIndex,
     weapon_terrain_category: Option<u16>,
     triangle_sources: Vec<(usize, StaticRaySource, bool)>,
+    tri_breakable_placement: Vec<u32>,
+    breakable_tri_spans: Vec<BreakableTriSpan>,
     round_props: Vec<(RoundProp, StaticRaySource, bool)>,
+    round_prop_bounds: Vec<(Vec3, Vec3)>,
     has_breakables: bool,
 }
 
@@ -275,6 +287,51 @@ impl CollisionScene {
                 }
             }
         }
+        let mut tri_breakable_placement = Vec::with_capacity(triangles.len());
+        let mut breakable_tri_spans = Vec::new();
+        let mut prev_end = 0usize;
+        for &(end_tri, source, breakable) in &triangle_sources {
+            let start_tri = prev_end;
+            prev_end = end_tri;
+            let placement_u32 = if breakable {
+                match source {
+                    StaticRaySource::Placement { index, .. } => {
+                        u32::try_from(index).unwrap_or(u32::MAX)
+                    }
+                    _ => u32::MAX,
+                }
+            } else {
+                u32::MAX
+            };
+            tri_breakable_placement.resize(end_tri, placement_u32);
+            if placement_u32 != u32::MAX && start_tri < end_tri {
+                let mut min = [f64::INFINITY; 3];
+                let mut max = [f64::NEG_INFINITY; 3];
+                for tri in &triangles[start_tri..end_tri] {
+                    for v in &tri.vertices {
+                        for axis in 0..3 {
+                            min[axis] = min[axis].min(v[axis]);
+                            max[axis] = max[axis].max(v[axis]);
+                        }
+                    }
+                }
+                breakable_tri_spans.push(BreakableTriSpan {
+                    placement: placement_u32 as usize,
+                    start_tri,
+                    end_tri,
+                    min,
+                    max,
+                });
+            }
+        }
+        let round_prop_bounds: Vec<(Vec3, Vec3)> = round_props
+            .iter()
+            .map(|(prop, _, _)| {
+                let min = std::array::from_fn(|a| prop.a[a].min(prop.b[a]) - prop.radius);
+                let max = std::array::from_fn(|a| prop.a[a].max(prop.b[a]) + prop.radius);
+                (min, max)
+            })
+            .collect();
         Ok(Self {
             triangles: TriangleIndex::new(triangles)?,
             weapon_terrain_category: cache
@@ -283,7 +340,10 @@ impl CollisionScene {
                 .filter(|_| expanded)
                 .map(|category| category.get()),
             triangle_sources,
+            tri_breakable_placement,
+            breakable_tri_spans,
             round_props,
+            round_prop_bounds,
             has_breakables,
         })
     }
@@ -512,25 +572,21 @@ impl CollisionScene {
                 found.insert(index);
             }
         }
-        let mut prev_end = 0usize;
-        for &(end_tri, source, breakable) in &self.triangle_sources {
-            let start_tri = prev_end;
-            prev_end = end_tri;
-            if !breakable {
+        for span in &self.breakable_tri_spans {
+            if breakables.is_some_and(|state| state.is_broken(span.placement))
+                || found.contains(&span.placement)
+            {
                 continue;
             }
-            let StaticRaySource::Placement { index, .. } = source else {
-                continue;
-            };
-            if breakables.is_some_and(|state| state.is_broken(index)) || found.contains(&index) {
+            if !aabb_intersects_sphere(span.min, span.max, center, r2) {
                 continue;
             }
-            for tri_idx in start_tri..end_tri {
+            for tri_idx in span.start_tri..span.end_tri {
                 if self
                     .triangles
                     .triangle_aabb_within_radius(tri_idx, center, r2)
                 {
-                    found.insert(index);
+                    found.insert(span.placement);
                     break;
                 }
             }
@@ -559,24 +615,41 @@ impl CollisionScene {
             allow_triangle,
         )?;
         let mut best = hit.map_or(length, |hit| hit.distance);
-        for (index, (prop, _, _)) in self.round_props.iter().enumerate() {
-            if prop.mask & category == 0 || !allow_round(index) {
-                continue;
-            }
-            let Some(surface) = round_hit(origin, direction, best, prop.a, prop.b, prop.radius)
-            else {
-                continue;
-            };
-            if hit.is_none() || surface.distance < best {
-                best = surface.distance;
-                hit = Some(RayHit {
-                    distance: best,
-                    point: std::array::from_fn(|axis| origin[axis] + best * direction[axis]),
-                    normal: surface.normal,
-                    mask: prop.mask,
-                    surface: 0,
-                    primitive: RayPrimitive::Round(index),
-                });
+        if !self.round_props.is_empty() {
+            let inv_dir = std::array::from_fn(|a| {
+                if direction[a].abs() > 1e-12 {
+                    1.0 / direction[a]
+                } else {
+                    f64::INFINITY
+                }
+            });
+            for (index, ((prop, _, _), &(bmin, bmax))) in self
+                .round_props
+                .iter()
+                .zip(&self.round_prop_bounds)
+                .enumerate()
+            {
+                if prop.mask & category == 0
+                    || !ray_intersects_aabb(origin, direction, inv_dir, best, bmin, bmax)
+                    || !allow_round(index)
+                {
+                    continue;
+                }
+                let Some(surface) = round_hit(origin, direction, best, prop.a, prop.b, prop.radius)
+                else {
+                    continue;
+                };
+                if hit.is_none() || surface.distance < best {
+                    best = surface.distance;
+                    hit = Some(RayHit {
+                        distance: best,
+                        point: std::array::from_fn(|axis| origin[axis] + best * direction[axis]),
+                        normal: surface.normal,
+                        mask: prop.mask,
+                        surface: 0,
+                        primitive: RayPrimitive::Round(index),
+                    });
+                }
             }
         }
         Ok(hit)
@@ -592,14 +665,8 @@ impl CollisionScene {
     }
 
     fn triangle_breakable_placement(&self, index: u32) -> Option<usize> {
-        let (source, breakable) = self.triangle_source_entry(index)?;
-        if !breakable {
-            return None;
-        }
-        match source {
-            StaticRaySource::Placement { index, .. } => Some(index),
-            _ => None,
-        }
+        let placement = *self.tri_breakable_placement.get(index as usize)?;
+        (placement != u32::MAX).then_some(placement as usize)
     }
 
     fn round_breakable_placement(&self, index: usize) -> Option<usize> {
@@ -755,6 +822,44 @@ fn round_prop_near_sphere(prop: RoundProp, center: Vec3, radius: f64) -> bool {
         .sum();
     let total = radius + prop.radius;
     dist2 <= total * total
+}
+
+fn aabb_intersects_sphere(min: Vec3, max: Vec3, center: Vec3, r2: f64) -> bool {
+    let mut dist2 = 0.0;
+    for axis in 0..3 {
+        let clamped = center[axis].clamp(min[axis], max[axis]);
+        let d = center[axis] - clamped;
+        dist2 += d * d;
+    }
+    dist2 <= r2
+}
+
+fn ray_intersects_aabb(
+    origin: Vec3,
+    direction: Vec3,
+    inv_dir: Vec3,
+    max_t: f64,
+    min: Vec3,
+    max: Vec3,
+) -> bool {
+    let mut tmin = 0.0_f64;
+    let mut tmax = max_t;
+    for axis in 0..3 {
+        if direction[axis].abs() <= 1e-12 {
+            if origin[axis] < min[axis] || origin[axis] > max[axis] {
+                return false;
+            }
+        } else {
+            let t1 = (min[axis] - origin[axis]) * inv_dir[axis];
+            let t2 = (max[axis] - origin[axis]) * inv_dir[axis];
+            tmin = tmin.max(t1.min(t2));
+            tmax = tmax.min(t1.max(t2));
+            if tmax < tmin {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[derive(Clone, Copy)]

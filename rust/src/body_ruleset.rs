@@ -16,6 +16,7 @@ pub(crate) enum ActorKind {
 enum ModeScope {
     Exact(u64),
     Junkenstein,
+    AnyNonZero,
 }
 
 impl ModeScope {
@@ -23,6 +24,7 @@ impl ModeScope {
         match *self {
             Self::Exact(expected) => mode == expected,
             Self::Junkenstein => is_junkenstein_mode(mode),
+            Self::AnyNonZero => mode != 0 && !is_junkenstein_mode(mode),
         }
     }
 }
@@ -52,6 +54,20 @@ const COMPATIBILITY: &[Profile] = &[
         mode: ModeScope::Junkenstein,
         actors: &[ActorKind::Player, ActorKind::Npc],
         settings: &[(0x2819, Value::Float(1.0)), (0x290c, Value::Bool(true))],
+    },
+    // Generic PvP player startup ruleset defaults (Escort / Assault / Hybrid / Control / Arcade).
+    Profile {
+        mode: ModeScope::AnyNonZero,
+        actors: &[ActorKind::Player],
+        settings: &[
+            (0x2538, Value::Float(1.0)),
+            (0x260f, Value::Bool(true)),
+            (0x2819, Value::Float(1.0)),
+            (0x281a, Value::Bool(false)),
+            (0x32e0, Value::Bool(false)),
+            (0x32e8, Value::Float(1.0)),
+            (0x32e9, Value::Bool(false)),
+        ],
     },
 ];
 

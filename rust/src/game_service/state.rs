@@ -150,16 +150,27 @@ impl State {
                 scene
                     .simulation_mut()
                     .set_team_member_counts(room.team_member_counts());
+                scene.simulation_mut().set_player_names(
+                    room.players
+                        .iter()
+                        .map(|p| (p.entity, p.info.name.clone()))
+                        .collect(),
+                );
                 scene
                     .simulation_mut()
                     .seat_bots(&room.map, room.players.len());
                 #[cfg(feature = "lua-mods")]
-                if let Some(host) = mod_host {
-                    scene.simulation_mut().attach_mod_host(
-                        host,
-                        room.map.map_guid,
-                        room.map.mode_guid,
-                    );
+                {
+                    let heroes = scene.heroes_arc();
+                    let rays = scene.combat_rays_arc();
+                    scene.simulation_mut().set_mod_world_assets(heroes, rays);
+                    if let Some(host) = mod_host {
+                        scene.simulation_mut().attach_mod_host(
+                            host,
+                            room.map.map_guid,
+                            room.map.mode_guid,
+                        );
+                    }
                 }
                 room.world = Some(RoomWorld {
                     scene,
@@ -460,6 +471,12 @@ impl State {
                 self.mod_host = Some(Arc::clone(&host));
                 for room in self.rooms.values_mut() {
                     if let Some(world) = &mut room.world {
+                        let heroes = world.scene.heroes_arc();
+                        let rays = world.scene.combat_rays_arc();
+                        world
+                            .scene
+                            .simulation_mut()
+                            .set_mod_world_assets(heroes, rays);
                         world.scene.simulation_mut().attach_mod_host(
                             Arc::clone(&host),
                             room.map.map_guid,
@@ -468,6 +485,49 @@ impl State {
                     }
                 }
                 let _ = reply.send(());
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::ModChat {
+                id,
+                connection,
+                sender_name,
+                text,
+                reply,
+            } => {
+                let tick = self.clock.frame();
+                let replies = if let Some(room) = self.rooms.get_mut(&id) {
+                    let room_tick = room.sim_tick(tick);
+                    let room_now = room.sim_now(now);
+                    let sender_owner = room
+                        .members
+                        .get(&connection)
+                        .and_then(|m| room.players.get(m.slot))
+                        .map(|p| p.entity);
+                    if let Some(world) = &mut room.world {
+                        world.scene.simulation_mut().mod_dispatch_chat_from(
+                            sender_owner,
+                            &sender_name,
+                            &text,
+                            room_tick,
+                            room_now,
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(replies);
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::DrainModChat { id, reply } => {
+                let replies = self
+                    .rooms
+                    .get_mut(&id)
+                    .and_then(|room| room.world.as_mut())
+                    .map(|world| world.scene.simulation_mut().drain_mod_chat_replies())
+                    .unwrap_or_default();
+                let _ = reply.send(replies);
             }
             #[cfg(any(test, feature = "inspector"))]
             Request::Debug { reply } => {

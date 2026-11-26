@@ -155,9 +155,14 @@ impl VelocityChange {
                 VelocityAxis::Horizontal => {
                     Self::HorizontalCap(max).apply(velocity);
                 }
-                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                VelocityAxis::Vertical => {
                     if velocity[1].abs() > max {
                         velocity[1] = f64::from((velocity[1].signum() * max) as f32);
+                    }
+                }
+                VelocityAxis::VerticalUp => {
+                    if velocity[1] > max {
+                        velocity[1] = f64::from(max as f32);
                     }
                 }
             },
@@ -201,8 +206,13 @@ impl VelocityChange {
                         }
                     }
                 }
-                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                VelocityAxis::Vertical => {
                     velocity[1] = f64::from(velocity[1].clamp(min, max) as f32);
+                }
+                VelocityAxis::VerticalUp => {
+                    if velocity[1] > 0.0 {
+                        velocity[1] = f64::from(velocity[1].clamp(min, max) as f32);
+                    }
                 }
             },
         }
@@ -336,6 +346,10 @@ impl Mover {
         self.pose
     }
 
+    pub(crate) fn eye_height(&self) -> f64 {
+        self.base.eye_height(self.crouched())
+    }
+
     pub(crate) fn contact_capsule(&self) -> CapsulePose {
         self.body.capsule_pose()
     }
@@ -462,6 +476,17 @@ impl Mover {
         }
         self.scripted_motion = Some((frame, motion));
         true
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn force_scripted_motion(&mut self, frame: u32, motion: ScriptedMotion) {
+        self.scripted_motion = Some((frame, motion));
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_facing(&mut self, yaw: i32, pitch: i32) {
+        self.pose.yaw = yaw;
+        self.pose.pitch = pitch;
     }
 
     #[cfg(test)]
@@ -617,6 +642,9 @@ impl Mover {
                     }
                     ScriptedMotion::Relocate(relocation) => {
                         self.apply_relocation(relocation, blockers)?;
+                    }
+                    ScriptedMotion::Teleport(relocation) => {
+                        self.apply_teleport(relocation, blockers)?;
                     }
                 }
                 scripted_motion_changed = self.pose.position != before;
@@ -797,6 +825,30 @@ impl Mover {
         }
         let origin = self.capsule_origin(feet);
         if self.body.relocate_if_clear(origin, blockers)? {
+            self.pose.position = feet;
+        }
+        Ok(())
+    }
+
+    fn apply_teleport(
+        &mut self,
+        relocation: Relocation,
+        blockers: &[CapsulePose],
+    ) -> Result<(), HullContactError> {
+        let Some(feet) = relocation.teleport_destination().map(|feet| feet.map(snap)) else {
+            return Ok(());
+        };
+        let origin = self.capsule_origin(feet);
+        if self.body.relocate_if_clear(origin, blockers)? {
+            self.pose.position = feet;
+            return Ok(());
+        }
+        let lifted = [feet[0], feet[1] + 0.35, feet[2]];
+        let lifted_origin = self.capsule_origin(lifted);
+        if self.body.relocate_if_clear(lifted_origin, blockers)? {
+            self.pose.position = lifted;
+        } else {
+            self.body.teleport(origin);
             self.pose.position = feet;
         }
         Ok(())

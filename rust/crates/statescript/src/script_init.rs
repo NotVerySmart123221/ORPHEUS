@@ -1320,6 +1320,44 @@ impl Component {
         self.machine.command_buttons
     }
 
+    pub fn set_cooldown_scale(&mut self, scale: f64) {
+        if scale.is_finite() && scale > 0.0 {
+            self.machine.cooldown_scale = scale.clamp(0.05, 10.0);
+        }
+    }
+
+    /// Immediately completes all active ability cooldown timers on this entity.
+    pub fn reset_all_cooldowns(&mut self, world: &mut impl World) -> Result<usize, InitFault> {
+        let mut reset = 0usize;
+        self.run(world, |vm| {
+            let keys: Vec<StateKey> = vm
+                .machine
+                .snapshot
+                .instances
+                .iter()
+                .flat_map(|(&instance, inst)| {
+                    inst.states.iter().filter_map(move |(&raw, state)| {
+                        (state.active && state.ability_cooldown.is_some())
+                            .then_some(StateKey { instance, raw })
+                    })
+                })
+                .collect();
+            let now_ms = vm.machine.now_ms;
+            for key in keys {
+                if let Some(state) = vm.state_mut(key) {
+                    if let Some(cd) = &mut state.ability_cooldown {
+                        cd.current = 0.0;
+                        cd.last_ms = now_ms;
+                    }
+                }
+                vm.finish_cooldown(key)?;
+                reset += 1;
+            }
+            vm.run()
+        })?;
+        Ok(reset)
+    }
+
     fn advance(
         &mut self,
         frame: u32,

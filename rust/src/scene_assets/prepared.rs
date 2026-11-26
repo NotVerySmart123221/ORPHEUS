@@ -260,6 +260,16 @@ impl PreparedScene {
         &self.heroes
     }
 
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn heroes_arc(&self) -> Arc<HeroCatalog> {
+        Arc::clone(&self.heroes)
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn combat_rays_arc(&self) -> Arc<CollisionScene> {
+        Arc::clone(&self.combat_rays)
+    }
+
     pub fn pools(&self) -> &PoolCatalog {
         &self.pools
     }

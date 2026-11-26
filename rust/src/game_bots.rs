@@ -461,6 +461,107 @@ impl Bot {
         bot
     }
 
+    /// Spawn a Lua Workshop custom bot at an arbitrary map position.
+    #[cfg(feature = "lua-mods")]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mod_spawned(
+        entity: u32,
+        hero: u64,
+        body: u64,
+        name: String,
+        team: u8,
+        health: f64,
+        position: [f64; 3],
+        yaw: i32,
+        tick: u32,
+    ) -> Self {
+        let mut bot = Self::new(
+            entity,
+            Arc::new(BotSpawn {
+                hero,
+                body,
+                name,
+                team,
+                health,
+                position,
+                yaw,
+                placement_graphs: Vec::new(),
+                route: Vec::new(),
+                initial_index: 0,
+            }),
+            BotWalk::default(),
+        );
+        bot.records_from = Some(tick.saturating_add(1));
+        bot
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn pitch(&self) -> i32 {
+        self.pitch
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_facing(&mut self, yaw_degrees: f64, pitch_degrees: f64, tick: u32) {
+        if yaw_degrees.is_finite() {
+            self.yaw = s16((yaw_degrees * YAW_UNITS / 360.0).round_ties_even());
+        }
+        if pitch_degrees.is_finite() {
+            self.pitch = (pitch_degrees.clamp(-89.0, 89.0) * YAW_UNITS / 360.0).round() as i32;
+        }
+        self.moved_tick = Some(tick);
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_velocity(&mut self, velocity: [f64; 3], tick: u32) {
+        if velocity.iter().all(|v| v.is_finite()) {
+            self.velocity = velocity;
+            self.moved_tick = Some(tick);
+        }
+    }
+
+    /// Perform a rhythmic dance spin + celebratory bob visible to all players.
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn step_mod_dance(&mut self, tick: u32, base_y: f64) {
+        if self.dead {
+            return;
+        }
+        self.stop_objective(tick);
+        // Smooth rhythmic rotation (~180 deg/s) and subtle bounce
+        self.yaw = s16(self.yaw + (YAW_UNITS / 120.0));
+        let phase = (f64::from(tick % 30) / 30.0) * consts::TAU;
+        self.position[1] = base_y + phase.sin().abs() * 0.35;
+        self.pitch = (phase.cos() * 1400.0) as i32;
+        self.velocity = [0.0, 0.0, 0.0];
+        self.moved_tick = Some(tick);
+    }
+
+    /// Move a Workshop bot smoothly toward a target world position (`follow` mode).
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn step_mod_follow(&mut self, tick: u32, target: [f64; 3], speed_scale: f64) {
+        if self.dead {
+            return;
+        }
+        let dx = target[0] - self.position[0];
+        let dz = target[2] - self.position[2];
+        let dist = dx.hypot(dz);
+        if dist <= 2.5 {
+            self.yaw = heading([dx, dz]);
+            self.velocity = [0.0; 3];
+            self.moved_tick = Some(tick);
+            return;
+        }
+        let dt = TICK_PERIOD.as_secs_f64();
+        let speed = self.walk.speed * speed_scale.clamp(0.1, 10.0);
+        let step = (speed * dt).min(dist - 2.0).max(0.0);
+        let nx = dx / dist;
+        let nz = dz / dist;
+        self.position[0] += nx * step;
+        self.position[2] += nz * step;
+        self.yaw = heading([nx, nz]);
+        self.velocity = [nx * speed, 0.0, nz * speed];
+        self.moved_tick = Some(tick);
+    }
+
     /// Persistent controller entity ID for a seated bot across respawns.
     pub fn controller(&self) -> Option<u32> {
         self.slot
@@ -807,6 +908,10 @@ impl Bot {
         }
         self.stunned_until = self.stunned_until.max(tick.saturating_add(ticks));
         self.stop_objective(tick);
+    }
+
+    pub(crate) fn clear_stun(&mut self) {
+        self.stunned_until = 0;
     }
 
     pub(crate) fn patrol_active(&self) -> bool {
@@ -1516,6 +1621,25 @@ impl Bot {
                     .unwrap_or(false)
                 {
                     return false;
+                }
+                if let Some(trace) = &mut collision.trace {
+                    trace.last_clip = None;
+                    #[cfg(any(test, feature = "inspector"))]
+                    trace.last_normals.clear();
+                }
+                to
+            }
+            ScriptedMotion::Teleport(relocation) => {
+                let Some(to) = relocation.teleport_destination() else {
+                    return false;
+                };
+                let origin = standing_origin(to, collision.lift);
+                if !collision
+                    .body
+                    .relocate_if_clear(origin, blockers)
+                    .unwrap_or(false)
+                {
+                    collision.body.teleport(origin);
                 }
                 if let Some(trace) = &mut collision.trace {
                     trace.last_clip = None;

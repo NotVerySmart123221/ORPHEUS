@@ -293,6 +293,7 @@ impl Blast {
 #[derive(Clone, Copy, Debug)]
 struct StuckState {
     anchor: Option<(u32, Vec3)>,
+    splash_origin: Vec3,
     remaining: f64,
 }
 
@@ -388,6 +389,23 @@ impl ProjectileFlight {
 
     pub(crate) fn velocity(&self) -> Vec3 {
         self.velocity
+    }
+
+    pub(crate) fn is_piercing(&self) -> bool {
+        self.piercing
+    }
+
+    pub(crate) fn barrier_impact_damage(&self) -> f64 {
+        let direct = self
+            .ballistics
+            .direct
+            .map_or(0.0, |h| h.damage_at(self.distance_travelled, false));
+        let blast = self
+            .ballistics
+            .blast
+            .as_ref()
+            .map_or(0.0, |b| b.hit.damage_at(0.0, false));
+        direct.max(blast)
     }
 
     pub(crate) fn definition(&self) -> Option<u64> {
@@ -533,14 +551,20 @@ impl ProjectileFlight {
                         feet[1] + offset[1],
                         feet[2] + offset[2],
                     ];
+                    stuck.splash_origin = self.position;
                 }
             }
             self.travelled += dt;
             stuck.remaining -= dt;
             if stuck.remaining <= 0.0 {
                 self.stuck = None;
-                let impacts =
-                    self.splash(self.position, self.position, targets, shooter, &mut wall)?;
+                let impacts = self.splash(
+                    stuck.splash_origin,
+                    self.position,
+                    targets,
+                    shooter,
+                    &mut wall,
+                )?;
                 return Ok(Some(self.finish(
                     impacts,
                     false,
@@ -574,6 +598,9 @@ impl ProjectileFlight {
                 }
                 match self.advance_segment(duration, speed, targets, shooter, &mut wall)? {
                     Segment::Complete => {
+                        if self.stuck.is_some() {
+                            return Ok(None);
+                        }
                         self.velocity = velocity;
                         break;
                     }
@@ -765,12 +792,25 @@ impl ProjectileFlight {
                         )
                     })
             });
+            let splash_origin = match wall_hit {
+                Some(WallContact {
+                    normal: Some(normal),
+                    ..
+                }) => along(point, normal, SURFACE_RAY_OFFSET),
+                Some(_) => along(
+                    self.position,
+                    self.direction,
+                    (distance - DISTANCE_ONLY_RAY_OFFSET).max(0.0),
+                ),
+                None => point,
+            };
             self.position = point;
             self.velocity = [0.0; 3];
             self.distance_travelled += distance;
             self.travelled += spent;
             self.stuck = Some(StuckState {
                 anchor,
+                splash_origin,
                 remaining: delay,
             });
             return Ok(Segment::Complete);

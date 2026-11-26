@@ -522,6 +522,9 @@ enum Family {
     Blink,
     Start,
     NoneU8,
+    NoneU16,
+    FlaggedValue,
+    ValueFlag,
     Time16S64,
     TwoVectorsS64,
 }
@@ -554,6 +557,9 @@ impl Family {
             "blink" => Self::Blink,
             "start" => Self::Start,
             "none+u8" => Self::NoneU8,
+            "none+u16" => Self::NoneU16,
+            "63B7ADFD" => Self::FlaggedValue,
+            "239B1E64" => Self::ValueFlag,
             "time16+s64" => Self::Time16S64,
             "two_vectors+s64" => Self::TwoVectorsS64,
             _ => return None,
@@ -670,6 +676,24 @@ fn project(
                 "m_B4802CE3",
                 Value::Integer(vm.integer("m_B4802CE3", 0)?).into(),
             );
+        }
+        Family::NoneU16 => {
+            fields.insert(
+                "m_AE2D8911",
+                Value::Integer(vm.integer("m_AE2D8911", 0)?).into(),
+            );
+        }
+        Family::FlaggedValue => {
+            let active = vm.flag("a");
+            fields.insert("a", Value::Bool(active).into());
+            if active {
+                fields.insert("b", Value::Bool(vm.flag("b")).into());
+                fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+            }
+        }
+        Family::ValueFlag => {
+            fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+            fields.insert("flag", Value::Bool(vm.flag("flag")).into());
         }
         Family::Time16S64 => {
             fields.insert(

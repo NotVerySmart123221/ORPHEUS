@@ -923,6 +923,19 @@ impl Room {
                 ) {
                     eprintln!("player {:08X} body swap rejected: {error}", viewer.entity);
                 }
+                #[cfg(feature = "lua-mods")]
+                if let Err(error) = peer.world.advance_mod_hero_switch(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!(
+                        "player {:08X} mod hero switch rejected: {error}",
+                        viewer.entity
+                    );
+                }
             }
         }
         Ok(RoomUpdates {

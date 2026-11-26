@@ -62,7 +62,8 @@ impl ActorHealthSnapshot {
 #[derive(Clone)]
 pub(super) struct RoomScriptTarget {
     pub(super) entity: Entity,
-    pub(super) candidate_index: usize,
+    pub(super) candidate_index: Option<usize>,
+    pub(super) position: Vec3,
     pub(super) angles: [i32; 2],
     pub(super) velocity: Vec3,
     pub(super) eye_position: Option<Vec3>,
@@ -556,21 +557,6 @@ impl RoomSimulation {
                 if same_team_other {
                     return Ok(());
                 }
-                #[cfg(feature = "lua-mods")]
-                let damage = if damage > 0.0 {
-                    self.mod_evaluate_damage(
-                        source.wire,
-                        request.wire,
-                        damage,
-                        false,
-                        true,
-                        -1,
-                        tick,
-                        now,
-                    )
-                } else {
-                    damage
-                };
                 if damage > 0.0 {
                     let target_facts = self
                         .sample_health_body(request.wire)
@@ -626,10 +612,6 @@ impl RoomSimulation {
                                 );
                             }
                         }
-                        #[cfg(feature = "lua-mods")]
-                        if outcome.killed {
-                            self.mod_on_kill(source.wire, request.wire, false, tick, now);
-                        }
                     }
                 }
                 if let Some(delta) = impulse {
@@ -682,25 +664,7 @@ impl RoomSimulation {
                 if same_team_other {
                     return Ok(());
                 }
-                if let Some(mut state) = self.world.get_mut::<BotState>(request.entity) {
-                    if !state.bot.dead {
-                        state.bot.stun_for(tick, ticks);
-                    }
-                } else if let Some(mut player) =
-                    self.world.get_mut::<PlayerBodyState>(request.entity)
-                {
-                    let cc_immune = player
-                        .runtime
-                        .as_deref()
-                        .is_some_and(|rt| rt.combat_modifiers().4);
-                    if player.alive() && !cc_immune {
-                        player.mover.clear_pending_script_motion();
-                        player.mover.queue_velocity_change(
-                            tick.saturating_add(1),
-                            crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
-                        );
-                    }
-                }
+                self.apply_actor_stun(request.wire, tick, ticks);
             }
             ScriptEffect::Cue(cue, source_entity) => {
                 if source_entity != source.entity {
@@ -1190,7 +1154,8 @@ mod tests {
         let mut world = bevy_ecs::world::World::new();
         let mut target = |candidate_index, health, messages| RoomScriptTarget {
             entity: world.spawn_empty().id(),
-            candidate_index,
+            candidate_index: Some(candidate_index),
+            position: [0.0; 3],
             angles: [0; 2],
             velocity: [0.0; 3],
             eye_position: None,
@@ -1222,6 +1187,7 @@ mod tests {
             ground: Arc::new(fixture_ground()),
             breakables: None,
             actor_voice: None,
+            retired: Arc::default(),
             captured_tick: 0,
             debug_rays: Arc::default(),
         };

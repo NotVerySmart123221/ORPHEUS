@@ -1303,6 +1303,12 @@ impl WorldDelivery {
             }
         }
         let encoder = projection.encoder;
+        let revision = projection.snapshot.revision;
+        let can_cache_clean = !projection.snapshot.has_time_sensitive_projection()
+            && (!bot || !self.observed_projectiles.has_active_volleys_for(entity));
+        if can_cache_clean && stream.observer_matches_clean(revision, bot_dead, can_introduce) {
+            return Ok(());
+        }
         let chunk = if let Some((_, base)) = stream.base() {
             let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
@@ -1311,9 +1317,13 @@ impl WorldDelivery {
                 snapshot.stage_practice_nameplates((!bot_dead).then_some(base), can_introduce);
                 self.observed_projectiles.retain_volleys(&mut snapshot);
             }
-            encoder
+            let delta = encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
-                .map_err(invalid)?
+                .map_err(invalid)?;
+            if delta.is_none() && can_cache_clean {
+                stream.mark_observer_clean(revision, bot_dead, can_introduce);
+            }
+            delta
         } else {
             let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
@@ -2011,6 +2021,7 @@ impl WorldDelivery {
                 stage_scripted_motion(runtime, mover);
             }
         }
+        let mut posed_buttons: Vec<u32> = Vec::new();
         let stepped = mover.step_pending(
             rays,
             &mut pending.poses,
@@ -2018,6 +2029,9 @@ impl WorldDelivery {
             budget - used,
             || &blockers,
             |mover, command| {
+                if alive {
+                    posed_buttons.push(command.buttons);
+                }
                 if script.is_none()
                     && frame_us != 0
                     && mover.needs_owner_correction_at(command.frame)
@@ -2072,11 +2086,23 @@ impl WorldDelivery {
             },
         );
         let complete = pending.poses.len() == 0;
-        if complete && alive {
+        if alive && (!posed_buttons.is_empty() || complete) {
             if let Some(state) = simulation.player_body_mut(id) {
-                let pressed = command.buttons & !state.last_buttons;
-                state.last_buttons = command.buttons;
-                state.pending_pressed_buttons |= pressed;
+                if posed_buttons.is_empty() {
+                    let pressed = command.buttons & !state.last_buttons;
+                    let released = state.last_buttons & !command.buttons;
+                    state.last_buttons = command.buttons;
+                    state.pending_pressed_buttons |= pressed;
+                    state.pending_released_buttons |= released;
+                } else {
+                    for buttons in posed_buttons {
+                        let pressed = buttons & !state.last_buttons;
+                        let released = state.last_buttons & !buttons;
+                        state.last_buttons = buttons;
+                        state.pending_pressed_buttons |= pressed;
+                        state.pending_released_buttons |= released;
+                    }
+                }
             }
         }
         if let Some((frame, step, error)) = fault {
@@ -2152,13 +2178,24 @@ impl WorldDelivery {
         let Some(body) = self.body else {
             return Ok(());
         };
+        if self.input.work.iter().any(|work| {
+            matches!(
+                work,
+                InputWork::Command {
+                    pending: Some(_),
+                    ..
+                }
+            )
+        }) {
+            return Ok(());
+        }
+        let Some(entity) = self.next_body(now) else {
+            return Ok(());
+        };
         let swap = {
             let Some(state) = scene.simulation_mut().player_body_mut(body.id) else {
                 return Ok(());
             };
-            if !state.alive() {
-                return Ok(());
-            }
             let Some(new_body) = state
                 .runtime
                 .as_mut()
@@ -2171,9 +2208,6 @@ impl WorldDelivery {
             }
             let pose = state.mover.pose();
             (new_body, pose.position, pose.yaw)
-        };
-        let Some(entity) = self.next_body(now) else {
-            return Ok(());
         };
         let mut hero = scene
             .heroes()
@@ -2189,6 +2223,48 @@ impl WorldDelivery {
             entity,
             (&hero, body.skin),
             Some((swap.1, swap.2)),
+        )
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn advance_mod_hero_switch(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        now: Duration,
+    ) -> io::Result<()> {
+        let Some(target_hero) = scene.simulation_mut().take_mod_hero_switch(self.owner) else {
+            return Ok(());
+        };
+        let Some(hero) = scene.heroes().get(target_hero).cloned() else {
+            return Ok(());
+        };
+        let Some(entity) = self.next_body(now) else {
+            return Ok(());
+        };
+        let skin = viewer
+            .card
+            .skins
+            .get(&target_hero)
+            .copied()
+            .unwrap_or_default();
+        let current_pose = self
+            .body
+            .and_then(|body| scene.simulation().player_body(body.id))
+            .map(|state| {
+                let pose = state.mover.pose();
+                (pose.position, pose.yaw)
+            });
+        self.switch_at(
+            scene,
+            viewer,
+            tick,
+            quanta,
+            entity,
+            (&hero, skin),
+            current_pose,
         )
     }
 
@@ -2291,43 +2367,46 @@ impl WorldDelivery {
         };
         // If startup statescript immediately requested possession of an authored alternate
         // hero body (e.g. STU_B6E3C77D + STU_CA861E44), swap directly before creating on wire.
-        if let Some(swap_body) = runtime
-            .as_mut()
-            .and_then(|rt| rt.take_body_swap())
-            .filter(|&b| b != effective_hero.body)
-        {
-            let mut swapped_hero = effective_hero.clone();
-            swapped_hero.body = swap_body;
-            match make_mover(swapped_hero.body) {
-                Ok(swapped_mover) => {
-                    let swapped_movement = swapped_mover.pose();
-                    match start_candidate(&swapped_hero, &swapped_mover, swapped_movement) {
-                        Ok((Some(swapped_rt), swapped_script)) => {
-                            effective_hero = swapped_hero;
-                            mover = swapped_mover;
-                            movement = swapped_movement;
-                            runtime = Some(swapped_rt);
-                            script = swapped_script;
-                        }
-                        Ok((None, _)) => {
-                            eprintln!(
-                                "body swap startup returned None for {:016X} -> {:016X}",
-                                effective_hero.body, swap_body
-                            );
-                        }
-                        Err(error) => {
-                            eprintln!(
-                                "body swap startup rejected for {:016X} -> {:016X}: {error}",
-                                effective_hero.body, swap_body
-                            );
+        // Only apply on fresh spawn/respawn (`override_pose.is_none()`), never mid-life ejects.
+        if override_pose.is_none() {
+            if let Some(swap_body) = runtime
+                .as_mut()
+                .and_then(|rt| rt.take_body_swap())
+                .filter(|&b| b != effective_hero.body)
+            {
+                let mut swapped_hero = effective_hero.clone();
+                swapped_hero.body = swap_body;
+                match make_mover(swapped_hero.body) {
+                    Ok(swapped_mover) => {
+                        let swapped_movement = swapped_mover.pose();
+                        match start_candidate(&swapped_hero, &swapped_mover, swapped_movement) {
+                            Ok((Some(swapped_rt), swapped_script)) => {
+                                effective_hero = swapped_hero;
+                                mover = swapped_mover;
+                                movement = swapped_movement;
+                                runtime = Some(swapped_rt);
+                                script = swapped_script;
+                            }
+                            Ok((None, _)) => {
+                                eprintln!(
+                                    "body swap startup returned None for {:016X} -> {:016X}",
+                                    effective_hero.body, swap_body
+                                );
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "body swap startup rejected for {:016X} -> {:016X}: {error}",
+                                    effective_hero.body, swap_body
+                                );
+                            }
                         }
                     }
-                }
-                Err(error) => {
-                    eprintln!(
-                        "body swap mover rejected for {:016X} -> {:016X}: {error}",
-                        effective_hero.body, swap_body
-                    );
+                    Err(error) => {
+                        eprintln!(
+                            "body swap mover rejected for {:016X} -> {:016X}: {error}",
+                            effective_hero.body, swap_body
+                        );
+                    }
                 }
             }
         }
@@ -2388,7 +2467,11 @@ impl WorldDelivery {
             Some(observer_create),
         )
         .with_body_template(hero.body);
-        scene.simulation_mut().spawn_player_body(state)?;
+        if override_pose.is_some() {
+            scene.simulation_mut().swap_player_body(state)?;
+        } else {
+            scene.simulation_mut().spawn_player_body(state)?;
+        }
         self.controller = controller;
         self.generation = generation;
         self.bodies.insert(entity, (generation, Lifetime::Live));

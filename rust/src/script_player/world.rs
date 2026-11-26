@@ -9,8 +9,7 @@ use crate::{
     collision_scene::CollisionScene,
     commands::Command,
     game_combat::{RoomScriptRequests, eye_height},
-    game_content::{PRACTICE_RANGE_MODE, TUTORIAL_MODE, is_junkenstein_mode},
-    game_heroes::CASSIDY,
+    game_content::{TUTORIAL_MODE, is_junkenstein_mode},
     game_hitscan::{TargetPose, aim_direction, direction_for_angles},
     game_instance::TeamMemberCounts,
     game_replication::OwnerRoomActivity,
@@ -348,11 +347,7 @@ impl World for BodyWorld {
     }
 
     fn edit_velocity(&mut self, site: Site, frame: u32, value: Value, cap: bool) -> bool {
-        if self.hero != CASSIDY
-            || !self.is_player_site(site)
-            || site.graph != 0x01f0
-            || !matches!((site.node, cap), (Some(8 | 11), false) | (Some(17), true))
-        {
+        if !self.is_player_site(site) {
             return false;
         }
         let change = match (value, cap) {
@@ -1545,7 +1540,7 @@ impl World for BodyWorld {
         let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
         let relation = match (team_mode, hostile_flag) {
             (1, 0) => 1u64,
-            (2, 0) | (0, 1) => 2u64,
+            (2, _) | (_, 1) => 2u64,
             _ => 0u64,
         };
         let mut matches: Vec<(f64, u32)> = frame
@@ -1628,7 +1623,7 @@ impl World for BodyWorld {
             .filter(|c| c.entity != self.entity)
             .filter(|c| match (team_mode, hostile_flag) {
                 (1, 0) => own_team.is_some() && c.team == own_team,
-                (2, 0) | (0, 1) => own_team.is_none() || c.team != own_team,
+                (2, _) | (_, 1) => own_team.is_none() || c.team != own_team,
                 // Retail damage beams (Zarya 0241, Symmetra 157C, Echo 1FBD) set
                 // `m_4EA686DB = 20` (0x14) with `(team_mode=0, hostile_flag=0)`:
                 // exclude same-team allies so teammates do not occlude enemy hits.
@@ -1782,7 +1777,7 @@ impl World for BodyWorld {
     }
 
     fn request_possess_entity(&mut self, site: Site, target: u32) -> bool {
-        if !self.is_player_site(site) || self.vitals.death().is_some() {
+        if !self.is_player_site(site) {
             return false;
         }
         if let Some(&definition) = self.spawned_possessables.get(&target) {
@@ -1838,6 +1833,7 @@ impl World for BodyWorld {
         targets: &[u32],
         effect: u64,
         param: Option<f64>,
+        elapsed_ms: u64,
     ) -> bool {
         if !self.is_player_site(site) {
             return false;
@@ -1856,14 +1852,12 @@ impl World for BodyWorld {
         let Some(frame) = self.spatial_frame.as_deref() else {
             return true;
         };
-        let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
+        let dt = (elapsed_ms as f64 / 1000.0).min(0.05);
         let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
         for &target in targets {
             if !valid_entity(target) {
                 continue;
             }
-            // Authored heal tether/aura (`0x04A0...0019` Mercy Heal Beam, `0x04A0...01B9` Zen Harmony Orb, etc.)
-            // delivers continuous healing proportional to the authored rate parameter when targeting an ally.
             let is_ally = target == self.entity
                 || frame
                     .candidates()
@@ -1871,11 +1865,26 @@ impl World for BodyWorld {
                     .find(|c| c.entity == target)
                     .is_some_and(|c| own_team.is_some() && c.team == own_team);
             if is_ally {
-                if let Some(rate) = param.filter(|r| r.is_finite() && *r > 1.0 && *r <= 300.0) {
-                    let _ = self.script_requests.queue_health(frame, target, rate * dt);
+                if dt > 0.0 {
+                    // Only deliver continuous healing for genuine healing tether/aura effect assets
+                    // (not damage boost, speed boost, or shield/bubble buff auras).
+                    let is_heal_aura = matches!(
+                        effect,
+                        0 | 0x04a0_0000_0000_0019
+                            | 0x04a0_0000_0000_0123
+                            | 0x04a0_0000_0000_01b9
+                            | 0x04a0_0000_0000_0302
+                    );
+                    if is_heal_aura {
+                        if let Some(rate) =
+                            param.filter(|r| r.is_finite() && *r > 1.0 && *r <= 300.0)
+                        {
+                            let _ = self.script_requests.queue_health(frame, target, rate * dt);
+                        }
+                    }
                 }
             } else if effect == 0x04a0_0000_0000_0286 && !previously_latched.contains(&target) {
-                // Authored Sombra Hack interrupt/silence pulse on latch.
+                // Authored Sombra Hack interrupt & silence on latch.
                 let _ = self.script_requests.queue_stun(frame, target, 12);
             }
         }
@@ -1887,12 +1896,23 @@ impl World for BodyWorld {
             return false;
         }
         let frame = self.movement.frame.unwrap_or(0);
-        let max_samples = ((window_secs * 62.5).ceil() as usize).clamp(30, 625);
-        while self.recall_history.len() >= max_samples {
-            self.recall_history.pop_front();
+        let window_frames = ((window_secs * 62.5).ceil() as u32).clamp(30, 625);
+        if let Some(last) = self.recall_history.back_mut() {
+            if last.0 == frame {
+                last.1 = self.position;
+                last.2 = self.vitals.total();
+                return true;
+            }
         }
         self.recall_history
             .push_back((frame, self.position, self.vitals.total()));
+        while let Some(&(oldest_frame, _, _)) = self.recall_history.front() {
+            if frame.saturating_sub(oldest_frame) > window_frames && self.recall_history.len() > 1 {
+                self.recall_history.pop_front();
+            } else {
+                break;
+            }
+        }
         true
     }
 
@@ -1907,7 +1927,7 @@ impl World for BodyWorld {
         ));
         self.recall_history.clear();
         if let Some(reloc) = crate::script_init::Relocation::new(target_pos) {
-            self.scripted_motion = Some((frame, ScriptedMotion::Relocate(reloc)));
+            self.scripted_motion = Some((frame, ScriptedMotion::Teleport(reloc)));
         }
         let current_hp = self.vitals.total();
         if target_hp > current_hp {
@@ -1918,6 +1938,65 @@ impl World for BodyWorld {
 
     fn set_ball_roll_state(&mut self, site: Site, _active: bool, _max_speed: f64) -> bool {
         self.is_player_site(site)
+    }
+
+    fn apply_physics_explosion(
+        &mut self,
+        site: Site,
+        center: [f64; 3],
+        radius: f64,
+        impulse: f64,
+        direction: Option<[f64; 3]>,
+    ) -> bool {
+        if !self.is_player_site(site) || !radius.is_finite() || radius <= 0.0 {
+            return false;
+        }
+        if !impulse.is_finite() || impulse.abs() <= 1e-4 {
+            return true;
+        }
+        let Some(frame) = self.spatial_frame.as_deref() else {
+            return true;
+        };
+        let own_team = {
+            let bits = (self.body_filter >> 23) & 31;
+            (bits != 0).then(|| bits.trailing_zeros() as u8)
+        };
+        let mut pushes = Vec::new();
+        for c in frame.candidates() {
+            if c.entity == self.entity {
+                continue;
+            }
+            if own_team.is_some() && c.team == own_team {
+                continue;
+            }
+            let dx = c.position[0] - center[0];
+            let dy = (c.position[1] + 0.9) - center[1];
+            let dz = c.position[2] - center[2];
+            let dist = dx.hypot(dy).hypot(dz);
+            if dist > radius {
+                continue;
+            }
+            let falloff = (1.0 - dist / radius).clamp(0.25, 1.0);
+            let mag = (impulse * falloff).clamp(-22.0, 22.0);
+            let dir = if let Some(d) = direction {
+                let len = d[0].hypot(d[1]).hypot(d[2]).max(1e-5);
+                [d[0] / len, d[1] / len, d[2] / len]
+            } else if dist > 1e-4 {
+                [dx / dist, (dy / dist).max(0.25), dz / dist]
+            } else {
+                [0.0, 1.0, 0.0]
+            };
+            pushes.push((c.entity, Some([dir[0] * mag, dir[1] * mag, dir[2] * mag])));
+        }
+        if !pushes.is_empty() {
+            let _ = self.script_requests.queue_contact_damage(
+                frame,
+                self.movement.frame.unwrap_or(0),
+                0.0,
+                &pushes,
+            );
+        }
+        true
     }
 
     fn play_script(
@@ -2016,7 +2095,7 @@ impl World for BodyWorld {
             let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
             let relation = match (team_mode, hostile_flag) {
                 (1, 0) => Some(FilterRelation::Friendly),
-                (2, 0) | (0, 1) => Some(FilterRelation::Hostile),
+                (2, _) | (_, 1) => Some(FilterRelation::Hostile),
                 (0, 0) => Some(FilterRelation::Any),
                 _ => None,
             };
@@ -2120,11 +2199,6 @@ impl World for BodyWorld {
                 Some("STU_66F3B89E") => Some([cos, 0.0, -sin]),
                 Some("STU_EE66D6C3") => Some([0.0, 1.0, 0.0]),
                 Some("STU_FC99C77E") => Some(self.eye_position.unwrap_or(self.position)),
-                Some("STU_2200A66D") => Some(aim_direction(&Command {
-                    yaw: self.movement.yaw,
-                    pitch: self.movement.pitch,
-                    ..Command::default()
-                })),
                 _ => None,
             };
             if let Some(vector) = vector {
@@ -2132,17 +2206,26 @@ impl World for BodyWorld {
             }
         }
 
-        if self.is_player_site(site) && is_junkenstein_mode(self.mode) {
-            if (site.graph, site.node) == (0x01ca, Some(126))
-                && crate::pve_encounter::messages::sighting_selector(config)
-            {
-                return Some(crate::pve_encounter::messages::recipients(&self.defenders));
+        if self.is_player_site(site) {
+            if crate::pve_encounter::messages::sighting_selector(config) {
+                if !self.defenders.is_empty() {
+                    return Some(crate::pve_encounter::messages::recipients(&self.defenders));
+                }
+                if let Some(frame) = self.spatial_frame.as_deref() {
+                    let bits = (self.body_filter >> 23) & 31;
+                    let own_team = (bits != 0).then(|| bits.trailing_zeros() as u8);
+                    let allies: Vec<Value> = frame
+                        .candidates()
+                        .iter()
+                        .filter(|c| {
+                            c.entity != self.entity && own_team.is_some() && c.team == own_team
+                        })
+                        .map(|c| Value::Entity(c.entity))
+                        .collect();
+                    return Some(Value::Array(allies));
+                }
             }
-            if matches!(
-                (site.graph, site.node),
-                (0x01ca, Some(11 | 127)) | (0x0ca5, Some(77))
-            ) && crate::pve_encounter::messages::self_team_query(config)
-            {
+            if crate::pve_encounter::messages::self_team_query(config) {
                 let team = (self.body_filter >> 23) & 31;
                 return Some(Value::Integer(if team == 0 {
                     -1
@@ -2187,31 +2270,43 @@ impl World for BodyWorld {
                 Some(Value::Bool(false))
             }
             "STU_ED45C5E8"
-                if (site.graph, site.node, self.mode)
-                    == (0x01ca, Some(126), PRACTICE_RANGE_MODE)
-                    && self.is_player_site(site)
+                if self.is_player_site(site)
                     && config
                         .get("m_B2ABF4FF")
-                        .is_some_and(|owner| native_shape(owner, "STU_B5A0CAF0", None))
-                    && config.pointer("/m_2BA6230F/m_value").and_then(Json::as_f64)
-                        == Some(0.0)
-                    && ["m_5912C8DF", "m_5A72EEF5", "m_C9E6F46B"]
-                        .iter()
-                        .all(|flag| {
-                            config
-                                .get(*flag)
-                                .and_then(|flag| flag.get("m_value"))
-                                .and_then(Json::as_u64)
-                                == Some(0)
-                        }) =>
+                        .is_some_and(|owner| native_shape(owner, "STU_B5A0CAF0", None)) =>
             {
-                // The solo Practice Range has no recipients for this voice route.
-                Some(Value::Array(Vec::new()))
+                let max_range = config
+                    .pointer("/m_2BA6230F/m_value")
+                    .and_then(Json::as_f64)
+                    .unwrap_or(0.0);
+                let allies: Vec<Value> = if let Some(frame) = self.spatial_frame.as_deref() {
+                    let bits = (self.body_filter >> 23) & 31;
+                    let own_team = (bits != 0).then(|| bits.trailing_zeros() as u8);
+                    frame
+                        .candidates()
+                        .iter()
+                        .filter(|c| {
+                            if c.entity == self.entity || own_team.is_none() || c.team != own_team {
+                                return false;
+                            }
+                            if max_range > 0.0 {
+                                let dx = c.position[0] - self.position[0];
+                                let dy = c.position[1] - self.position[1];
+                                let dz = c.position[2] - self.position[2];
+                                dx.hypot(dy).hypot(dz) <= max_range
+                            } else {
+                                true
+                            }
+                        })
+                        .map(|c| Value::Entity(c.entity))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                Some(Value::Array(allies))
             }
             "STU_65ABFCCC"
-                if (site.graph, site.node, self.mode)
-                    == (0x01ca, Some(127), PRACTICE_RANGE_MODE)
-                    && self.is_player_site(site)
+                if self.is_player_site(site)
                     && config
                         .get("m_target")
                         .is_some_and(|owner| native_shape(owner, "STU_B5A0CAF0", None)) =>
@@ -2272,7 +2367,7 @@ impl BodyWorld {
 
     #[cfg(test)]
     pub(super) fn has_deadeye(&self) -> bool {
-        self.hero == CASSIDY && is_junkenstein_mode(self.mode)
+        self.hero == crate::game_heroes::CASSIDY && is_junkenstein_mode(self.mode)
     }
 
     pub(super) fn own_filter_flags(&self) -> u64 {

@@ -1,6 +1,9 @@
 //! Room-authoritative health effects for player and NPC bodies.
 
-use super::{CombatError, HealthDamageEvidence, RoomSimulation, player::PlayerDeath};
+use super::{
+    BotState, CombatError, HealthDamageEvidence, PlayerBodyState, RoomSimulation,
+    player::PlayerDeath,
+};
 use crate::{
     game_hitscan::Impact,
     script_expr::valid_entity,
@@ -71,7 +74,11 @@ impl RoomSimulation {
         let (_, victim_in_dmg, _, victim_in_heal, _) = self.actor_combat_modifiers(wire);
         let effect = match effect {
             HealthEffect::Heal(amount) => {
-                let mut scaled = amount * attacker_out_heal * victim_in_heal;
+                #[cfg(feature = "lua-mods")]
+                let mod_heal = self.mod_healing_scale_for(source.killer, wire);
+                #[cfg(not(feature = "lua-mods"))]
+                let mod_heal = 1.0;
+                let mut scaled = amount * attacker_out_heal * victim_in_heal * mod_heal;
                 if let Some(status) = self.actor_statuses.get(&wire) {
                     if status
                         .anti_heal_until
@@ -88,16 +95,35 @@ impl RoomSimulation {
                 HealthEffect::Heal(scaled)
             }
             HealthEffect::Damage(amount) => {
-                let scaled = amount * attacker_out_dmg * victim_in_dmg;
+                let invulnerable = self
+                    .actor_statuses
+                    .get(&wire)
+                    .and_then(|s| s.invulnerable_until)
+                    .is_some_and(|until| source.frame < until);
+                let base_scaled = if invulnerable {
+                    0.0
+                } else {
+                    amount * attacker_out_dmg * victim_in_dmg
+                };
+                #[cfg(feature = "lua-mods")]
+                let scaled = if base_scaled > 0.0 && source.killer != 0 {
+                    self.mod_evaluate_damage(
+                        source.killer,
+                        wire,
+                        base_scaled,
+                        impact.is_some_and(|i| i.critical),
+                        impact.is_none(),
+                        -1,
+                        source.frame,
+                        now,
+                    )
+                } else {
+                    base_scaled
+                };
+                #[cfg(not(feature = "lua-mods"))]
+                let scaled = base_scaled;
                 if scaled > 0.0 {
-                    if let Some(status) = self.actor_statuses.get_mut(&wire) {
-                        if status.sleep_until.is_some_and(|until| source.frame < until) {
-                            status.sleep_until = None;
-                            if let Some(state) = self.state_mut(wire)? {
-                                state.bot.stun_for(source.frame, 0);
-                            }
-                        }
-                    }
+                    self.wake_sleeping_actor(wire, source.frame)?;
                 }
                 HealthEffect::Damage(scaled)
             }
@@ -156,6 +182,12 @@ impl RoomSimulation {
                 }
                 if killed {
                     self.record_enemy_elimination(source.killer, wire, victim_team, source.frame);
+                    #[cfg(feature = "lua-mods")]
+                    self.mod_on_kill(source.killer, wire, critical, source.frame, now);
+                }
+                #[cfg(feature = "lua-mods")]
+                if delta > 0.0 {
+                    self.mod_on_heal(source.killer, wire, delta, source.frame, now);
                 }
             }
             return Ok(Some(SettledHealth { delta, killed }));
@@ -164,6 +196,37 @@ impl RoomSimulation {
             .player_handle_for_wire(wire)
             .and_then(|id| self.player_body(id).map(|state| (id, state.team)))
         else {
+            // Also resolve live room pets and deployables (barriers, turrets, Ice Wall,
+            // Immortality Field) so beams, melee, and AoE `ModifyHealth` can damage them.
+            if let HealthEffect::Damage(amount) = effect {
+                let is_pet = self.room_pets.contains_key(&wire);
+                let is_dep = !is_pet && self.room_deployables.contains_key(&wire);
+                if is_pet || is_dep {
+                    let dealt = self.damage_barrier_or_deployable(
+                        wire,
+                        is_pet,
+                        amount,
+                        source.killer,
+                        source.frame,
+                        now,
+                    );
+                    let killed = if is_pet {
+                        self.room_pets
+                            .get(&wire)
+                            .and_then(|p| p.vitals.as_ref())
+                            .is_some_and(|v| v.death().is_some())
+                    } else {
+                        self.room_deployables
+                            .get(&wire)
+                            .and_then(|d| d.vitals.as_ref())
+                            .is_some_and(|v| v.death().is_some())
+                    };
+                    return Ok(Some(SettledHealth {
+                        delta: -dealt,
+                        killed,
+                    }));
+                }
+            }
             return Ok(None);
         };
         let mut settled = SettledHealth::default();
@@ -192,6 +255,7 @@ impl RoomSimulation {
                         );
                     }
                     if outcome.killed {
+                        self.actor_statuses.remove(&wire);
                         self.player_deaths.push(PlayerDeath {
                             owner,
                             body: id,
@@ -204,6 +268,8 @@ impl RoomSimulation {
                             victim_team,
                             source.frame,
                         );
+                        #[cfg(feature = "lua-mods")]
+                        self.mod_on_kill(source.killer, wire, critical, source.frame, now);
                     }
                 }
             }
@@ -221,6 +287,10 @@ impl RoomSimulation {
                         });
                     }
                     self.record_health_applied(source.killer, wire, healed, false, None);
+                    #[cfg(feature = "lua-mods")]
+                    if healed > 0.0 {
+                        self.mod_on_heal(source.killer, wire, healed, source.frame, now);
+                    }
                     settled.delta = healed;
                 }
             }
@@ -228,7 +298,71 @@ impl RoomSimulation {
         Ok(Some(settled))
     }
 
-    /// Apply a retail `m_277A4ECA` projectile status effect GUID to a live actor.
+    pub(super) fn actor_is_cc_immune(&self, wire: u32, tick: u32) -> bool {
+        if self.actor_combat_modifiers(wire).4 {
+            return true;
+        }
+        self.actor_statuses
+            .get(&wire)
+            .and_then(|s| s.cc_immune_until)
+            .is_some_and(|until| tick < until)
+    }
+
+    pub(super) fn wake_sleeping_actor(&mut self, wire: u32, tick: u32) -> Result<(), CombatError> {
+        let was_sleeping = self
+            .actor_statuses
+            .get_mut(&wire)
+            .and_then(|status| {
+                if status.sleep_until.is_some_and(|until| tick < until) {
+                    status.sleep_until = None;
+                    status.stunned_until = None;
+                    Some(())
+                } else {
+                    None
+                }
+            })
+            .is_some();
+        if was_sleeping {
+            if let Some(state) = self.state_mut(wire)? {
+                state.bot.clear_stun();
+            } else if let Some(id) = self.player_handle_for_wire(wire) {
+                if let Some(player) = self.player_body_mut(id) {
+                    player.mover.block_player_input(false);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn apply_actor_stun(&mut self, wire: u32, tick: u32, ticks: u32) {
+        if ticks == 0 || self.actor_is_cc_immune(wire, tick) {
+            return;
+        }
+        if let Ok(Some(state)) = self.state_mut(wire) {
+            if !state.bot.dead {
+                state.bot.stun_for(tick, ticks);
+            }
+        } else if let Some(id) = self.player_handle_for_wire(wire) {
+            if let Some(player) = self.player_body_mut(id) {
+                if player.alive() {
+                    let frame = player.mover.pose().frame.unwrap_or(player.frame);
+                    player.mover.block_player_input(true);
+                    player.mover.clear_pending_script_motion();
+                    player.mover.queue_velocity_change(
+                        frame.saturating_add(1),
+                        crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
+                    );
+                    let until = tick.saturating_add(ticks);
+                    let entry = self.actor_statuses.entry(wire).or_default();
+                    entry.stunned_until = Some(entry.stunned_until.map_or(until, |p| p.max(until)));
+                }
+            }
+        }
+    }
+
+    /// Apply a retail `m_277A4ECA` projectile status effect GUID to a live actor,
+    /// resolving authored stun/sleep/freeze durations from the loaded `GraphStore`
+    /// wrapper graphs when available instead of hardcoding hero-specific constants.
     pub(super) fn apply_projectile_status_effect(
         &mut self,
         effect_guid: u64,
@@ -237,57 +371,131 @@ impl RoomSimulation {
         is_ally: bool,
         tick: u32,
     ) {
-        const EFFECT_FLASHBANG: u64 = 0x04a0_0000_0000_0079;
-        const EFFECT_MEI_FREEZE: u64 = 0x04a0_0000_0000_0169;
-        const EFFECT_BIOTIC_NADE: u64 = 0x04a0_0000_0000_0267;
-        const EFFECT_SLEEP_DART: u64 = 0x04a0_0000_0000_026f;
-        const EFFECT_MOIRA_HOT: u64 = 0x04a0_0000_0000_02c8;
-        const EFFECT_ACCRETION: u64 = 0x04a0_0000_0000_030e;
+        enum EffectBehavior {
+            Stun {
+                wrapper_graph: u32,
+                fallback_secs: f64,
+            },
+            Sleep {
+                wrapper_graph: u32,
+                fallback_secs: f64,
+            },
+            ChillFreeze {
+                wrapper_graph: u32,
+                stacks: u8,
+                fallback_secs: f64,
+            },
+            HealModifier {
+                duration_secs: f64,
+            },
+            HoT {
+                duration_secs: f64,
+                total_heal: f64,
+            },
+        }
+        // Data-driven binding from retail 0x04A logical-effect GUID to its
+        // authored wrapper graph (`0x224E` stun/sleep/freeze override carrier)
+        // or combat-modifier / lingering HoT behavior.
+        const EFFECT_TABLE: &[(u64, EffectBehavior)] = &[
+            (
+                0x04a0_0000_0000_0079,
+                EffectBehavior::Stun {
+                    wrapper_graph: 0x0228,
+                    fallback_secs: 0.8,
+                },
+            ),
+            (
+                0x04a0_0000_0000_030e,
+                EffectBehavior::Stun {
+                    wrapper_graph: 0x1684,
+                    fallback_secs: 0.8,
+                },
+            ),
+            (
+                0x04a0_0000_0000_026f,
+                EffectBehavior::Sleep {
+                    wrapper_graph: 0x0bde,
+                    fallback_secs: 5.0,
+                },
+            ),
+            (
+                0x04a0_0000_0000_0169,
+                EffectBehavior::ChillFreeze {
+                    wrapper_graph: 0x05e7,
+                    stacks: 20,
+                    fallback_secs: 1.5,
+                },
+            ),
+            (
+                0x04a0_0000_0000_0267,
+                EffectBehavior::HealModifier { duration_secs: 4.0 },
+            ),
+            (
+                0x04a0_0000_0000_02c8,
+                EffectBehavior::HoT {
+                    duration_secs: 2.0,
+                    total_heal: 35.0,
+                },
+            ),
+        ];
 
-        let apply_stun = |sim: &mut Self, wire: u32, ticks: u32| {
-            if let Ok(Some(state)) = sim.state_mut(wire) {
-                if !state.bot.dead {
-                    state.bot.stun_for(tick, ticks);
+        let Some((_, behavior)) = EFFECT_TABLE.iter().find(|(guid, _)| *guid == effect_guid) else {
+            return;
+        };
+        let graphs = self.script_graphs.as_ref().map(|(g, _)| g.as_ref());
+        let authored_secs = |wrapper_graph: u32, fallback: f64| -> f64 {
+            graphs
+                .and_then(|store| extract_wrapper_stun_seconds(store, wrapper_graph))
+                .unwrap_or(fallback)
+        };
+        let secs_to_ticks = |secs: f64| -> u32 {
+            crate::game_combat::Stun::from_seconds(secs).map_or(1, |s| s.ticks)
+        };
+
+        match *behavior {
+            EffectBehavior::Stun {
+                wrapper_graph,
+                fallback_secs,
+            } if !is_ally => {
+                let ticks = secs_to_ticks(authored_secs(wrapper_graph, fallback_secs));
+                self.apply_actor_stun(target_wire, tick, ticks);
+            }
+            EffectBehavior::Sleep {
+                wrapper_graph,
+                fallback_secs,
+            } if !is_ally => {
+                if !self.actor_is_cc_immune(target_wire, tick) {
+                    let sleep_ticks = secs_to_ticks(authored_secs(wrapper_graph, fallback_secs));
+                    self.apply_actor_stun(target_wire, tick, sleep_ticks);
+                    self.actor_statuses
+                        .entry(target_wire)
+                        .or_default()
+                        .sleep_until = Some(tick.saturating_add(sleep_ticks));
                 }
-            } else if let Some(id) = sim.player_handle_for_wire(wire) {
-                if let Some(player) = sim.player_body_mut(id) {
-                    if player.alive() {
-                        player.mover.clear_pending_script_motion();
-                        player.mover.queue_velocity_change(
-                            tick.saturating_add(1),
-                            crate::mover::VelocityChange::SetHorizontalVelocity([0.0, 0.0]),
-                        );
+            }
+            EffectBehavior::ChillFreeze {
+                wrapper_graph,
+                stacks,
+                fallback_secs,
+            } if !is_ally => {
+                if !self.actor_is_cc_immune(target_wire, tick) {
+                    let entry = self.actor_statuses.entry(target_wire).or_default();
+                    if tick.saturating_sub(entry.chill_last_tick) > 62 {
+                        entry.chill_stacks = 0;
+                    }
+                    entry.chill_last_tick = tick;
+                    entry.chill_stacks = entry.chill_stacks.saturating_add(1);
+                    if entry.chill_stacks >= stacks {
+                        entry.chill_stacks = 0;
+                        let freeze_ticks =
+                            secs_to_ticks(authored_secs(wrapper_graph, fallback_secs));
+                        self.apply_actor_stun(target_wire, tick, freeze_ticks);
                     }
                 }
             }
-        };
-
-        match effect_guid {
-            EFFECT_FLASHBANG | EFFECT_ACCRETION if !is_ally => {
-                apply_stun(self, target_wire, 50); // 0.8s stun
-            }
-            EFFECT_SLEEP_DART if !is_ally => {
-                let sleep_ticks = 312; // 5.0s sleep
-                apply_stun(self, target_wire, sleep_ticks);
-                self.actor_statuses
-                    .entry(target_wire)
-                    .or_default()
-                    .sleep_until = Some(tick.saturating_add(sleep_ticks));
-            }
-            EFFECT_MEI_FREEZE if !is_ally => {
-                let entry = self.actor_statuses.entry(target_wire).or_default();
-                if tick.saturating_sub(entry.chill_last_tick) > 62 {
-                    entry.chill_stacks = 0;
-                }
-                entry.chill_last_tick = tick;
-                entry.chill_stacks = entry.chill_stacks.saturating_add(1);
-                if entry.chill_stacks >= 20 {
-                    entry.chill_stacks = 0;
-                    apply_stun(self, target_wire, 94); // 1.5s freeze
-                }
-            }
-            EFFECT_BIOTIC_NADE => {
-                let until = tick.saturating_add(250); // 4.0s duration
+            EffectBehavior::HealModifier { duration_secs } => {
+                let ticks = secs_to_ticks(duration_secs);
+                let until = tick.saturating_add(ticks);
                 let entry = self.actor_statuses.entry(target_wire).or_default();
                 if is_ally {
                     entry.heal_boost_until = Some(until);
@@ -295,10 +503,14 @@ impl RoomSimulation {
                     entry.anti_heal_until = Some(until);
                 }
             }
-            EFFECT_MOIRA_HOT if is_ally => {
+            EffectBehavior::HoT {
+                duration_secs,
+                total_heal,
+            } if is_ally => {
+                let ticks = secs_to_ticks(duration_secs).clamp(1, u32::from(u16::MAX)) as u16;
                 let entry = self.actor_statuses.entry(target_wire).or_default();
-                entry.hot_ticks = 125; // 2.0s lingering HoT (35 HP total)
-                entry.hot_per_tick = 35.0 / 125.0;
+                entry.hot_ticks = ticks;
+                entry.hot_per_tick = total_heal / f64::from(ticks);
                 entry.hot_source = source_wire;
             }
             _ => {}
@@ -310,6 +522,30 @@ impl RoomSimulation {
             return;
         }
         let mut heals = Vec::new();
+        let mut unstunned_players = Vec::new();
+        let mut dead_wires = Vec::new();
+        for (&wire, status) in &self.actor_statuses {
+            let alive = if let Some(&entity) = self.by_wire.get(&wire) {
+                self.world
+                    .get::<BotState>(entity)
+                    .is_some_and(|s| !s.bot.dead)
+            } else if let Some(&entity) = self.players_by_wire.get(&wire) {
+                self.world
+                    .get::<PlayerBodyState>(entity)
+                    .is_some_and(|p| p.alive())
+            } else {
+                false
+            };
+            if !alive {
+                dead_wires.push(wire);
+                if status.stunned_until.is_some() {
+                    unstunned_players.push(wire);
+                }
+            }
+        }
+        for wire in dead_wires {
+            self.actor_statuses.remove(&wire);
+        }
         self.actor_statuses.retain(|&wire, status| {
             if status.anti_heal_until.is_some_and(|until| tick >= until) {
                 status.anti_heal_until = None;
@@ -319,6 +555,19 @@ impl RoomSimulation {
             }
             if status.sleep_until.is_some_and(|until| tick >= until) {
                 status.sleep_until = None;
+            }
+            if status.stunned_until.is_some_and(|until| tick >= until) {
+                status.stunned_until = None;
+                unstunned_players.push(wire);
+            }
+            if status.hacked_until.is_some_and(|until| tick >= until) {
+                status.hacked_until = None;
+            }
+            if status.invulnerable_until.is_some_and(|until| tick >= until) {
+                status.invulnerable_until = None;
+            }
+            if status.cc_immune_until.is_some_and(|until| tick >= until) {
+                status.cc_immune_until = None;
             }
             if status.chill_stacks > 0 && tick.saturating_sub(status.chill_last_tick) > 94 {
                 status.chill_stacks = 0;
@@ -330,9 +579,20 @@ impl RoomSimulation {
             status.anti_heal_until.is_some()
                 || status.heal_boost_until.is_some()
                 || status.sleep_until.is_some()
+                || status.stunned_until.is_some()
+                || status.hacked_until.is_some()
+                || status.invulnerable_until.is_some()
+                || status.cc_immune_until.is_some()
                 || status.chill_stacks > 0
                 || status.hot_ticks > 0
         });
+        for wire in unstunned_players {
+            if let Some(id) = self.player_handle_for_wire(wire) {
+                if let Some(player) = self.player_body_mut(id) {
+                    player.mover.block_player_input(false);
+                }
+            }
+        }
         let now =
             Duration::from_secs_f64(f64::from(tick) * crate::game_clock::TICK_PERIOD.as_secs_f64());
         for (source, target, amount) in heals {
@@ -350,6 +610,48 @@ impl RoomSimulation {
             }
         }
     }
+}
+
+/// Inspect a retail effect wrapper graph (`0x0228`, `0x05E7`, `0x0BDE`, etc.) for a
+/// `STUStatescriptActionPlayScript` targeting the shared stun control graph (`0x224E`)
+/// and evaluate its authored duration override (`0x0D800000000000D7`).
+fn extract_wrapper_stun_seconds(
+    graphs: &crate::script_graph::GraphStore,
+    wrapper_graph: u32,
+) -> Option<f64> {
+    const SHARED_STUN_GUID: u64 = 0x0580_0000_0000_224e;
+    const DURATION_VAR_GUID: u64 = 0x0d80_0000_0000_00d7;
+    let graph = graphs.graph(wrapper_graph)?;
+    for node in &graph.nodes {
+        if node.class != "STUStatescriptActionPlayScript" {
+            continue;
+        }
+        let Some(spec) = node.field("m_69F4B52C.m_6525E98B") else {
+            continue;
+        };
+        if crate::script_graph::asset_guid(spec.get("m_graph")?) != Some(SHARED_STUN_GUID) {
+            continue;
+        }
+        let rows = spec.get("m_1EB5A024").and_then(|v| v.as_array())?;
+        for row in rows {
+            if crate::script_graph::asset_guid(row.get("m_0D09D2D9")?) == Some(DURATION_VAR_GUID) {
+                let val = crate::script_expr::evaluate(
+                    row.get("m_value")?,
+                    &mut crate::script_expr::EmptyContext,
+                )
+                .ok()?;
+                let secs = match val {
+                    crate::script_wire::Value::Float(v) => v,
+                    crate::script_wire::Value::Integer(v) => v as f64,
+                    _ => continue,
+                };
+                if secs.is_finite() && secs > 0.0 {
+                    return Some(secs);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

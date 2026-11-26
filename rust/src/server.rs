@@ -393,7 +393,7 @@ impl Server {
     pub fn mod_status(&self) -> Option<crate::mod_script::ModStatus> {
         self.mod_host
             .as_ref()
-            .map(|host| host.lock().expect("mod host lock").status(false))
+            .and_then(|host| host.lock().ok().map(|guard| guard.status(false)))
     }
 
     #[cfg(feature = "lua-mods")]
@@ -401,7 +401,9 @@ impl Server {
         let Some(host) = &self.mod_host else {
             return Ok(None);
         };
-        let mut guard = host.lock().expect("mod host lock");
+        let mut guard = host
+            .lock()
+            .map_err(|_| io::Error::other("mod host mutex poisoned"))?;
         guard.reload_file().map(Some)
     }
 
@@ -571,6 +573,28 @@ impl<'a> LoginLease<'a> {
             }
         }
         let channel = Value::Struct(self.channel());
+        #[cfg(feature = "lua-mods")]
+        if self.lobby.mod_host.is_some() {
+            if let Some(seat) = self.seat.as_ref() {
+                if let Ok(replies) = self.lobby.game.drain_mod_chat(seat.handoff.match_id) {
+                    if !replies.is_empty() {
+                        let ch_fields = self.channel();
+                        let active = self.lobby.active.lock().expect("lobby accounts");
+                        if let Some(sender) = active.get(&self.account.account_lo) {
+                            let member = sender.member.clone();
+                            for reply in replies {
+                                let peers =
+                                    active.values().filter(|peer| peer.channel == ch_fields);
+                                queue_chat(
+                                    peers,
+                                    lobby_chat::post(ch_fields.clone(), member.clone(), &reply, 0),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for message in self.incoming.try_iter().take(CHAT_QUEUE_LIMIT) {
             if message.2.get(&0x78) == Some(&channel) {
                 transport.send_message(schemas, &message)?;
@@ -626,40 +650,65 @@ impl Lobby {
                 );
                 #[cfg(feature = "lua-mods")]
                 if let Some(mod_host) = &self.mod_host {
-                    let ctx = crate::mod_script::ModRoomContext {
-                        tick: 0,
-                        elapsed_secs: 0.0,
-                        map_guid: 0,
-                        mode_guid: 0,
-                        player_count: active.len(),
-                    };
                     let sender_name = lease.account.profile().player_name.clone();
-                    let result = mod_host.lock().expect("mod host lock").script().on_chat(
-                        &ctx,
-                        &sender_name,
-                        text,
-                    );
-                    match result {
-                        Ok(actions) => {
-                            for action in actions {
-                                if let crate::mod_script::ModAction::BroadcastChat { text: reply } =
-                                    action
-                                {
-                                    let channel_peers =
-                                        active.values().filter(|peer| &peer.channel == channel);
-                                    queue_chat(
-                                        channel_peers,
-                                        lobby_chat::post(
-                                            channel.clone(),
-                                            sender.member.clone(),
-                                            &reply,
-                                            0,
-                                        ),
-                                    );
-                                }
+                    let sender_member = sender.member.clone();
+                    let replies: Vec<String> = if let Some(seat) = lease.seat.as_ref() {
+                        let match_id = seat.handoff.match_id;
+                        let conn = seat.handoff.conn;
+                        drop(active);
+                        let replies = self
+                            .game
+                            .dispatch_mod_chat(match_id, conn, sender_name, text.to_owned())
+                            .unwrap_or_default();
+                        if !replies.is_empty() {
+                            let active = self.active.lock().expect("lobby accounts");
+                            for reply in replies {
+                                let channel_peers =
+                                    active.values().filter(|peer| &peer.channel == channel);
+                                queue_chat(
+                                    channel_peers,
+                                    lobby_chat::post(
+                                        channel.clone(),
+                                        sender_member.clone(),
+                                        &reply,
+                                        0,
+                                    ),
+                                );
                             }
                         }
-                        Err(error) => eprintln!("[mod] on_chat error: {error}"),
+                        return Ok(true);
+                    } else {
+                        let ctx = crate::mod_script::ModRoomContext {
+                            player_count: active.len(),
+                            ..Default::default()
+                        };
+                        match mod_host
+                            .lock()
+                            .ok()
+                            .map(|guard| guard.script().on_chat(&ctx, &sender_name, text))
+                        {
+                            Some(Ok(actions)) => actions
+                                .into_iter()
+                                .filter_map(|action| match action {
+                                    crate::mod_script::ModAction::BroadcastChat { text }
+                                    | crate::mod_script::ModAction::SendChat { text, .. }
+                                    | crate::mod_script::ModAction::Announce { text } => Some(text),
+                                    _ => None,
+                                })
+                                .collect(),
+                            Some(Err(error)) => {
+                                eprintln!("[mod] on_chat error: {error}");
+                                Vec::new()
+                            }
+                            None => Vec::new(),
+                        }
+                    };
+                    for reply in replies {
+                        let channel_peers = active.values().filter(|peer| &peer.channel == channel);
+                        queue_chat(
+                            channel_peers,
+                            lobby_chat::post(channel.clone(), sender_member.clone(), &reply, 0),
+                        );
                     }
                 }
             }

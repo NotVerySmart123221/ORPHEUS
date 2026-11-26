@@ -1433,26 +1433,19 @@ impl World for EnemyWorld<'_> {
         filter: &Json,
     ) -> Option<crate::script_expr::SceneFilterPolicy> {
         use crate::script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy};
-        if site.entity != self.binding.body || !is_junkenstein_mode(self.binding.mode) {
+        if site.entity != self.binding.body {
             return None;
         }
-        let hostile = matches!(site.graph, 0x05ac | 0x01a3 | 0x157c)
-            && filter["m_66747E7D"] == 2
-            && filter
-                .get("m_89831602")
-                .is_none_or(|value| value.is_null() || value.as_u64() == Some(0));
-        let friendly = matches!(site.graph, 0x006b | 0x0071)
-            && filter["m_66747E7D"] == 1
-            && filter["m_89831602"] == 4;
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+        let hostile = team_mode == 2 && (hostile_flag == 0 || hostile_flag == 1);
+        let friendly = team_mode == 1 && matches!(hostile_flag, 0 | 4);
         if !hostile && !friendly {
             return None;
         }
         let predicate = filter
             .get("m_condition")
             .is_some_and(|value| !value.is_null());
-        if hostile && predicate && site.graph != 0x01a3 {
-            return None;
-        }
         for key in ["m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"] {
             if filter.get(key).is_some_and(|value| {
                 !value.is_null() && crate::script_expr::target_tag_config(value).is_none()
@@ -1545,17 +1538,15 @@ impl World for EnemyWorld<'_> {
     }
 
     fn native(&mut self, site: Site, config: &Json) -> Option<Value> {
-        if self.binding.hero == SUMMONER
-            && (site.entity, site.graph, site.node) == (self.binding.body, 0x157c, Some(48))
+        if site.entity == self.binding.body
             && crate::script_expr::native_fields(config, &["m_entity", "m_filter"])
             && config["$"] == "STU_AC829876"
-            && config["m_filter"]["m_84065FD1"] == 64
-            && crate::script_expr::dynamic(&config["m_entity"])
-                .ok()
-                .flatten()
-                .is_some_and(|target| target.id == 536)
+            && config["m_filter"]
+                .get("m_84065FD1")
+                .and_then(Json::as_u64)
+                .is_some_and(|mask| mask & 0x40 != 0)
         {
-            // The beam can only acquire defenders, which have no world-object mask bit 0x40.
+            // World-object mask bit 0x40 is absent on living actor bodies.
             return Some(Value::Bool(false));
         }
         if (site.entity, site.graph, site.node) == (self.binding.body, 0x0079, Some(0))

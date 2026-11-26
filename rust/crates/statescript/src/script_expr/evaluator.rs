@@ -705,7 +705,83 @@ impl Evaluator {
             }
             "STUConfigVarBool" => Value::Bool(json_truthy(value)),
             "STUConfigVarInt" => Value::Integer(i64::from(integer(value)? as i32)),
+            "STUConfigVarUInt" => Value::Integer(integer(value)?),
             "STUConfigVarFloat" => Value::Float(rounded(number(value)?)),
+            "STUConfigVarHero" => Value::Asset(resource(child(config, "m_hero")).unwrap_or(0)),
+            "STUConfigVarMap" => Value::Asset(resource(child(config, "m_map")).unwrap_or(0)),
+            "STUConfigVarModelLook" => {
+                Value::Asset(resource(child(config, "m_modelLook")).unwrap_or(0))
+            }
+            "STUConfigVarSkinTheme" => {
+                Value::Asset(resource(child(config, "m_skinTheme")).unwrap_or(0))
+            }
+            "STUConfigVarStat" => Value::Asset(resource(child(config, "m_stat")).unwrap_or(0)),
+            "STUConfigVarGamePadVibration" => {
+                Value::Asset(resource(child(config, "m_vibration")).unwrap_or(0))
+            }
+            "STUConfigVarCelebration" => {
+                Value::Asset(resource(child(config, "m_celebration")).unwrap_or(0))
+            }
+            "STUConfigVarGameRuleset" => Value::Asset(
+                resource(child(config, "m_gameRuleset"))
+                    .or_else(|| resource(child(config, "m_ruleset")))
+                    .unwrap_or(0),
+            ),
+            "STUConfigVarResourceKey" => {
+                Value::Asset(resource(child(config, "m_resourceKey")).unwrap_or(0))
+            }
+            "STUConfigVarGetLootBoxAsset" => Value::Asset(
+                resource(child(config, "m_lootBox"))
+                    .or_else(|| resource(child(config, "m_asset")))
+                    .unwrap_or(0),
+            ),
+            "STUConfigVarGetGameModeName" => {
+                let gm = child(config, "m_gamemode");
+                if gm.is_object() {
+                    self.config(gm, context, nested)?
+                } else {
+                    Value::Asset(resource(gm).unwrap_or(0))
+                }
+            }
+            "STUConfigVarEntityReference" => {
+                let target = child(config, "m_entity");
+                if !target.is_null() {
+                    self.scalar_config(target, context, nested, Value::Entity(0))?
+                } else if !value.is_null() {
+                    self.scalar_config(value, context, nested, Value::Entity(0))?
+                } else {
+                    Value::Entity(0)
+                }
+            }
+            "STUConfigVarColor" => {
+                let r = value.get("R").and_then(Json::as_f64).unwrap_or(0.0);
+                let g = value.get("G").and_then(Json::as_f64).unwrap_or(0.0);
+                let b = value.get("B").and_then(Json::as_f64).unwrap_or(0.0);
+                Value::Vector([rounded(r), rounded(g), rounded(b)])
+            }
+            // Blink / teleport effect descriptor (`STUStatescriptStateBlinkEffect`):
+            // holds `m_58D56DD4` (`STUConfigVarEffect`) and optional `m_3E3E203A` (owner entity).
+            "STU_B8F4347B" => {
+                let eff = child(config, "m_58D56DD4");
+                if !eff.is_null() {
+                    self.config(eff, context, nested)?
+                } else {
+                    Value::Asset(0)
+                }
+            }
+            // Entity collision/capsule radius query (`STU_F7FD94F9(m_A83C2C26)`).
+            // Used in Reinhardt Charge/Pin (`pos + fwd * (r_self + r_target)`) and melee reach math.
+            "STU_F7FD94F9" => {
+                let entity = self.scalar_config(
+                    child(config, "m_A83C2C26"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let valid =
+                    matches!(first_scalar(&entity), Some(Value::Entity(e)) if valid_entity(*e));
+                Value::Float(if valid { 0.55 } else { 0.0 })
+            }
             "STU_BD2D717B" if native_shape(config, class, Some("m_B257A3A4")) => {
                 Value::Bool(integer(child(config, "m_B257A3A4"))? != 0)
             }

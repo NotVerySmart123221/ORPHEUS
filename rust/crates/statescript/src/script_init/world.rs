@@ -112,12 +112,21 @@ impl Relocation {
             .then_some(Self { destination })
     }
 
-    /// Keep the requested feet coordinates; share the swept motion distance bound.
+    /// Keep the requested feet coordinates; only finite displacements within the
+    /// swept-motion reach bound are admissible for `ScriptedMotion::Relocate`.
     pub fn destination_from(self, origin: [f64; 3]) -> Option<[f64; 3]> {
-        SweptDisplacement::new(std::array::from_fn(|axis| {
-            self.destination[axis] - origin[axis]
-        }))?;
-        Some(self.destination)
+        let delta = std::array::from_fn(|axis| self.destination[axis] - origin[axis]);
+        SweptDisplacement::new(delta).map(|_| self.destination)
+    }
+
+    /// Long-range teleport destination (Reaper Shadow Step, Sombra Translocator,
+    /// Symmetra Teleporter, Tracer Recall, Lua Mods) without the 32m cap.
+    pub fn teleport_destination(self) -> Option<[f64; 3]> {
+        const MAX_AXIS: f64 = 4096.0;
+        self.destination
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_AXIS)
+            .then_some(self.destination)
     }
 }
 
@@ -126,6 +135,7 @@ impl Relocation {
 pub enum ScriptedMotion {
     Sweep(SweptDisplacement),
     Relocate(Relocation),
+    Teleport(Relocation),
 }
 
 /// A bounded, typed message evaluated by the sending StateScript VM.
@@ -678,6 +688,7 @@ pub trait World {
         _targets: &[u32],
         _effect: u64,
         _param: Option<f64>,
+        _elapsed_ms: u64,
     ) -> bool {
         false
     }
@@ -691,6 +702,17 @@ pub trait World {
     }
 
     fn set_ball_roll_state(&mut self, _site: Site, _active: bool, _max_speed: f64) -> bool {
+        false
+    }
+
+    fn apply_physics_explosion(
+        &mut self,
+        _site: Site,
+        _center: [f64; 3],
+        _radius: f64,
+        _impulse: f64,
+        _direction: Option<[f64; 3]>,
+    ) -> bool {
         false
     }
 
@@ -735,6 +757,7 @@ pub trait World {
     ) -> bool {
         false
     }
+    #[allow(clippy::too_many_arguments)]
     fn cone_targets(
         &self,
         _site: Site,
@@ -748,6 +771,7 @@ pub trait World {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn cone_targets_with_cylinder(
         &self,
         site: Site,

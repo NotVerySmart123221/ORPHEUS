@@ -897,7 +897,7 @@ fn roll_velocity_bridge_preserves_sampled_delta_and_rejects_foreign_owners() {
     assert!(
         !runtime
             .world
-            .edit_velocity(site, 10, Value::Float(5.5), true)
+            .edit_velocity(site, 10, Value::Float(-1.0), true)
     );
     let cap = Site {
         node: Some(17),
@@ -3860,6 +3860,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             frame: FIRST_TICK,
             wheel_delivery_frame: FIRST_TICK,
             charge_binding: None,
+            ult_charge_scale: 1.0,
         };
         assert_eq!(
             runtime.wheel_actions_available(),
@@ -3967,7 +3968,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             let codecs = CodecTable::load(root.join("data/statescript_codecs_174.json")).unwrap();
             let encoder = SnapshotEncoder::new(&graphs, &codecs);
             let before =
-                [View::Owner, View::Observer].map(|view| encoder.project(&snapshot, view).unwrap());
+                [View::Owner, View::Observer].map(|view| encoder.project(snapshot, view).unwrap());
             runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
                 sprays: [0, 0, 0x0250_0000_0000_0009, 0],
                 ..Default::default()
@@ -4045,7 +4046,7 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
                 stream.create_arrived();
                 let base = encoder.queue_full(&mut stream, &previous).unwrap();
                 assert!(stream.arrived(base.last).advanced);
-                let next = encoder.project_next(&snapshot, &previous).unwrap();
+                let next = encoder.project_next(snapshot, &previous).unwrap();
                 let kind = match previous.view() {
                     View::Owner => {
                         DeltaKind::InitialOwner((snapshot.now_ms / FRAME_MS).try_into().unwrap())

@@ -306,10 +306,13 @@ pub(super) struct Machine {
     pub(super) code_pending: [Vec<u64>; 2],
     pub(super) code_observers: Vec<(u64, Option<u64>)>,
     pub(super) snapshot: Snapshot,
+    pub(super) snapshot_dirty: bool,
     pub(super) registered: IndexMap<StateKey, RegisteredState>,
     pub(super) queues: Timeline<Event>,
     pub(super) watchers: BTreeMap<VarKey, Vec<StateKey>>,
+    pub(super) state_watches: BTreeMap<StateKey, Vec<VarKey>>,
     pub(super) foreign_watchers: BTreeMap<(u32, u32), Vec<StateKey>>,
+    pub(super) state_foreign_watches: BTreeMap<StateKey, Vec<(u32, u32)>>,
     pub(super) ticking: BTreeMap<u16, IndexMap<u16, u64>>,
     pub(super) actor_target_guards: BTreeMap<u16, ActorTargetGuard>,
     pub(super) deferred: BTreeMap<u16, Vec<(f64, u16)>>,
@@ -336,6 +339,7 @@ pub(super) struct Machine {
     pub(super) logical_buttons_need_resync: bool,
     pub(super) control_blocked: bool,
     pub(super) disabled_start_entries: HashSet<(u16, u16)>,
+    pub(super) cooldown_scale: f64,
 }
 
 impl Clone for Machine {
@@ -346,10 +350,13 @@ impl Clone for Machine {
             code_pending: self.code_pending.clone(),
             code_observers: self.code_observers.clone(),
             snapshot: self.snapshot.clone(),
+            snapshot_dirty: self.snapshot_dirty,
             registered: self.registered.clone(),
             queues: self.queues.clone(),
             watchers: self.watchers.clone(),
+            state_watches: self.state_watches.clone(),
             foreign_watchers: self.foreign_watchers.clone(),
+            state_foreign_watches: self.state_foreign_watches.clone(),
             ticking: self.ticking.clone(),
             actor_target_guards: self.actor_target_guards.clone(),
             deferred: self.deferred.clone(),
@@ -376,6 +383,7 @@ impl Clone for Machine {
             logical_buttons_need_resync: self.logical_buttons_need_resync,
             control_blocked: self.control_blocked,
             disabled_start_entries: self.disabled_start_entries.clone(),
+            cooldown_scale: self.cooldown_scale,
         }
     }
 }
@@ -422,6 +430,7 @@ impl Machine {
             snapshot: Snapshot {
                 entity,
                 now_ms: frame_start(frame),
+                revision: 1,
                 variables,
                 instances: IndexMap::new(),
                 pending_timers: IndexMap::new(),
@@ -432,10 +441,13 @@ impl Machine {
                 #[cfg(feature = "node-observations")]
                 node_observations: Default::default(),
             },
+            snapshot_dirty: true,
             queues: Timeline::new(MAX_PENDING_EVENTS),
             registered: IndexMap::new(),
             watchers: BTreeMap::new(),
+            state_watches: BTreeMap::new(),
             foreign_watchers: BTreeMap::new(),
+            state_foreign_watches: BTreeMap::new(),
             ticking: BTreeMap::new(),
             actor_target_guards: BTreeMap::new(),
             deferred: BTreeMap::new(),
@@ -462,6 +474,7 @@ impl Machine {
             logical_buttons_need_resync: false,
             control_blocked: false,
             disabled_start_entries: HashSet::new(),
+            cooldown_scale: 1.0,
             public_schemas: false,
         })
     }
@@ -522,8 +535,8 @@ impl Machine {
                 self.snapshot.pending_timers.insert(id, timers);
             }
         }
-        self.snapshot.bindings.clear();
-        self.snapshot.resolved_bindings.clear();
+        let mut next_bindings = IndexMap::with_capacity(self.links.len());
+        let mut next_resolved = IndexMap::with_capacity(self.links.len());
         for (&variable, entries) in &self.links {
             let key = match variable {
                 VarKey::Entity(id) => (0, id),
@@ -541,10 +554,18 @@ impl Machine {
                 })
                 .collect();
             if !bindings.is_empty() {
-                self.snapshot.bindings.insert(key, bindings);
+                next_bindings.insert(key, bindings);
             }
             let resolved = self.link_value(top);
-            self.snapshot.resolved_bindings.insert(key, resolved);
+            next_resolved.insert(key, resolved);
+        }
+        let links_changed = self.snapshot.bindings != next_bindings
+            || self.snapshot.resolved_bindings != next_resolved;
+        self.snapshot.bindings = next_bindings;
+        self.snapshot.resolved_bindings = next_resolved;
+        if self.snapshot_dirty || links_changed {
+            self.snapshot.revision = self.snapshot.revision.wrapping_add(1).max(1);
+            self.snapshot_dirty = false;
         }
     }
 

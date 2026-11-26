@@ -11,6 +11,7 @@ use std::{
 };
 
 use bevy_ecs::entity::Entity;
+use indexmap::IndexMap;
 use serde_json::Value as Json;
 
 use super::{RoomScriptRequest, RoomScriptRequests, RoomSimulation, RoomSpatialFrame, Stun, Vec3};
@@ -21,7 +22,8 @@ use crate::{
     script_expr::{self, EmptyContext, EntityRelation, SpatialCandidate, valid_entity},
     script_graph::{GraphStore, asset_guid, graph_asset_index},
     script_init::{
-        Component, MAX_INIT_WORK, PlayScript, RoomMessage, Root, Site, World as ScriptWorld,
+        Component, MAX_INIT_WORK, PlayScript, ReportedShot, RoomMessage, Root, Site,
+        World as ScriptWorld,
     },
     script_wire::{Value, Variables},
     vitals::{Death, Vitals},
@@ -36,8 +38,8 @@ const FIRST_SERVER_PROJECTILE_WIRE: u32 = 0xc018_0000;
 const SERVER_PROJECTILE_WIRE_SPAN: u32 = 0x0008_0000;
 const KEEP_MOVEMENT_ROTATION: u32 = 0x0100_0000;
 const MAX_DEPLOYABLES_PER_OWNER: usize = 16;
-const SCRIPTLESS_DEPLOYABLE_TICKS: u32 = 62 * 15; // 15s default lifetime when no script expires it
-const SCRIPTED_DEPLOYABLE_MAX_TICKS: u32 = 62 * 30; // 30s safety cap for scripted deployables
+const SCRIPTLESS_DEPLOYABLE_TICKS: u32 = 62 * 20; // 20s default lifetime when no script expires it
+const SCRIPTED_DEPLOYABLE_MAX_TICKS: u32 = 62 * 600; // 10m safety cap so permanent deployables stay active until destroyed/replaced
 const SHARED_STUN_GRAPH: u32 = 0x224e;
 const STUN_DURATION_VAR: u64 = 0x0d80_0000_0000_00d7;
 
@@ -106,6 +108,7 @@ pub(super) struct RoomPet {
     #[allow(dead_code)]
     pub(super) definition: u64,
     pub(super) attach: Option<u32>,
+    pub(super) local_offset: Option<Vec3>,
     pub(super) position: Vec3,
     pub(super) yaw: i32,
     pub(super) vitals: Option<Vitals>,
@@ -385,7 +388,7 @@ impl ScriptWorld for DeployableWorld {
         let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
         let relation = match (team_mode, hostile_flag) {
             (1, 0) => Some(FilterRelation::Friendly),
-            (2, 0) | (0, 1) => Some(FilterRelation::Hostile),
+            (2, _) | (_, 1) => Some(FilterRelation::Hostile),
             (0, 0) => Some(FilterRelation::Any),
             _ => None,
         }?;
@@ -412,7 +415,9 @@ impl ScriptWorld for DeployableWorld {
             return None;
         }
         let frame = self.spatial_frame.as_deref()?;
-        let base = if origin == self.entity {
+        let base = if origin == 0 {
+            [0.0; 3]
+        } else if origin == self.entity {
             self.position
         } else {
             frame
@@ -429,7 +434,7 @@ impl ScriptWorld for DeployableWorld {
         let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
         let relation = match (team_mode, hostile_flag) {
             (1, 0) => 1u64,
-            (2, 0) | (0, 1) => 2u64,
+            (2, _) | (_, 1) => 2u64,
             _ => 0u64,
         };
         let mut hits = Vec::new();
@@ -523,6 +528,201 @@ impl ScriptWorld for DeployableWorld {
         }
         self.graphs.is_client_only_graph(request.graph)
             || self.graphs.graph(request.graph).is_some()
+    }
+
+    fn forward(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            if let Some(frame) = self.spatial_frame.as_deref() {
+                if let Some(target) = frame.candidates().iter().find(|c| {
+                    c.entity != self.entity && c.entity != self.owner && c.team != Some(self.team)
+                }) {
+                    let dx = target.position[0] - self.position[0];
+                    let dy = (target.position[1] + 1.0) - (self.position[1] + 0.8);
+                    let dz = target.position[2] - self.position[2];
+                    let len = dx.hypot(dy).hypot(dz);
+                    if len > 1e-4 {
+                        return Some([dx / len, dy / len, dz / len]);
+                    }
+                }
+            }
+            return Some([0.0, 0.0, 1.0]);
+        }
+        let (_, [yaw, _]) = self.spatial_frame.as_deref()?.actor_pose(entity)?;
+        let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
+        let (sin, cos) = rad.sin_cos();
+        Some([sin, 0.0, cos])
+    }
+
+    fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
+        self.forward(entity)
+    }
+
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return Some([self.position[0], self.position[1] + 0.8, self.position[2]]);
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
+    }
+
+    fn body_health(
+        &self,
+        site: Site,
+        pool: Option<crate::vitals::PoolKind>,
+        maximum: bool,
+    ) -> Option<f64> {
+        self.spatial_frame
+            .as_deref()?
+            .actor_health(site.entity, pool, maximum)
+    }
+
+    fn spatial_ray_cast(
+        &self,
+        site: Site,
+        frame: u32,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.spatial_frame
+            .as_deref()?
+            .ray_cast(site, frame, origin, direction, max_distance)
+    }
+
+    fn cone_targets(
+        &self,
+        site: Site,
+        origin_entity: u32,
+        offset: [f64; 3],
+        range: f64,
+        half_angle_deg: f64,
+        visible: bool,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        if site.entity != self.entity || !range.is_finite() || range <= 0.0 {
+            return None;
+        }
+        let frame = self.spatial_frame.as_deref()?;
+        let base = if origin_entity == 0 {
+            [0.0; 3]
+        } else if origin_entity == self.entity {
+            self.position
+        } else {
+            frame
+                .actor_pose(origin_entity)
+                .map(|(p, _)| p)
+                .unwrap_or(self.position)
+        };
+        let origin = [
+            base[0] + offset[0],
+            base[1] + offset[1],
+            base[2] + offset[2],
+        ];
+        let direction = self.forward(self.entity).unwrap_or([0.0, 0.0, 1.0]);
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+        let min_dot = half_angle_deg.clamp(0.0, 180.0).to_radians().cos();
+        let mut hits = Vec::new();
+        for c in frame.candidates() {
+            if c.entity == self.entity {
+                continue;
+            }
+            let team_ok = match (team_mode, hostile_flag) {
+                (1, 0) => c.team == Some(self.team),
+                (2, _) | (_, 1) => c.team != Some(self.team),
+                _ => true,
+            };
+            if !team_ok {
+                continue;
+            }
+            let dx = c.position[0] - origin[0];
+            let dy = (c.position[1] + 1.0) - origin[1];
+            let dz = c.position[2] - origin[2];
+            let dist = dx.hypot(dy).hypot(dz);
+            if dist <= range && dist > 1e-5 {
+                let dir = [dx / dist, dy / dist, dz / dist];
+                let dot = dir[0] * direction[0] + dir[1] * direction[1] + dir[2] * direction[2];
+                if dot >= min_dot {
+                    if visible {
+                        if let Some(Some(hit)) = frame.ray_cast(site, self.tick, origin, dir, dist)
+                        {
+                            if hit.distance + 0.35 < dist {
+                                continue;
+                            }
+                        }
+                    }
+                    hits.push((dist, c.entity));
+                }
+            }
+        }
+        hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Some(hits.into_iter().map(|(_, e)| e).collect())
+    }
+
+    fn generic_beam_contact(
+        &self,
+        site: Site,
+        origin: Option<[f64; 3]>,
+        direction: Option<[f64; 3]>,
+        length: Option<f64>,
+        radius: f64,
+        filter: &Json,
+    ) -> Option<crate::script_init::GenericBeamContact> {
+        if site.entity != self.entity {
+            return None;
+        }
+        let Some(frame) = self.spatial_frame.as_deref() else {
+            return Some(crate::script_init::GenericBeamContact::default());
+        };
+        let origin = origin.unwrap_or([self.position[0], self.position[1] + 0.8, self.position[2]]);
+        let direction = direction
+            .or_else(|| self.forward(self.entity))
+            .unwrap_or([0.0, 0.0, 1.0]);
+        let reach = length.filter(|l| l.is_finite() && *l > 0.0).unwrap_or(15.0);
+        let radius = if radius.is_finite() && radius > 0.0 {
+            radius
+        } else {
+            0.0
+        };
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+        let candidates: Vec<u32> = frame
+            .candidates()
+            .iter()
+            .filter(|c| c.entity != self.entity && c.entity != self.owner)
+            .filter(|c| match (team_mode, hostile_flag) {
+                (1, 0) => c.team == Some(self.team),
+                (2, _) | (_, 1) => c.team != Some(self.team),
+                _ => c.team != Some(self.team),
+            })
+            .map(|c| c.entity)
+            .collect();
+        let actor_hit = frame
+            .actor_beam_cast(
+                site,
+                self.tick,
+                origin,
+                direction,
+                reach,
+                radius,
+                &candidates,
+            )
+            .flatten();
+        if let Some(hit) = actor_hit {
+            let point = [
+                origin[0] + direction[0] * hit.distance,
+                origin[1] + direction[1] * hit.distance,
+                origin[2] + direction[2] * hit.distance,
+            ];
+            Some(crate::script_init::GenericBeamContact {
+                entity: Some(hit.entity),
+                hit: true,
+                point: Some(point),
+                normal: Some(hit.normal),
+                distance: Some(hit.distance),
+            })
+        } else {
+            Some(crate::script_init::GenericBeamContact::default())
+        }
     }
 
     fn native(&mut self, site: Site, config: &Json) -> Option<Value> {
@@ -654,6 +854,7 @@ impl RoomSimulation {
                 team,
                 definition,
                 attach,
+                local_offset,
                 position,
                 yaw,
                 vitals,
@@ -667,6 +868,7 @@ impl RoomSimulation {
     pub(super) fn despawn_room_pet(&mut self, pet_id: u32) {
         if let Some(pet) = self.room_pets.shift_remove(&pet_id) {
             let _ = self.world.despawn(pet.ecs_entity);
+            Arc::make_mut(&mut self.retired_entity_ids).insert(pet_id);
             self.retired_enemies.push(pet_id);
         }
     }
@@ -690,6 +892,7 @@ impl RoomSimulation {
         for id in dead_deployables {
             if let Some(dep) = self.room_deployables.shift_remove(&id) {
                 let _ = self.world.despawn(dep.ecs_entity);
+                Arc::make_mut(&mut self.retired_entity_ids).insert(id);
                 self.retired_enemies.push(id);
             }
         }
@@ -779,6 +982,219 @@ impl RoomSimulation {
         self.created.push(update);
     }
 
+    pub(super) fn transfer_owner_pets_and_deployables(&mut self, old_owner: u32, new_owner: u32) {
+        for pet in self.room_pets.values_mut() {
+            if pet.owner == old_owner {
+                pet.owner = new_owner;
+            }
+            if pet.attach == Some(old_owner) {
+                pet.attach = Some(new_owner);
+            }
+        }
+        for dep in self.room_deployables.values_mut() {
+            if dep.owner == old_owner {
+                dep.owner = new_owner;
+            }
+        }
+    }
+
+    pub(super) fn probe_barrier_ray(
+        &self,
+        attacker_team: Option<u8>,
+        ffa: bool,
+        origin: Vec3,
+        direction: Vec3,
+        max_dist: f64,
+    ) -> Option<(u32, bool, f64, Vec3)> {
+        Self::probe_barrier_ray_in(
+            &self.room_pets,
+            &self.room_deployables,
+            attacker_team,
+            ffa,
+            origin,
+            direction,
+            max_dist,
+        )
+    }
+
+    pub(super) fn probe_barrier_ray_in(
+        room_pets: &IndexMap<u32, RoomPet>,
+        room_deployables: &IndexMap<u32, RoomDeployable>,
+        attacker_team: Option<u8>,
+        ffa: bool,
+        origin: Vec3,
+        direction: Vec3,
+        max_dist: f64,
+    ) -> Option<(u32, bool, f64, Vec3)> {
+        if max_dist <= 0.0 || !max_dist.is_finite() {
+            return None;
+        }
+        let mut best: Option<(u32, bool, f64, Vec3)> = None;
+        for (&wire, pet) in room_pets {
+            let Some(vitals) = pet.vitals.as_ref() else {
+                continue;
+            };
+            if vitals.death().is_some() {
+                continue;
+            }
+            if !ffa && attacker_team == Some(pet.team) {
+                continue;
+            }
+            let hit = if pet.attach.is_some() && vitals.maximum() >= 200.0 {
+                // Oriented barrier panel in front of the owner (e.g. Reinhardt / Brigitte shields).
+                let yaw = f64::from(pet.yaw) * std::f64::consts::TAU / 65_536.0;
+                let (sin_y, cos_y) = yaw.sin_cos();
+                let fwd = [sin_y, 0.0, cos_y];
+                let right = [cos_y, 0.0, -sin_y];
+                let offset = pet.local_offset.unwrap_or([0.0, 1.15, 1.1]);
+                let fwd_dist = offset[2].max(0.85);
+                let center = [
+                    pet.position[0] + right[0] * offset[0] + fwd[0] * fwd_dist,
+                    pet.position[1] + offset[1],
+                    pet.position[2] + right[2] * offset[0] + fwd[2] * fwd_dist,
+                ];
+                let (half_w, half_h) = if vitals.maximum() >= 800.0 {
+                    (2.8, 1.65)
+                } else {
+                    (0.95, 1.15)
+                };
+                let denom = direction[0] * fwd[0] + direction[2] * fwd[2];
+                if denom.abs() > 1e-5 {
+                    let t = ((center[0] - origin[0]) * fwd[0] + (center[2] - origin[2]) * fwd[2])
+                        / denom;
+                    if t >= 0.0 && t <= max_dist {
+                        let p = [
+                            origin[0] + direction[0] * t,
+                            origin[1] + direction[1] * t,
+                            origin[2] + direction[2] * t,
+                        ];
+                        let dx = p[0] - center[0];
+                        let dy = p[1] - center[1];
+                        let dz = p[2] - center[2];
+                        let along_r = dx * right[0] + dz * right[2];
+                        if along_r.abs() <= half_w && dy.abs() <= half_h {
+                            let normal = if denom < 0.0 {
+                                fwd
+                            } else {
+                                [-fwd[0], 0.0, -fwd[2]]
+                            };
+                            Some((t, normal))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                let (radius, height): (f64, f64) = if vitals.maximum() >= 250.0 {
+                    (1.9, 2.5)
+                } else {
+                    (0.65, 1.4)
+                };
+                let bottom = [
+                    pet.position[0],
+                    pet.position[1] + radius.min(0.6),
+                    pet.position[2],
+                ];
+                let top = [pet.position[0], pet.position[1] + height, pet.position[2]];
+                crate::static_ray::capsule_entry_distance(
+                    origin, direction, max_dist, bottom, top, radius,
+                )
+                .map(|dist| {
+                    let hit_pt = crate::static_ray::along(origin, direction, dist);
+                    let nx = hit_pt[0] - pet.position[0];
+                    let nz = hit_pt[2] - pet.position[2];
+                    let nlen = nx.hypot(nz).max(1e-5);
+                    (dist, [nx / nlen, 0.0, nz / nlen])
+                })
+            };
+            if let Some((dist, normal)) = hit {
+                if best.is_none_or(|(_, _, prev, _)| dist < prev) {
+                    best = Some((wire, true, dist, normal));
+                }
+            }
+        }
+        for (&wire, dep) in room_deployables {
+            let Some(vitals) = dep.vitals.as_ref() else {
+                continue;
+            };
+            if vitals.death().is_some() {
+                continue;
+            }
+            if !ffa && attacker_team == Some(dep.team) {
+                continue;
+            }
+            let (radius, height) = if vitals.maximum() >= 250.0 {
+                (1.6, 2.3)
+            } else {
+                (0.55, 1.1)
+            };
+            let bottom = [dep.position[0], dep.position[1] + 0.3, dep.position[2]];
+            let top = [dep.position[0], dep.position[1] + height, dep.position[2]];
+            if let Some(dist) = crate::static_ray::capsule_entry_distance(
+                origin, direction, max_dist, bottom, top, radius,
+            ) {
+                if best.is_none_or(|(_, _, prev, _)| dist < prev) {
+                    let hit_pt = crate::static_ray::along(origin, direction, dist);
+                    let nx = hit_pt[0] - dep.position[0];
+                    let nz = hit_pt[2] - dep.position[2];
+                    let nlen = nx.hypot(nz).max(1e-5);
+                    best = Some((wire, false, dist, [nx / nlen, 0.0, nz / nlen]));
+                }
+            }
+        }
+        best
+    }
+
+    pub(super) fn damage_barrier_or_deployable(
+        &mut self,
+        wire: u32,
+        is_pet: bool,
+        damage: f64,
+        source: u32,
+        tick: u32,
+        now: Duration,
+    ) -> f64 {
+        if damage <= 0.0 || !damage.is_finite() {
+            return 0.0;
+        }
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: source,
+        };
+        let vitals_opt = if is_pet {
+            self.room_pets
+                .get_mut(&wire)
+                .and_then(|pet| pet.vitals.as_mut())
+        } else {
+            self.room_deployables
+                .get_mut(&wire)
+                .and_then(|dep| dep.vitals.as_mut())
+        };
+        let Some(vitals) = vitals_opt else {
+            return 0.0;
+        };
+        if vitals.death().is_some() {
+            return 0.0;
+        }
+        let outcome = vitals.damage(damage, death);
+        if outcome.dealt > 0.0 || outcome.killed {
+            let comp = vitals.component();
+            vitals.clear_changed();
+            self.scripted_health.push(EntityUpdate {
+                entity: wire,
+                operation: Some(Operation::Update(vec![comp])),
+                ..EntityUpdate::default()
+            });
+        }
+        outcome.dealt
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn intercept_barrier_ray(
         &mut self,
         attacker_team: Option<u8>,
@@ -791,93 +1207,9 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) -> Option<(u32, f64)> {
-        if max_dist <= 0.0 || !max_dist.is_finite() {
-            return None;
-        }
-        let mut best: Option<(u32, bool, f64)> = None;
-        for (&wire, pet) in &self.room_pets {
-            let Some(vitals) = pet.vitals.as_ref() else {
-                continue;
-            };
-            if vitals.death().is_some() {
-                continue;
-            }
-            if !ffa && attacker_team == Some(pet.team) {
-                continue;
-            }
-            let (radius, height): (f64, f64) = if vitals.maximum() >= 250.0 {
-                (1.65, 2.4)
-            } else {
-                (0.65, 1.4)
-            };
-            let bottom = [
-                pet.position[0],
-                pet.position[1] + radius.min(0.6),
-                pet.position[2],
-            ];
-            let top = [pet.position[0], pet.position[1] + height, pet.position[2]];
-            if let Some(dist) = crate::static_ray::capsule_entry_distance(
-                origin, direction, max_dist, bottom, top, radius,
-            ) {
-                if best.is_none_or(|(_, _, prev)| dist < prev) {
-                    best = Some((wire, true, dist));
-                }
-            }
-        }
-        for (&wire, dep) in &self.room_deployables {
-            let Some(vitals) = dep.vitals.as_ref() else {
-                continue;
-            };
-            if vitals.death().is_some() {
-                continue;
-            }
-            if !ffa && attacker_team == Some(dep.team) {
-                continue;
-            }
-            let (radius, height) = if vitals.maximum() >= 250.0 {
-                (1.4, 2.2)
-            } else {
-                (0.55, 1.1)
-            };
-            let bottom = [dep.position[0], dep.position[1] + 0.3, dep.position[2]];
-            let top = [dep.position[0], dep.position[1] + height, dep.position[2]];
-            if let Some(dist) = crate::static_ray::capsule_entry_distance(
-                origin, direction, max_dist, bottom, top, radius,
-            ) {
-                if best.is_none_or(|(_, _, prev)| dist < prev) {
-                    best = Some((wire, false, dist));
-                }
-            }
-        }
-        let (wire, is_pet, dist) = best?;
-        if damage > 0.0 {
-            let death = Death {
-                time: now.as_secs_f64(),
-                frame: tick,
-                killer: source,
-            };
-            if is_pet {
-                if let Some(pet) = self.room_pets.get_mut(&wire) {
-                    if let Some(vitals) = pet.vitals.as_mut() {
-                        vitals.damage(damage, death);
-                        self.scripted_health.push(EntityUpdate {
-                            entity: wire,
-                            operation: Some(Operation::Update(vec![vitals.component()])),
-                            ..EntityUpdate::default()
-                        });
-                    }
-                }
-            } else if let Some(dep) = self.room_deployables.get_mut(&wire) {
-                if let Some(vitals) = dep.vitals.as_mut() {
-                    vitals.damage(damage, death);
-                    self.scripted_health.push(EntityUpdate {
-                        entity: wire,
-                        operation: Some(Operation::Update(vec![vitals.component()])),
-                        ..EntityUpdate::default()
-                    });
-                }
-            }
-        }
+        let (wire, is_pet, dist, _) =
+            self.probe_barrier_ray(attacker_team, ffa, origin, direction, max_dist)?;
+        self.damage_barrier_or_deployable(wire, is_pet, damage, source, tick, now);
         Some((wire, dist))
     }
 
@@ -911,6 +1243,10 @@ impl RoomSimulation {
                     world.spatial_frame = frame.clone();
                     if component.advance_unposed(tick, false, world).is_err() {
                         pet.component = None;
+                    } else if let Some(shots) = component.take_reported_shots() {
+                        if !shots.is_empty() {
+                            queue_deployable_volley_hits(component, world, &shots, tick);
+                        }
                     }
                 }
                 if let Some(vitals) = pet.vitals.as_mut() {
@@ -944,6 +1280,10 @@ impl RoomSimulation {
                 world.spatial_frame = frame.clone();
                 if component.advance_unposed(tick, false, world).is_err() {
                     deployable.component = None;
+                } else if let Some(shots) = component.take_reported_shots() {
+                    if !shots.is_empty() {
+                        queue_deployable_volley_hits(component, world, &shots, tick);
+                    }
                 }
             }
             if let Some(vitals) = deployable.vitals.as_mut() {
@@ -963,6 +1303,7 @@ impl RoomSimulation {
         for id in expired {
             if let Some(dep) = self.room_deployables.shift_remove(&id) {
                 let _ = self.world.despawn(dep.ecs_entity);
+                Arc::make_mut(&mut self.retired_entity_ids).insert(id);
                 self.retired_enemies.push(id);
             }
         }
@@ -999,6 +1340,117 @@ impl RoomSimulation {
     #[cfg(test)]
     pub(crate) fn active_room_deployables(&self) -> usize {
         self.room_deployables.len()
+    }
+}
+
+fn queue_deployable_volley_hits(
+    component: &Component,
+    world: &mut DeployableWorld,
+    shots: &[ReportedShot],
+    tick: u32,
+) {
+    let Some(frame) = world.spatial_frame.clone() else {
+        return;
+    };
+    let origin = [
+        world.position[0],
+        world.position[1] + 0.85,
+        world.position[2],
+    ];
+    for report in shots {
+        let shot = report.event;
+        let Some(node) = component.shot_node(&shot) else {
+            continue;
+        };
+        let amount = node
+            .field("m_6396149F")
+            .and_then(|v| v.get("m_modifyHealth"))
+            .and_then(|v| v.get("m_amount"))
+            .or_else(|| node.field("m_modifyHealth").and_then(|v| v.get("m_amount")))
+            .and_then(|expr| component.evaluate_shot_config(&shot, expr, world).ok())
+            .and_then(|v| match v {
+                Value::Float(n) if n.is_finite() => Some(n),
+                Value::Integer(n) => Some(n as f64),
+                _ => None,
+            })
+            .unwrap_or(0.0);
+        if amount == 0.0 {
+            continue;
+        }
+        let max_range = node
+            .field("m_range")
+            .or_else(|| node.field("m_244723D6"))
+            .and_then(|expr| component.evaluate_shot_config(&shot, expr, world).ok())
+            .and_then(|v| match v {
+                Value::Float(n) if n.is_finite() && n > 0.0 => Some(n),
+                Value::Integer(n) if n > 0 => Some(n as f64),
+                _ => None,
+            })
+            .unwrap_or(40.0);
+        let filter = node.field("m_filter");
+        let team_mode = filter
+            .and_then(|f| f.get("m_66747E7D"))
+            .and_then(Json::as_u64)
+            .unwrap_or(0);
+        let hostile_flag = filter
+            .and_then(|f| f.get("m_89831602"))
+            .and_then(Json::as_u64)
+            .unwrap_or(0);
+        let site = Site {
+            entity: world.entity,
+            instance: shot.instance,
+            graph: shot.graph,
+            node: Some(shot.raw_state),
+        };
+        let mut best: Option<(f64, u32)> = None;
+        for candidate in frame.candidates() {
+            if candidate.entity == world.entity || candidate.entity == world.owner {
+                continue;
+            }
+            let team_ok = match (team_mode, hostile_flag) {
+                (1, 0) => candidate.team == Some(world.team),
+                (2, _) | (_, 1) => candidate.team != Some(world.team),
+                _ if amount > 0.0 => candidate.team == Some(world.team),
+                _ => candidate.team != Some(world.team),
+            };
+            if !team_ok {
+                continue;
+            }
+            let target_pos = [
+                candidate.position[0],
+                candidate.position[1] + 1.0,
+                candidate.position[2],
+            ];
+            let dx = target_pos[0] - origin[0];
+            let dy = target_pos[1] - origin[1];
+            let dz = target_pos[2] - origin[2];
+            let dist = dx.hypot(dy).hypot(dz);
+            if dist <= 1e-4 || dist > max_range {
+                continue;
+            }
+            if best.is_some_and(|(prev, _)| dist >= prev) {
+                continue;
+            }
+            let dir = [dx / dist, dy / dist, dz / dist];
+            if let Some(Some(hit)) = frame.ray_cast(site, tick, origin, dir, dist) {
+                if hit.distance + 0.35 < dist {
+                    continue;
+                }
+            }
+            best = Some((dist, candidate.entity));
+        }
+        if let Some((_, target)) = best {
+            if amount < 0.0 {
+                let _ = world.script_requests.queue_contact_damage(
+                    &frame,
+                    tick,
+                    -amount,
+                    &[(target, None)],
+                );
+            } else {
+                let _ = world.script_requests.queue_health(&frame, target, amount);
+            }
+        }
     }
 }
 

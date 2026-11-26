@@ -209,6 +209,36 @@ pub enum StateKind {
     BallRoll {
         fireball: bool,
     },
+    SpatialQuery,
+    PhysicsExplosion,
+    HitTracker {
+        hit_count: u16,
+    },
+    RayCast,
+    EntityAttach {
+        target: u32,
+    },
+    ModifierControl {
+        blocks_input: bool,
+    },
+    KinematicsControl {
+        mode: u8,
+    },
+    PlacementCast {
+        valid: bool,
+    },
+    TeleportEffect,
+    ProximityTrigger {
+        triggered: bool,
+    },
+    EntityStatus {
+        mode: u8,
+    },
+    UxPresenter,
+    SyncVars,
+    HeroOverride,
+    AiTactic,
+    FieldDrivenState,
     FilterArray,
     WeaponVolley {
         volleys: u8,
@@ -231,6 +261,9 @@ pub(super) struct GrappleState {
     pub(super) speed: f64,
     pub(super) pendulum: bool,
     pub(super) rope_len: f64,
+    pub(super) started_ms: u64,
+    pub(super) last_dist: f64,
+    pub(super) stall_ticks: u16,
 }
 
 #[derive(Clone, Debug)]
@@ -508,6 +541,9 @@ impl NodeObservations {
 pub struct Snapshot {
     pub entity: u32,
     pub now_ms: u64,
+    /// Monotonically incremented whenever any projected field of the snapshot
+    /// (variables, instances, states, bindings, callouts, diagnostics) mutates.
+    pub revision: u64,
     pub variables: Variables,
     pub instances: IndexMap<u16, Instance>,
     /// Pending state timers and finishes in their per-instance execution order.
@@ -570,6 +606,22 @@ impl Snapshot {
         self.diagnostics
             .iter()
             .all(|diagnostic| diagnostic.issue == Issue::ObservationUnavailable)
+    }
+
+    /// True if any active state's projected wire payload depends on `now_ms`
+    /// advancing while the rest of the snapshot is unchanged.
+    pub fn has_time_sensitive_projection(&self) -> bool {
+        self.instances.values().any(|instance| {
+            instance.states.values().any(|state| {
+                matches!(
+                    state.kind,
+                    StateKind::ClientPulse {
+                        fresh_at: Some(at),
+                        ..
+                    } if state.active && self.now_ms.saturating_sub(at) <= 600
+                )
+            })
+        })
     }
 }
 

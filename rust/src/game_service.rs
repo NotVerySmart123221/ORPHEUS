@@ -160,6 +160,19 @@ enum Request {
         host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
         reply: mpsc::SyncSender<()>,
     },
+    #[cfg(feature = "lua-mods")]
+    ModChat {
+        id: MatchId,
+        connection: u32,
+        sender_name: String,
+        text: String,
+        reply: mpsc::SyncSender<Vec<String>>,
+    },
+    #[cfg(feature = "lua-mods")]
+    DrainModChat {
+        id: MatchId,
+        reply: mpsc::SyncSender<Vec<String>>,
+    },
     #[cfg(any(test, feature = "inspector"))]
     Debug {
         reply: mpsc::SyncSender<io::Result<game_debug::Snapshot>>,
@@ -396,6 +409,28 @@ impl GameService {
         host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
     ) -> io::Result<()> {
         self.request(|reply| Request::SetModHost { host, reply })
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn dispatch_mod_chat(
+        &self,
+        id: [u64; 2],
+        connection: u32,
+        sender_name: String,
+        text: String,
+    ) -> io::Result<Vec<String>> {
+        self.request(|reply| Request::ModChat {
+            id,
+            connection,
+            sender_name,
+            text,
+            reply,
+        })
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn drain_mod_chat(&self, id: [u64; 2]) -> io::Result<Vec<String>> {
+        self.request(|reply| Request::DrainModChat { id, reply })
     }
 
     #[cfg(feature = "lua-debug")]

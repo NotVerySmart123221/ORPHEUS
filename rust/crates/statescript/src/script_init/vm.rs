@@ -41,6 +41,7 @@ use super::{
 mod contact_combat;
 mod effects;
 mod nodes;
+mod retail_catalog;
 mod target_tracking;
 mod transitions;
 
@@ -168,6 +169,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let apply_schema =
             self.machine.public_schemas && !matches!(startup, Startup::Played { .. });
         self.machine.claim_instance_id(id, scope.is_isolated())?;
+        self.machine.snapshot_dirty = true;
         self.machine.snapshot.instances.insert(
             id,
             Instance {
@@ -1133,6 +1135,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         let modifier = self.machine.value(VarKey::Entity(3652), None);
         let mut rate = (script_expr::to_float(&modifier) + 1.0) as f32;
+        if (self.machine.cooldown_scale - 1.0).abs() > 1e-9 && self.machine.cooldown_scale > 0.0 {
+            rate = (f64::from(rate) / self.machine.cooldown_scale.clamp(0.05, 10.0)) as f32;
+        }
         let scalar = field(&node.fields, "m_F7CAF887");
         if !scalar.is_null() {
             let Some(value) = self.evaluate(id, node, scalar, None) else {
@@ -1421,6 +1426,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .iter()
             .any(|existing| existing.site == diagnostic.site && existing.issue == diagnostic.issue)
         {
+            self.machine.snapshot_dirty = true;
             self.machine.snapshot.diagnostics.push(diagnostic);
         }
     }
@@ -2367,6 +2373,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ((owner, variable.id), self.machine.value(key, None))
             })
             .collect();
+        self.machine.snapshot_dirty = true;
         let history = &mut self.machine.snapshot.frame_actions;
         let previous = history.back().map_or(0, |action| action.callout.serial);
         let Some(serial) = previous.checked_add(1) else {
@@ -2584,12 +2591,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn state_mut(&mut self, key: StateKey) -> Option<&mut State> {
-        self.machine
+        let state = self
+            .machine
             .snapshot
             .instances
             .get_mut(&key.instance)?
             .states
-            .get_mut(&key.raw)
+            .get_mut(&key.raw)?;
+        self.machine.snapshot_dirty = true;
+        Some(state)
     }
 
     pub(in crate::script_init) fn evaluate(
@@ -2703,6 +2713,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let watchers = self.machine.foreign_watchers.entry(key).or_default();
                 if !watchers.contains(&watcher) {
                     watchers.push(watcher);
+                    self.machine
+                        .state_foreign_watches
+                        .entry(watcher)
+                        .or_default()
+                        .push(key);
                 }
             }
             if let Some(start) = self
@@ -2732,6 +2747,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let watchers = self.machine.watchers.entry(key).or_default();
         if !watchers.contains(&watcher) {
             watchers.push(watcher);
+            self.machine
+                .state_watches
+                .entry(watcher)
+                .or_default()
+                .push(key);
         }
     }
 
@@ -2794,12 +2814,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         {
             Arc::make_mut(sample).input = Some((key, value.clone()));
         }
-        match key {
-            VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value),
+        let prev = match key {
+            VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value.clone()),
             VarKey::Instance(instance, id) => self.machine.snapshot.instances[&instance]
                 .variables
-                .insert(id, value),
+                .insert(id, value.clone()),
         };
+        if prev.as_ref().is_none_or(|old| !same(old, &value)) {
+            self.machine.snapshot_dirty = true;
+        }
     }
 
     pub(in crate::script_init) fn notify_value(
@@ -2932,7 +2955,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             } else {
                 let caller = if target.is_action() { None } else { caller };
                 let linked = if target.class == "STU_1113EBD5"
-                    && matches!((graph.index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
+                    && self.admits_join_inputs(id, graph.index, target)
                 {
                     self.join_inputs(id, target, (node.pos, path), caller, depth + 1)?
                 } else {
@@ -2944,6 +2967,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(taken)
     }
 
+    #[inline(never)]
+    fn admits_join_inputs(&self, id: u16, graph_index: u32, target: &Node) -> bool {
+        matches!((graph_index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
+            || self
+                .world
+                .admits_generic_player_runtime(self.site(id, target))
+    }
+
+    #[inline(never)]
     pub(in crate::script_init) fn join_inputs(
         &mut self,
         id: u16,

@@ -48,6 +48,7 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) frame: u32,
     pub(super) wheel_delivery_frame: u32,
     pub(super) charge_binding: Option<super::charge::ChargeBinding>,
+    pub(super) ult_charge_scale: f64,
 }
 
 #[allow(dead_code)]
@@ -201,6 +202,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
+        self.world
+            .pet_positions
+            .retain(|&pet_id, _| !frame.is_retired(pet_id));
         self.world.spatial_frame = Some(frame);
     }
 
@@ -288,7 +292,8 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         const IN_DMG: u64 = 0x0d80_0000_0000_0318;
         const OUT_HEAL: u64 = 0x0d80_0000_0000_0319;
         const IN_HEAL: u64 = 0x0d80_0000_0000_031a;
-        let (mut out_d, mut in_d, mut out_h, mut in_h, mut cc_immune) = (1.0, 1.0, 1.0, 1.0, false);
+        let (mut out_d, mut in_d, mut out_h, mut in_h, mut cc_immune) =
+            (1.0_f64, 1.0_f64, 1.0_f64, 1.0_f64, false);
         for entry in self.world.combat_mods.values() {
             cc_immune |= entry.cc_immune;
             let apply = |slot: &mut f64| {
@@ -313,6 +318,40 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             in_h.clamp(0.0, 5.0),
             cc_immune,
         )
+    }
+
+    fn set_ult_charge_scale(&mut self, scale: f64) {
+        if scale.is_finite() && scale >= 0.0 {
+            self.ult_charge_scale = scale.clamp(0.0, 10.0);
+        }
+    }
+
+    fn set_cooldown_scale(&mut self, scale: f64) {
+        self.component.set_cooldown_scale(scale);
+    }
+
+    fn ult_charge_percent(&self) -> f64 {
+        PlayerBodyRuntime::ult_charge_percent(self)
+    }
+
+    fn add_ult_charge_points(&mut self, points: f64) -> io::Result<()> {
+        PlayerBodyRuntime::add_ult_charge_points(self, points)
+    }
+
+    fn set_ult_charge_percent(&mut self, percent: f64) -> io::Result<()> {
+        PlayerBodyRuntime::set_ult_charge_percent(self, percent)
+    }
+
+    fn reset_all_cooldowns(&mut self) -> io::Result<usize> {
+        self.component
+            .reset_all_cooldowns(&mut self.world)
+            .map_err(unsupported)
+    }
+
+    fn is_emoting(&self) -> bool {
+        self.component
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.instances.values().any(|inst| inst.graph == 0x023a))
     }
 
     fn vitals(&self) -> Option<&Vitals> {
