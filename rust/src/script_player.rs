@@ -308,6 +308,7 @@ impl PlayerBodyFactory {
             velocity_changes: Vec::new(),
             scripted_motion: None,
             voice_variant_counter: 0,
+            voice_cooldowns: Default::default(),
             pet_positions: Default::default(),
             spawned_possessables: Default::default(),
             pending_body_swap: None,

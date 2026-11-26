@@ -26,6 +26,10 @@ pub(super) struct Peer {
 pub(super) struct CombatUi {
     notices: VecDeque<PendingCombatNotice>,
     replacements: VecDeque<(Duration, BotReplacement)>,
+    /// Recent `(shooter_body, target, shot_frame, critical, killed)` hit notices
+    /// already admitted to the wire, preventing multi-pellet shotguns (Doomfist,
+    /// Reaper) whose pellets land across adjacent ticks from replaying hit dings.
+    recent_hit_notices: VecDeque<(BodyId, u32, u32, bool, bool)>,
 }
 
 struct AuthoredCueIdentity {
@@ -190,6 +194,27 @@ impl Peer {
                 *existing_critical |= critical;
                 *existing_killed |= killed;
                 return;
+            }
+            if let Some(recent) = self
+                .combat_ui
+                .recent_hit_notices
+                .iter_mut()
+                .rev()
+                .find(|entry| entry.0 == body && entry.1 == target && entry.2 == shot_frame)
+            {
+                let upgrades_audio = (critical && !recent.3) || (killed && !recent.4);
+                recent.3 |= critical;
+                recent.4 |= killed;
+                if !upgrades_audio {
+                    return;
+                }
+            } else {
+                if self.combat_ui.recent_hit_notices.len() >= 32 {
+                    self.combat_ui.recent_hit_notices.pop_front();
+                }
+                self.combat_ui
+                    .recent_hit_notices
+                    .push_back((body, target, shot_frame, critical, killed));
             }
         }
         self.queue_notice(notice, CombatAudience::Shooter(body));

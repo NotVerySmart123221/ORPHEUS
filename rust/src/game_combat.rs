@@ -1589,7 +1589,9 @@ impl RoomSimulation {
                                 });
                             let eye = [
                                 pose.position[0],
-                                pose.position[1] + eye_height(state.hero, state.mover.crouched()),
+                                pose.position[1]
+                                    + state.mover.eye_height()
+                                    + f64::from(state.mover.spring_offset()),
                                 pose.position[2],
                             ];
                             melee_centers.push([
@@ -3012,26 +3014,7 @@ impl RoomSimulation {
             .remove(&connection)
             .map_or_else(Vec::new, |batch| batch.order);
         for launch in launches {
-            let server_visual = launch
-                .token
-                .is_server_only()
-                .then(|| {
-                    launch
-                        .flight
-                        .definition()
-                        .map(|def| (def, launch.flight.position(), launch.flight.velocity()))
-                })
-                .flatten();
             let ecs_id = self.world.spawn(launch).id();
-            if let Some((def, pos, vel)) = server_visual {
-                let wire = deployables::next_server_projectile_wire_id();
-                if let Some(update) =
-                    deployables::server_projectile_create_update(wire, context.team, def, pos, vel)
-                {
-                    self.server_projectile_wires.insert(ecs_id, wire);
-                    self.created.push(update);
-                }
-            }
             order.push(ecs_id);
         }
         let mut outcomes = Vec::new();

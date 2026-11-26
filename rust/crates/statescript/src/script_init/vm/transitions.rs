@@ -148,6 +148,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         self.world.modify_health(self.site(id, node), elapsed_ms);
                     }
                     Some(StateKind::GenericModifyHealth { continuous: true }) => {
+                        // Retail continuous beams (Winston Tesla, Zarya, Symmetra, Moira)
+                        // settle at 20 Hz (~48 ms) rather than flooding 62.5 Hz hit notices.
+                        if elapsed_ms < 48 {
+                            if let Some(last) = self
+                                .machine
+                                .ticking
+                                .get_mut(&id)
+                                .and_then(|states| states.get_mut(&raw))
+                            {
+                                *last = now.saturating_sub(elapsed_ms);
+                            }
+                            continue;
+                        }
                         let node = self
                             .graph(id)
                             .state(usize::from(raw))
@@ -270,6 +283,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         self.refresh_tracked_targets(key, node)?;
                     }
                     Some(StateKind::GenericTrackedTargets) => {
+                        if elapsed_ms < 48 {
+                            if let Some(last) = self
+                                .machine
+                                .ticking
+                                .get_mut(&id)
+                                .and_then(|states| states.get_mut(&raw))
+                            {
+                                *last = now.saturating_sub(elapsed_ms);
+                            }
+                            continue;
+                        }
                         let node = self
                             .graph(id)
                             .state(usize::from(raw))

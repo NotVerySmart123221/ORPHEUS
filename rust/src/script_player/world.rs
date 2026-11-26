@@ -177,6 +177,7 @@ pub(super) struct BodyWorld {
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
     pub(super) scripted_motion: Option<(u32, ScriptedMotion)>,
     pub(super) voice_variant_counter: usize,
+    pub(super) voice_cooldowns: BTreeMap<u64, u32>,
     pub(super) pet_positions: BTreeMap<u32, ([f64; 3], f64)>,
     pub(super) spawned_possessables: BTreeMap<u32, u64>,
     pub(super) pending_body_swap: Option<u64>,
@@ -673,6 +674,10 @@ impl World for BodyWorld {
             }
             if self.spawned_possessables.contains_key(&entity)
                 || self.pet_positions.contains_key(&entity)
+                || self
+                    .spatial_frame
+                    .as_deref()
+                    .is_some_and(|frame| frame.actor_pose(entity).is_some())
             {
                 return Some(Value::Null);
             }
@@ -981,6 +986,15 @@ impl World for BodyWorld {
         audience: Option<&[u32]>,
         choose: &mut dyn FnMut(usize) -> usize,
     ) {
+        let frame = self.movement.frame.unwrap_or(0);
+        if frame > 0
+            && self
+                .voice_cooldowns
+                .get(&criterion)
+                .is_some_and(|&last| frame.saturating_sub(last) < 90)
+        {
+            return;
+        }
         if let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
             frame.actor_voice_request_with_audience(
                 site.entity,
@@ -989,6 +1003,9 @@ impl World for BodyWorld {
                 choose,
             )
         }) {
+            if frame > 0 {
+                self.voice_cooldowns.insert(criterion, frame);
+            }
             self.queue_room_cue(site, &listeners, cue);
         }
     }
@@ -1238,7 +1255,15 @@ impl World for BodyWorld {
     }
 
     fn body_scale(&mut self, site: Site, target: u32, override_value: &Value) -> Option<f64> {
-        if target != self.entity || !self.is_player_site(site) {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let known_target = target == self.entity
+            || self
+                .spatial_frame
+                .as_deref()
+                .is_some_and(|frame| frame.actor_pose(target).is_some());
+        if !known_target {
             return None;
         }
         match override_value {
@@ -1376,6 +1401,49 @@ impl World for BodyWorld {
         (self.is_player_site(site)).then(|| self.vitals.drain_temporary_shield(identifier, amount))
     }
 
+    fn recharge_shields(&mut self, site: Site, amount: f64) -> bool {
+        if !self.is_player_site(site) || !amount.is_finite() || amount < 0.0 {
+            return false;
+        }
+        if amount > 0.0 {
+            self.vitals.recharge_shields(amount);
+        }
+        true
+    }
+
+    fn shockwave_targets(&mut self, site: Site, reach: f64) -> Option<Vec<u32>> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        let frame = self.spatial_frame.as_deref()?;
+        let radius = if reach.is_finite() && reach > 0.0 {
+            reach
+        } else {
+            8.0
+        };
+        let origin = self.position;
+        let my_team = u8::try_from((self.body_filter >> 23) & 31)
+            .ok()
+            .filter(|&bits| bits > 0)
+            .map(|bits| bits.trailing_zeros() as u8);
+        let mut out = Vec::new();
+        for c in frame.candidates() {
+            if c.entity == self.entity {
+                continue;
+            }
+            if my_team.is_some() && c.team == my_team {
+                continue;
+            }
+            let dx = c.position[0] - origin[0];
+            let dy = c.position[1] - origin[1];
+            let dz = c.position[2] - origin[2];
+            if dx.hypot(dz) <= radius && dy.abs() <= 4.0 {
+                out.push(c.entity);
+            }
+        }
+        Some(out)
+    }
+
     fn health_pool_current(&self, site: Site, pool: u32) -> Option<f64> {
         if !self.is_player_site(site) {
             return None;
@@ -1402,7 +1470,7 @@ impl World for BodyWorld {
             {
                 return source.target.tags.presence(tag);
             }
-            return self
+            if let Some(present) = self
                 .sighting_source
                 .filter(|source| source.entity == entity)
                 .and_then(|source| {
@@ -1415,12 +1483,45 @@ impl World for BodyWorld {
                         .get(&entity)
                         .and_then(|subject| subject.tags.presence(tag))
                 })
-                .or_else(|| self.room_entities()?.get(&entity)?.tags.presence(tag));
+            {
+                return Some(present);
+            }
+            if let Some(entities) = self.room_entities() {
+                if let Some(facts) = entities.get(&entity) {
+                    return facts.tags.presence(tag);
+                }
+            }
+            if self.spawned_possessables.contains_key(&entity)
+                || (self.room_entities().is_none()
+                    && self
+                        .spatial_frame
+                        .as_deref()
+                        .is_some_and(|frame| frame.actor_pose(entity).is_some()))
+            {
+                return Some(false);
+            }
+            return None;
         }
         if let Some(present) = self.target_tag_effects.presence(tag) {
             return Some(present);
         }
         Some(self.target_tags.as_ref()?.contains(&tag))
+    }
+
+    fn entity_definition(&self, site: Site, entity: u32) -> Option<u64> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if entity == self.entity {
+            return Some(self.body_definition);
+        }
+        if let Some(&def) = self.spawned_possessables.get(&entity) {
+            return Some(def);
+        }
+        self.spatial_frame
+            .as_deref()
+            .is_some_and(|frame| frame.actor_pose(entity).is_some())
+            .then_some(0)
     }
 
     fn targets_with_tag(&self, site: Site, tag: u64, excluded: u64) -> Option<Vec<u32>> {
@@ -2093,11 +2194,14 @@ impl World for BodyWorld {
         if self.is_player_site(site) {
             let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
             let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
-            let relation = match (team_mode, hostile_flag) {
-                (1, 0) => Some(FilterRelation::Friendly),
-                (2, _) | (_, 1) => Some(FilterRelation::Hostile),
-                (0, 0) => Some(FilterRelation::Any),
-                _ => None,
+            let relation = if hostile_flag & 1 != 0 || team_mode == 2 {
+                Some(FilterRelation::Hostile)
+            } else if hostile_flag & 4 != 0 {
+                Some(FilterRelation::FriendlyOther)
+            } else if hostile_flag & 2 != 0 || team_mode == 1 {
+                Some(FilterRelation::Friendly)
+            } else {
+                Some(FilterRelation::Any)
             };
             if let Some(relation) = relation {
                 let predicate = if filter.get("m_condition").is_none_or(Json::is_null) {

@@ -36,6 +36,7 @@ const FIRST_DEPLOYABLE_WIRE: u32 = 0xc010_0000;
 const DEPLOYABLE_WIRE_SPAN: u32 = 0x0008_0000;
 const FIRST_SERVER_PROJECTILE_WIRE: u32 = 0xc018_0000;
 const SERVER_PROJECTILE_WIRE_SPAN: u32 = 0x0008_0000;
+#[allow(dead_code)]
 const KEEP_MOVEMENT_ROTATION: u32 = 0x0100_0000;
 const MAX_DEPLOYABLES_PER_OWNER: usize = 16;
 const SCRIPTLESS_DEPLOYABLE_TICKS: u32 = 62 * 20; // 20s default lifetime when no script expires it
@@ -45,6 +46,7 @@ const STUN_DURATION_VAR: u64 = 0x0d80_0000_0000_00d7;
 
 static NEXT_PET_WIRE: AtomicU32 = AtomicU32::new(0);
 static NEXT_DEPLOYABLE_WIRE: AtomicU32 = AtomicU32::new(0);
+#[allow(dead_code)]
 static NEXT_SERVER_PROJECTILE_WIRE: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn next_pet_wire_id() -> u32 {
@@ -57,6 +59,7 @@ fn next_deployable_wire_id() -> u32 {
     FIRST_DEPLOYABLE_WIRE | seq
 }
 
+#[allow(dead_code)]
 pub(super) fn next_server_projectile_wire_id() -> u32 {
     let seq =
         NEXT_SERVER_PROJECTILE_WIRE.fetch_add(1, Ordering::Relaxed) % SERVER_PROJECTILE_WIRE_SPAN;
@@ -112,6 +115,7 @@ pub(super) struct RoomPet {
     pub(super) position: Vec3,
     pub(super) yaw: i32,
     pub(super) vitals: Option<Vitals>,
+    pub(super) wire_vitals: bool,
     pub(super) component: Option<Component>,
     pub(super) world: Option<DeployableWorld>,
 }
@@ -120,7 +124,7 @@ fn resolve_entity_vitals(
     graphs: Option<&GraphStore>,
     definition: u64,
     max_health: Option<f64>,
-) -> Option<Vitals> {
+) -> (Option<Vitals>, bool) {
     if let Some(pools) = graphs
         .and_then(|g| g.entity_body(definition))
         .and_then(|body| {
@@ -130,11 +134,14 @@ fn resolve_entity_vitals(
         })
         .filter(|pools| pools.total() > 0.0)
     {
-        return Some(pools.vitals());
+        return (Some(pools.vitals()), true);
     }
-    max_health
-        .filter(|hp| hp.is_finite() && *hp > 0.0)
-        .map(|hp| Vitals::new(hp, 0.0, 0.0))
+    (
+        max_health
+            .filter(|hp| hp.is_finite() && *hp > 0.0)
+            .map(|hp| Vitals::new(hp, 0.0, 0.0)),
+        false,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -209,23 +216,37 @@ fn entity_create_update(
     yaw: i32,
     local_offset: Option<Vec3>,
     vitals: Option<&Vitals>,
+    authored_body_vitals: bool,
 ) -> Option<EntityUpdate> {
-    let team_comp = bot_filter_component(team, false).ok()?;
-    let mut components = vec![team_comp];
-    if let Some(vitals) = vitals {
-        components.push(vitals.component());
+    if definition >> 48 != 0x0400 || !position.into_iter().all(f64::is_finite) {
+        return None;
+    }
+    let mut components = Vec::new();
+    // Only attach Filter (74) and Health (51) when the retail entity definition
+    // actually carries authored health pools; bare effect/helper entities crash
+    // the 1.74 client if given components absent from their blueprint.
+    if authored_body_vitals {
+        components.push(bot_filter_component(team, false).ok()?);
+        if let Some(vitals) = vitals {
+            components.push(vitals.component());
+        }
     }
     let mut create = Create::new(definition, components);
+    create.position = position.map(|v| v as f32);
+    create.rotation = yaw_rotation(f64::from(yaw));
     if let Some(parent) = attach {
         create.movement_parent = Some(parent);
+        let offset = local_offset
+            .filter(|v| v.iter().all(|a| a.is_finite()))
+            .unwrap_or([0.0; 3]);
+        // Do NOT set KEEP_MOVEMENT_ROTATION on hero-attached barriers/pets so they
+        // inherit their owner's facing rotation and follow smoothly on the client.
         create.movement = Some(Movement {
-            flags: KEEP_MOVEMENT_ROTATION,
-            position: local_offset.unwrap_or([0.0; 3]),
+            flags: 0,
+            position: offset,
+            yaw,
             ..Movement::default()
         });
-    } else {
-        create.position = position.map(|v| v as f32);
-        create.rotation = yaw_rotation(f64::from(yaw));
     }
     Some(EntityUpdate {
         entity: wire,
@@ -234,6 +255,7 @@ fn entity_create_update(
     })
 }
 
+#[allow(dead_code)]
 pub(super) fn server_projectile_create_update(
     wire: u32,
     team: u8,
@@ -812,7 +834,7 @@ impl RoomSimulation {
             return;
         }
         let graphs_and_mode = self.deployable_graphs();
-        let vitals = resolve_entity_vitals(
+        let (vitals, authored_body_vitals) = resolve_entity_vitals(
             graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
             definition,
             max_health,
@@ -826,6 +848,7 @@ impl RoomSimulation {
             yaw,
             local_offset,
             vitals.as_ref(),
+            authored_body_vitals,
         ) else {
             return;
         };
@@ -858,6 +881,7 @@ impl RoomSimulation {
                 position,
                 yaw,
                 vitals,
+                wire_vitals: authored_body_vitals,
                 component,
                 world: world_opt,
             },
@@ -924,7 +948,7 @@ impl RoomSimulation {
         }
         let entity = next_deployable_wire_id();
         let graphs_and_mode = self.deployable_graphs();
-        let vitals = resolve_entity_vitals(
+        let (vitals, authored_body_vitals) = resolve_entity_vitals(
             graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
             spawn.definition,
             None,
@@ -938,6 +962,7 @@ impl RoomSimulation {
             yaw,
             None,
             vitals.as_ref(),
+            authored_body_vitals,
         ) else {
             return;
         };
@@ -1252,11 +1277,13 @@ impl RoomSimulation {
                 if let Some(vitals) = pet.vitals.as_mut() {
                     if vitals.has_changed() {
                         vitals.clear_changed();
-                        self.scripted_health.push(EntityUpdate {
-                            entity: id,
-                            operation: Some(Operation::Update(vec![vitals.component()])),
-                            ..EntityUpdate::default()
-                        });
+                        if pet.wire_vitals {
+                            self.scripted_health.push(EntityUpdate {
+                                entity: id,
+                                operation: Some(Operation::Update(vec![vitals.component()])),
+                                ..EntityUpdate::default()
+                            });
+                        }
                     }
                     if vitals.death().is_some() {
                         dead_pets.push(id);

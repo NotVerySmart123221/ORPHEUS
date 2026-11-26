@@ -782,6 +782,104 @@ impl Evaluator {
                     matches!(first_scalar(&entity), Some(Value::Entity(e)) if valid_entity(*e));
                 Value::Float(if valid { 0.55 } else { 0.0 })
             }
+            // Entity facing/aim direction (`STU_D32169F6(m_entity)`, 39x across Doomfist/heroes).
+            "STU_D32169F6" => {
+                let entity = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let dir = match first_scalar(&entity) {
+                    Some(Value::Entity(e)) if valid_entity(*e) => context
+                        .authored_forward(*e)
+                        .filter(|parts| parts.iter().all(|p| p.is_finite()))
+                        .unwrap_or([0.0, 0.0, 1.0]),
+                    _ => [0.0, 0.0, 1.0],
+                };
+                Value::Vector(dir)
+            }
+            // Transform world vector `m_5E57229B` into the local frame of forward vector
+            // `m_794397AC` (`STU_9B5656C5`, 91x including Soldier: 76 Tactical Visor).
+            "STU_9B5656C5" => {
+                let vec_a = vector(&self.config(child(config, "m_5E57229B"), context, nested)?);
+                let vec_b = vector(&self.config(child(config, "m_794397AC"), context, nested)?);
+                let len_b = magnitude(vec_b);
+                if len_b <= EPSILON {
+                    Value::Vector([0.0; 3])
+                } else {
+                    let fwd = [vec_b[0] / len_b, vec_b[1] / len_b, vec_b[2] / len_b];
+                    let ref_up = if fwd[1].abs() < 0.99 {
+                        [0.0, 1.0, 0.0]
+                    } else {
+                        [0.0, 0.0, 1.0]
+                    };
+                    let rx = ref_up[1] * fwd[2] - ref_up[2] * fwd[1];
+                    let ry = ref_up[2] * fwd[0] - ref_up[0] * fwd[2];
+                    let rz = ref_up[0] * fwd[1] - ref_up[1] * fwd[0];
+                    let rlen = rx.hypot(ry).hypot(rz).max(EPSILON);
+                    let right = [rx / rlen, ry / rlen, rz / rlen];
+                    let up = [
+                        fwd[1] * right[2] - fwd[2] * right[1],
+                        fwd[2] * right[0] - fwd[0] * right[2],
+                        fwd[0] * right[1] - fwd[1] * right[0],
+                    ];
+                    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+                    Value::Vector([
+                        rounded(dot(vec_a, right)),
+                        rounded(dot(vec_a, up)),
+                        rounded(dot(vec_a, fwd)),
+                    ])
+                }
+            }
+            // Rotate vector `m_CFEC5F76` by `m_ED584F48` degrees around axis `m_220789B0`
+            // or cardinal axis `m_C3681302` (`STU_DADD0A1D`, Mei Ice Wall rotation).
+            "STU_DADD0A1D" => {
+                let v = vector(&self.config(child(config, "m_CFEC5F76"), context, nested)?);
+                let angle_deg =
+                    to_float(&self.config(child(config, "m_ED584F48"), context, nested)?);
+                let axis_cfg = child(config, "m_220789B0");
+                let raw_axis = if !axis_cfg.is_null() {
+                    vector(&self.config(axis_cfg, context, nested)?)
+                } else {
+                    match child(config, "m_C3681302").as_u64() {
+                        Some(0) => [1.0, 0.0, 0.0],
+                        Some(2) => [0.0, 0.0, 1.0],
+                        _ => [0.0, 1.0, 0.0],
+                    }
+                };
+                let alen = magnitude(raw_axis);
+                if alen <= EPSILON || !angle_deg.is_finite() {
+                    Value::Vector(v)
+                } else {
+                    let k = [raw_axis[0] / alen, raw_axis[1] / alen, raw_axis[2] / alen];
+                    let (s, c) = angle_deg.to_radians().sin_cos();
+                    let kdotv = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+                    let cross = [
+                        k[1] * v[2] - k[2] * v[1],
+                        k[2] * v[0] - k[0] * v[2],
+                        k[0] * v[1] - k[1] * v[0],
+                    ];
+                    Value::Vector([
+                        rounded(v[0] * c + cross[0] * s + k[0] * kdotv * (1.0 - c)),
+                        rounded(v[1] * c + cross[1] * s + k[1] * kdotv * (1.0 - c)),
+                        rounded(v[2] * c + cross[2] * s + k[2] * kdotv * (1.0 - c)),
+                    ])
+                }
+            }
+            // Array IndexOf (`STU_9FA47317(m_814F8EC3, m_153EC56B)` -> index or -1).
+            "STU_9FA47317" => {
+                let array_val = self.config(child(config, "m_814F8EC3"), context, nested)?;
+                let needle = self.config(child(config, "m_153EC56B"), context, nested)?;
+                let idx = match array_val {
+                    Value::Array(items) => items
+                        .iter()
+                        .position(|item| equal(item, &needle))
+                        .map_or(-1, |i| i as i64),
+                    _ => -1,
+                };
+                Value::Integer(idx)
+            }
             "STU_BD2D717B" if native_shape(config, class, Some("m_B257A3A4")) => {
                 Value::Bool(integer(child(config, "m_B257A3A4"))? != 0)
             }

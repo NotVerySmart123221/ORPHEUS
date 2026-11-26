@@ -10,7 +10,7 @@ use crate::{
     commands::Command,
     game_combat::{
         BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, PosedBioticField, PosedHitscan, PosedProjectile,
-        PosedShot, Stun, eye_height, script_eye_position,
+        PosedShot, Stun, script_eye_position,
     },
     game_content::is_junkenstein_mode,
     game_hitscan::{HitDefinition, aim_direction},
@@ -631,7 +631,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         };
         let [x, y, z] = mover.pose().position;
         let hero = self.world.hero;
-        let origin = [x, y + eye_height(hero, mover.crouched()), z];
+        let origin = [
+            x,
+            y + mover.eye_height() + f64::from(mover.spring_offset()),
+            z,
+        ];
         let mut posed = Vec::with_capacity(shots.len());
         let mut pose = |report: ReportedShot| -> Option<()> {
             let shot = report.event;

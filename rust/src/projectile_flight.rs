@@ -146,10 +146,15 @@ impl ProjectileBallistics {
             rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
             let scale = authored_number(config.get("m_8A3E3883"), 0.0, &mut evaluate)?;
             let self_knockback = &config["m_49F60FB8"];
-            let self_knockback_scale = if self_knockback.as_bool() == Some(true)
+            let self_knockback_enabled = self_knockback.as_bool() == Some(true)
                 || self_knockback.as_u64() == Some(1)
-            {
-                authored_number(config.get("m_2FE97560"), 0.0, &mut evaluate).unwrap_or(0.0) as f32
+                || (!self_knockback.is_null()
+                    && self_knockback.is_object()
+                    && evaluate(self_knockback)
+                        .ok()
+                        .is_some_and(|v| crate::script_expr::truthy(&v)));
+            let self_knockback_scale = if self_knockback_enabled {
+                authored_number(config.get("m_2FE97560"), 1.0, &mut evaluate).unwrap_or(1.0) as f32
             } else {
                 0.0
             };
@@ -408,6 +413,7 @@ impl ProjectileFlight {
         direct.max(blast)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn definition(&self) -> Option<u64> {
         self.ballistics.definition
     }

@@ -829,7 +829,7 @@ impl Bot {
         mut ground: impl FnMut(f64, f64, f64, f64) -> Option<f64>,
     ) -> io::Result<()> {
         let sep = std::mem::take(&mut self.ally_separation);
-        if !self.dead && sep != [0.0; 2] && (self.patrol_active() || self.has_anchor_return()) {
+        if !self.dead && sep != [0.0; 2] && !self.is_stunned(tick) {
             let dt = TICK_PERIOD.as_secs_f64();
             let [x, y, z] = self.position;
             let nx = x + sep[0];
@@ -1332,10 +1332,31 @@ impl Bot {
         }
         let previous_flags = self.movement_flags;
         if grounded {
-            velocity[1] = 0.0;
-            self.movement_flags &= !IN_AIR;
+            if velocity[1] < 0.0 {
+                velocity[1] = 0.0;
+            }
+            if velocity[1] == 0.0 {
+                self.movement_flags &= !IN_AIR;
+            } else {
+                self.movement_flags |= IN_AIR;
+            }
         } else {
             self.movement_flags |= IN_AIR;
+        }
+        // Bound extreme knockback speeds so impulses (e.g. Lucio Soundwave) can never
+        // tunnel bots through thin floors or produce out-of-world NaN coordinates.
+        let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+        if !speed.is_finite() {
+            self.velocity = [0.0; 3];
+            return false;
+        }
+        if speed > 45.0 {
+            let scale = 45.0 / speed;
+            velocity = [
+                velocity[0] * scale,
+                velocity[1] * scale,
+                velocity[2] * scale,
+            ];
         }
         let starting_velocity = velocity;
         let velocity = VelocityStep {
@@ -1386,8 +1407,8 @@ impl Bot {
         if let Some(floor_y) = ground(
             after[0],
             after[2],
-            after[1].max(from[1]) + STEP_UP,
-            after[1].min(from[1]) - STEP_UP,
+            after[1].max(from[1]) + 1.5,
+            after[1].min(from[1]) - 1.5,
         ) {
             if after[1] <= floor_y + 0.02 {
                 after[1] = floor_y;

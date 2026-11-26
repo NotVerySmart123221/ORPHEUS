@@ -355,6 +355,36 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         let config = field(&node.fields, "m_modifyHealth");
+        if self.world.admits_generic_player_runtime(site) {
+            let entities: Vec<u32> = match &target {
+                Value::Entity(entity) if script_expr::valid_entity(*entity) => vec![*entity],
+                Value::Array(items) => items
+                    .iter()
+                    .filter_map(|v| match *v {
+                        Value::Entity(entity) if script_expr::valid_entity(entity) => Some(entity),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            };
+            if entities.is_empty() {
+                return Ok(());
+            }
+            let amount = self
+                .creation_scalar(key.instance, node, field(config, "m_amount"), Value::Null)?
+                .and_then(pool_number)
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .unwrap_or(0.0);
+            if amount > 0.0 {
+                let is_heal = field(config, "m_93CDFD2F").as_u64() == Some(0);
+                let delta = if is_heal { amount } else { -amount };
+                for entity in entities {
+                    let _ = self.world.queue_health_change(site, entity, delta);
+                }
+            }
+            self.post(key.instance, Event::Finish(key.raw))?;
+            return Ok(());
+        }
         let Value::Entity(target) = target else {
             self.report(site, Issue::UnsupportedField("NPC damage target"));
             return Ok(());

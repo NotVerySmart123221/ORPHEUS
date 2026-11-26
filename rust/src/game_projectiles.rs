@@ -234,6 +234,7 @@ impl ProjectileToken {
         Self(seq | (1u64 << 63))
     }
 
+    #[allow(dead_code)]
     pub(crate) const fn is_server_only(self) -> bool {
         self.0 & (1u64 << 63) != 0
     }

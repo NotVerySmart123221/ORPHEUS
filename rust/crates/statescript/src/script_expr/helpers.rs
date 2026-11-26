@@ -222,7 +222,7 @@ pub(super) fn filter_masks(filter: &Json, scene_hostile: bool) -> Option<[u64; 3
         .all(|(key, value)| match key.as_str() {
             "$" | "m_84065FD1" | "m_1E14CCA8" | "m_4EA686DB" | "m_9C7BD8B8" | "m_B486603E"
             | "m_8B2A4DF3" => true,
-            "m_66747E7D" | "m_89831602" if scene_hostile => true,
+            "m_27CF71D5" | "m_66747E7D" | "m_89831602" if scene_hostile => true,
             "m_condition" if scene_hostile => true,
             "m_C1903771" => value.is_null() || value.as_u64() == Some(0),
             "m_EE729DCB" | "m_27CF71D5" | "m_66747E7D" | "m_89831602" => value.as_u64() == Some(0),

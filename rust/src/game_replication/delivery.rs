@@ -1981,6 +1981,13 @@ impl WorldDelivery {
         let blockers = motion_frame.as_ref().map_or_else(Vec::new, |frame| {
             self.owner_movement_blockers(frame, id.entity, team)
         });
+        let ally_sep = if alive {
+            motion_frame.as_ref().map_or([0.0; 2], |frame| {
+                frame.ally_separation(id.entity, team, state.mover.contact_capsule())
+            })
+        } else {
+            [0.0; 2]
+        };
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
         let detached_motion = &mut self.detached_motion;
@@ -1993,6 +2000,10 @@ impl WorldDelivery {
             hitscan,
             ..
         } = state;
+        if ally_sep != [0.0; 2] {
+            let dt = f64::from(frame_us) / 1_000_000.0;
+            let _ = mover.apply_ally_separation(ally_sep, &blockers, dt);
+        }
         let mut buffers = StepBuffers {
             frame: body_frame,
             fields,
@@ -2223,6 +2234,7 @@ impl WorldDelivery {
             entity,
             (&hero, body.skin),
             Some((swap.1, swap.2)),
+            true,
         )
     }
 
@@ -2253,10 +2265,16 @@ impl WorldDelivery {
         let current_pose = self
             .body
             .and_then(|body| scene.simulation().player_body(body.id))
-            .map(|state| {
-                let pose = state.mover.pose();
-                (pose.position, pose.yaw)
-            });
+            .map(|state| state.mover.pose())
+            .filter(|pose| pose.position.into_iter().all(f64::is_finite))
+            .map(|pose| (pose.position, pose.yaw));
+        // Clear pending wheel/emote inputs targeting the retiring body before switching heroes.
+        self.input.work.retain(|item| {
+            !matches!(
+                item,
+                InputWork::WheelAction { .. } | InputWork::WheelUse { .. }
+            )
+        });
         self.switch_at(
             scene,
             viewer,
@@ -2265,6 +2283,7 @@ impl WorldDelivery {
             entity,
             (&hero, skin),
             current_pose,
+            false,
         )
     }
 
@@ -2277,7 +2296,7 @@ impl WorldDelivery {
         entity: u32,
         selection: (&Hero, SkinTheme),
     ) -> io::Result<()> {
-        self.switch_at(scene, viewer, tick, quanta, entity, selection, None)
+        self.switch_at(scene, viewer, tick, quanta, entity, selection, None, false)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2290,6 +2309,7 @@ impl WorldDelivery {
         entity: u32,
         selection: (&Hero, SkinTheme),
         override_pose: Option<([f64; 3], i32)>,
+        same_hero_swap: bool,
     ) -> io::Result<()> {
         let (initial_hero, skin) = selection;
         let mut effective_hero = initial_hero.clone();
@@ -2367,8 +2387,8 @@ impl WorldDelivery {
         };
         // If startup statescript immediately requested possession of an authored alternate
         // hero body (e.g. STU_B6E3C77D + STU_CA861E44), swap directly before creating on wire.
-        // Only apply on fresh spawn/respawn (`override_pose.is_none()`), never mid-life ejects.
-        if override_pose.is_none() {
+        // Only apply on fresh spawn/hero-switch (`!same_hero_swap`), never mid-life ejects.
+        if !same_hero_swap {
             if let Some(swap_body) = runtime
                 .as_mut()
                 .and_then(|rt| rt.take_body_swap())
@@ -2467,7 +2487,7 @@ impl WorldDelivery {
             Some(observer_create),
         )
         .with_body_template(hero.body);
-        if override_pose.is_some() {
+        if same_hero_swap {
             scene.simulation_mut().swap_player_body(state)?;
         } else {
             scene.simulation_mut().spawn_player_body(state)?;

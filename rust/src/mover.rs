@@ -523,6 +523,44 @@ impl Mover {
         self.scripted_motion_at(frame) || (self.pose.frame == Some(frame) && self.actor_contact)
     }
 
+    /// Apply a soft horizontal separation nudge when overlapping an allied actor.
+    pub(crate) fn apply_ally_separation(
+        &mut self,
+        delta: [f64; 2],
+        blockers: &[CapsulePose],
+        dt: f64,
+    ) -> bool {
+        if delta == [0.0; 2]
+            || !delta[0].is_finite()
+            || !delta[1].is_finite()
+            || dt <= 0.0
+            || !dt.is_finite()
+        {
+            return false;
+        }
+        let start = self.body.position();
+        let mut staged = self.body.fresh_at(start);
+        let Ok(moved) = staged.move_capsule_against(
+            [delta[0] as f32, 0.0, delta[1] as f32],
+            dt as f32,
+            blockers,
+        ) else {
+            return false;
+        };
+        let feet = std::array::from_fn(|axis| {
+            self.pose.position[axis] + f64::from(moved.position[axis]) - f64::from(start[axis])
+        })
+        .map(snap);
+        if feet == self.pose.position {
+            return false;
+        }
+        staged.teleport(self.capsule_origin(feet));
+        self.body = staged;
+        self.pose.position = feet;
+        self.actor_contact = true;
+        true
+    }
+
     /// Simulate the newest command and any reconstructible poses before it.
     /// The callback can advance the body's statescript at each posed frame.
     pub fn step(
@@ -884,7 +922,7 @@ impl Mover {
             ((0.0 * rise + z) * dt) + 0.0,
         ];
         let movement = self.body.move_capsule_against(displacement, dt, blockers)?;
-        let actor_contact = movement.actor_contact;
+        let mut actor_contact = movement.actor_contact;
         let [mut x, mut y, mut z] = clip_velocity([x, y, z], movement.planes).map(f64::from);
         if grounded {
             let squared = (x * x + y * y) + z * z;
@@ -900,7 +938,51 @@ impl Mover {
         let [px, py, pz] = movement.position;
         let feet = f64::from(py - lift);
         let floor = rays.lowest() - ABYSS;
-        self.pose.position = [f64::from(px), feet.max(floor), f64::from(pz)].map(snap);
+        let mut resolved = [f64::from(px), feet.max(floor), f64::from(pz)];
+        // Hard-block against enemy capsules: if client prediction or an enemy
+        // stepping toward us created an overlap, depenetrate horizontally and
+        // cancel inward velocity so enemies never clip through each other.
+        if !blockers.is_empty() {
+            let self_radius = if self.posture.crouched() {
+                self.base.crouch_radius
+            } else {
+                self.base.stand_radius
+            };
+            let self_height = if self.posture.crouched() {
+                self.base.crouch_height
+            } else {
+                self.base.stand_height
+            };
+            let self_top = resolved[1] + self_height;
+            for blocker in blockers {
+                let b_bottom = f64::from(blocker.position[1]);
+                let b_top = b_bottom + f64::from(blocker.top + 2.0 * blocker.radius);
+                if resolved[1] >= b_top || b_bottom >= self_top {
+                    continue;
+                }
+                let dx = resolved[0] - f64::from(blocker.position[0]);
+                let dz = resolved[2] - f64::from(blocker.position[2]);
+                let min_dist = self_radius + f64::from(blocker.radius);
+                let dist = dx.hypot(dz);
+                if dist < min_dist && min_dist > 0.0 {
+                    let (nx, nz) = if dist > 1.0e-5 {
+                        (dx / dist, dz / dist)
+                    } else {
+                        (1.0, 0.0)
+                    };
+                    let push = min_dist - dist + 0.005;
+                    resolved[0] += nx * push;
+                    resolved[2] += nz * push;
+                    let inward = x * nx + z * nz;
+                    if inward < 0.0 {
+                        x -= inward * nx;
+                        z -= inward * nz;
+                    }
+                    actor_contact = true;
+                }
+            }
+        }
+        self.pose.position = resolved.map(snap);
         #[cfg(any(test, feature = "inspector"))]
         {
             let point = self.pose.position;
