@@ -1962,8 +1962,18 @@ impl World for BodyWorld {
         if !self.is_player_site(site) {
             return false;
         }
+        let rules = crate::hero_ability_rules::HeroAbilityRules::defaults();
         if targets.is_empty() {
             self.active_auras.remove(&site);
+            if effect == rules.sombra_hack.effect {
+                if let Some(frame) = self.spatial_frame.as_deref() {
+                    let _ = self.script_requests.queue_hack_health_pack(
+                        frame,
+                        self.entity,
+                        self.position,
+                    );
+                }
+            }
             return true;
         }
         let previously_latched = self
@@ -1978,6 +1988,7 @@ impl World for BodyWorld {
         };
         let dt = (elapsed_ms as f64 / 1000.0).min(0.05);
         let own_team = crate::match_scene::team_from_spawn_filter(self.body_filter);
+        let mut hacked_enemy = false;
         for &target in targets {
             if !valid_entity(target) {
                 continue;
@@ -1989,28 +2000,25 @@ impl World for BodyWorld {
                     .find(|c| c.entity == target)
                     .is_some_and(|c| own_team.is_some() && c.team == own_team);
             if is_ally {
-                if dt > 0.0 {
-                    // Only deliver continuous healing for genuine healing tether/aura effect assets
-                    // (not damage boost, speed boost, or shield/bubble buff auras).
-                    let is_heal_aura = matches!(
-                        effect,
-                        0 | 0x04a0_0000_0000_0019
-                            | 0x04a0_0000_0000_0123
-                            | 0x04a0_0000_0000_01b9
-                            | 0x04a0_0000_0000_0302
-                    );
-                    if is_heal_aura {
-                        if let Some(rate) =
-                            param.filter(|r| r.is_finite() && *r > 1.0 && *r <= 300.0)
-                        {
-                            let _ = self.script_requests.queue_health(frame, target, rate * dt);
-                        }
+                if dt > 0.0 && rules.is_heal_aura_effect(effect) {
+                    if let Some(rate) = param.filter(|r| r.is_finite() && *r > 1.0 && *r <= 300.0) {
+                        let _ = self.script_requests.queue_health(frame, target, rate * dt);
                     }
                 }
-            } else if effect == 0x04a0_0000_0000_0286 && !previously_latched.contains(&target) {
+            } else if effect == rules.sombra_hack.effect && !previously_latched.contains(&target) {
                 // Authored Sombra Hack interrupt & silence on latch.
-                let _ = self.script_requests.queue_stun(frame, target, 12);
+                let _ = self.script_requests.queue_stun(
+                    frame,
+                    target,
+                    rules.sombra_hack.interrupt_ticks,
+                );
+                hacked_enemy = true;
             }
+        }
+        if effect == rules.sombra_hack.effect && !hacked_enemy && previously_latched.is_empty() {
+            let _ = self
+                .script_requests
+                .queue_hack_health_pack(frame, self.entity, self.position);
         }
         true
     }

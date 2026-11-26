@@ -210,6 +210,7 @@ pub struct SceneAssets {
     trace_contacts: bool,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
     environment: EnvironmentCatalog,
+    ability_rules: Arc<crate::hero_ability_rules::HeroAbilityRules>,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
     practice_owner_body: OnceLock<Option<Arc<OwnerBodyFactory>>>,
@@ -264,6 +265,9 @@ impl SceneAssets {
             junkenstein_validation: None,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
             environment: EnvironmentCatalog::load(runtime.join(MAP_ENVIRONMENT))?,
+            ability_rules: crate::hero_ability_rules::HeroAbilityRules::load(
+                data.join("hero_ability_rules_174.json"),
+            )?,
             graphs,
             codecs,
             practice_owner_body: OnceLock::new(),
@@ -541,26 +545,10 @@ impl SceneAssets {
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
         simulation.set_body_contact_sets(self.graphs.body_contact_sets());
         simulation.set_stats_catalog(Arc::clone(&self.stats), map.mode_guid);
-        if std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE").is_none_or(|value| value != "0") {
-            simulation.enable_received_damage_feedback();
-        }
-        let hit_variant = match std::env::var("ORPHEUS_PLAYTEST_HIT_VARIANT") {
-            Ok(value) if value == "0" || value.eq_ignore_ascii_case("off") => None,
-            Ok(value) => Some(
-                value
-                    .parse::<f32>()
-                    .ok()
-                    .filter(|v| v.is_finite() && *v >= 0.0)
-                    .unwrap_or(1.0),
-            ),
-            Err(_) => Some(1.0),
-        };
-        if let Some(variant) = hit_variant {
-            simulation.enable_authored_hit_feedback(variant);
-        }
-        if std::env::var_os("ORPHEUS_PLAYTEST_ELIMINATION").is_none_or(|value| value != "0") {
-            simulation.enable_authored_elimination_feedback();
-        }
+        simulation.set_ability_rules(Arc::clone(&self.ability_rules));
+        simulation.enable_received_damage_feedback();
+        simulation.enable_authored_hit_feedback(1.0);
+        simulation.enable_authored_elimination_feedback();
         simulation.set_map_guid(map.map_guid);
         simulation.set_environment(self.environment.for_map(map.map_guid));
         if let Some(pvp) = crate::pvp_mode::PvpObjectiveRuntime::from_game_map(&map) {

@@ -56,6 +56,7 @@ mod game_replication;
 pub mod game_service;
 pub mod game_stats;
 mod game_timing;
+mod hero_ability_rules;
 pub mod jam_handshake;
 mod linked_aim;
 pub mod lobby_arcade;

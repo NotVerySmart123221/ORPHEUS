@@ -271,8 +271,6 @@ pub(super) struct ActorStatus {
 /// Fallen ally soul anchor spawned on player death (10s window) for Mercy Resurrect.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct SoulAnchor {
-    #[allow(dead_code)]
-    pub(super) owner: u32,
     pub(super) body: BodyId,
     pub(super) team: u8,
     pub(super) position: Vec3,
@@ -1017,6 +1015,7 @@ pub(crate) struct RoomSimulation {
     spatial_frame: Option<(u32, Arc<RoomSpatialFrame>)>,
     movement_contacts: Option<movement::MovementContacts>,
     environment: crate::map_environment::MapEnvironment,
+    ability_rules: Arc<crate::hero_ability_rules::HeroAbilityRules>,
     health_events: health_events::RoomHealthEvents,
     // Generation maps live for the room's lifetime so reconnects cannot reset history.
     player_generations: HashMap<u32, u64>,
@@ -1533,6 +1532,7 @@ impl RoomSimulation {
             spatial_frame: None,
             movement_contacts: None,
             environment: Default::default(),
+            ability_rules: crate::hero_ability_rules::HeroAbilityRules::default_shared(),
             health_events: health_events::RoomHealthEvents::default(),
             player_generations: HashMap::new(),
             latest_wire_generations: HashMap::new(),
@@ -1866,11 +1866,17 @@ impl RoomSimulation {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn take_completed_career_records(
         &mut self,
     ) -> Vec<(u32, crate::game_progression::CareerMatchRecord)> {
         std::mem::take(&mut self.completed_career_records)
+    }
+
+    pub(crate) fn set_ability_rules(
+        &mut self,
+        rules: Arc<crate::hero_ability_rules::HeroAbilityRules>,
+    ) {
+        self.ability_rules = rules;
     }
 
     #[cfg(test)]
@@ -1909,22 +1915,14 @@ impl RoomSimulation {
         self.stats_catalog = Some((catalog, mode_guid));
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn scoreboard(&self) -> &crate::game_progression::MatchScoreboard {
-        &self.scoreboard
-    }
-
-    #[allow(dead_code)]
     pub(crate) fn scoreboard_mut(&mut self) -> &mut crate::game_progression::MatchScoreboard {
         &mut self.scoreboard
     }
 
-    #[allow(dead_code)]
     pub(crate) fn replay(&self) -> &crate::game_replay::HighlightRecorder {
         &self.replay
     }
 
-    #[allow(dead_code)]
     pub(crate) fn voice_chat_mut(&mut self) -> &mut crate::game_replay::VoiceChatRouter {
         &mut self.voice_chat
     }

@@ -20,26 +20,27 @@ impl RoomSimulation {
         self.environment.player_respawn_delay(mode)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn hack_health_pack(&mut self, position: [f64; 3], team: u8, tick: u32) -> bool {
         let packs = self.environment.health_packs();
         if self.health_pack_states.len() != packs.len() {
             self.health_pack_states
                 .resize(packs.len(), Default::default());
         }
+        let rule = self.ability_rules.sombra_hack;
         let mut best: Option<(usize, f64)> = None;
         for (idx, pack) in packs.iter().enumerate() {
             let d = (pack.position[0] - position[0])
                 .hypot(pack.position[1] - position[1])
                 .hypot(pack.position[2] - position[2]);
-            if d <= 15.0 && best.is_none_or(|(_, prev)| d < prev) {
+            if d <= rule.health_pack_range && best.is_none_or(|(_, prev)| d < prev) {
                 best = Some((idx, d));
             }
         }
         let Some((idx, _)) = best else {
             return false;
         };
-        self.health_pack_states[idx].hacked_by = Some((team, tick.saturating_add(62 * 45)));
+        self.health_pack_states[idx].hacked_by =
+            Some((team, tick.saturating_add(rule.health_pack_duration_ticks)));
         true
     }
 

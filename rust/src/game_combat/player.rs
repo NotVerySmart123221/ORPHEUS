@@ -1184,17 +1184,16 @@ impl RoomSimulation {
             if let Some(pose) = state.history.at(view, state.target_pose()) {
                 let m_pose = state.mover.pose();
                 let speed = m_pose.velocity[0].hypot(m_pose.velocity[2]);
-                const BASTION_BODY: u64 = 0x0400_0000_0000_01FD;
-                const WRECKING_BALL_BODY: u64 = 0x0400_0000_0000_200B;
-                let is_ball_roll = (state.body_template == WRECKING_BALL_BODY
-                    || pose.radius >= 0.68)
-                    && pose.height <= 2.05
-                    && speed > 8.5;
+                let postures = self.ability_rules.postures;
+                let is_ball_roll = (state.body_template == postures.wrecking_ball_body
+                    || pose.radius >= postures.wrecking_ball_roll_min_radius)
+                    && pose.height <= postures.wrecking_ball_roll_max_height
+                    && speed > postures.wrecking_ball_roll_min_speed;
                 let posture = if is_ball_roll {
                     crate::game_hitscan::HurtPosture::Ball
-                } else if state.body_template == BASTION_BODY
+                } else if state.body_template == postures.bastion_body
                     && state.mover.crouched()
-                    && speed < 0.05
+                    && speed < postures.bastion_sentry_max_speed
                 {
                     crate::game_hitscan::HurtPosture::Sentry
                 } else {

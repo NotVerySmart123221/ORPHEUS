@@ -55,7 +55,7 @@ pub(crate) enum TargetRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct AiTargetSnapshot {
     pub(crate) body: Option<BodyId>,
     pub(crate) entity: u32,
@@ -77,7 +77,7 @@ pub(crate) struct AiSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum AiEvent {
     Spawn { tick: u32 },
     Release { tick: u32 },
@@ -140,7 +140,7 @@ impl From<AiScriptError> for io::Error {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum HandleQueryResult<'a> {
     LivePlayer(&'a PlayerBodyState),
     StalePlayer(BodyId),
@@ -148,7 +148,7 @@ pub(crate) enum HandleQueryResult<'a> {
 }
 
 /// Validates a player `BodyId` handle read-only against `RoomSimulation`'s ECS world.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn query_body_handle<'a>(sim: &'a RoomSimulation, id: BodyId) -> HandleQueryResult<'a> {
     if !sim.player_body_generation_current(id) {
         return HandleQueryResult::StalePlayer(id);
@@ -161,7 +161,7 @@ pub(crate) fn query_body_handle<'a>(sim: &'a RoomSimulation, id: BodyId) -> Hand
     HandleQueryResult::UnknownHandle(id)
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn validate_player_body_handle(
     sim: &RoomSimulation,
     id: BodyId,
@@ -175,7 +175,7 @@ pub(crate) fn validate_player_body_handle(
     }
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn validate_commands_against_simulation(
     commands: &[AiCommand],
     simulation: &RoomSimulation,

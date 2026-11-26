@@ -2207,8 +2207,7 @@ impl WorldDelivery {
         let Some(entity) = self.next_body(now) else {
             return Ok(());
         };
-        const DVA_MEKA_BODY: u64 = 0x0400_0000_0000_0407;
-        const DVA_PILOT_BODY: u64 = 0x0400_0000_0000_040a;
+        let dva = crate::hero_ability_rules::HeroAbilityRules::defaults().dva_mech;
         let swap = {
             let duplicate_revert = scene
                 .simulation_mut()
@@ -2231,8 +2230,8 @@ impl WorldDelivery {
             let old_body = state.body_template;
             (new_body, old_body, pose.position, pose.velocity, pose.yaw)
         };
-        // D.Va Call Mech crush (Pilot -> MEKA): 250 AoE damage + knockback within 3.0m.
-        if swap.1 == DVA_PILOT_BODY && swap.0 == DVA_MEKA_BODY {
+        // D.Va Call Mech crush (Pilot -> MEKA): AoE damage + knockback from HeroAbilityRules.
+        if swap.1 == dva.pilot_body && swap.0 == dva.meka_body {
             scene.simulation_mut().apply_call_mech_crush(
                 body.id.entity,
                 viewer.team,
@@ -2242,7 +2241,10 @@ impl WorldDelivery {
             );
         }
         // D.Va Self-Destruct eject (MEKA -> Pilot while moving forward): glide & detonate.
-        if swap.1 == DVA_MEKA_BODY && swap.0 == DVA_PILOT_BODY && swap.3[0].hypot(swap.3[2]) > 3.5 {
+        if swap.1 == dva.meka_body
+            && swap.0 == dva.pilot_body
+            && swap.3[0].hypot(swap.3[2]) > dva.self_destruct_min_speed
+        {
             scene.simulation_mut().spawn_self_destruct_bomb(
                 body.id.entity,
                 viewer.team,

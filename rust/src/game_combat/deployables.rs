@@ -34,10 +34,6 @@ const FIRST_PET_WIRE: u32 = 0xc008_0000;
 const PET_WIRE_SPAN: u32 = 0x0008_0000;
 const FIRST_DEPLOYABLE_WIRE: u32 = 0xc010_0000;
 const DEPLOYABLE_WIRE_SPAN: u32 = 0x0008_0000;
-const FIRST_SERVER_PROJECTILE_WIRE: u32 = 0xc018_0000;
-const SERVER_PROJECTILE_WIRE_SPAN: u32 = 0x0008_0000;
-#[allow(dead_code)]
-const KEEP_MOVEMENT_ROTATION: u32 = 0x0100_0000;
 const MAX_DEPLOYABLES_PER_OWNER: usize = 16;
 const SCRIPTLESS_DEPLOYABLE_TICKS: u32 = 62 * 20; // 20s default lifetime when no script expires it
 const SCRIPTED_DEPLOYABLE_MAX_TICKS: u32 = 62 * 600; // 10m safety cap so permanent deployables stay active until destroyed/replaced
@@ -46,8 +42,6 @@ const STUN_DURATION_VAR: u64 = 0x0d80_0000_0000_00d7;
 
 static NEXT_PET_WIRE: AtomicU32 = AtomicU32::new(0);
 static NEXT_DEPLOYABLE_WIRE: AtomicU32 = AtomicU32::new(0);
-#[allow(dead_code)]
-static NEXT_SERVER_PROJECTILE_WIRE: AtomicU32 = AtomicU32::new(0);
 
 pub(crate) fn next_pet_wire_id() -> u32 {
     let seq = NEXT_PET_WIRE.fetch_add(1, Ordering::Relaxed) % PET_WIRE_SPAN;
@@ -57,13 +51,6 @@ pub(crate) fn next_pet_wire_id() -> u32 {
 fn next_deployable_wire_id() -> u32 {
     let seq = NEXT_DEPLOYABLE_WIRE.fetch_add(1, Ordering::Relaxed) % DEPLOYABLE_WIRE_SPAN;
     FIRST_DEPLOYABLE_WIRE | seq
-}
-
-#[allow(dead_code)]
-pub(super) fn next_server_projectile_wire_id() -> u32 {
-    let seq =
-        NEXT_SERVER_PROJECTILE_WIRE.fetch_add(1, Ordering::Relaxed) % SERVER_PROJECTILE_WIRE_SPAN;
-    FIRST_SERVER_PROJECTILE_WIRE | seq
 }
 
 /// Extract an authored stun duration in simulation ticks from a `PlayScript`
@@ -108,7 +95,6 @@ pub(super) struct RoomPet {
     pub(super) owner: u32,
     pub(super) ecs_entity: Entity,
     pub(super) team: u8,
-    #[allow(dead_code)]
     pub(super) definition: u64,
     pub(super) attach: Option<u32>,
     pub(super) local_offset: Option<Vec3>,
@@ -260,33 +246,6 @@ fn entity_create_update(
         create.position = position.map(|v| v as f32);
         create.rotation = yaw_rotation(f64::from(yaw));
     }
-    Some(EntityUpdate {
-        entity: wire,
-        operation: Some(Operation::Create(Box::new(create))),
-        ..EntityUpdate::default()
-    })
-}
-
-#[allow(dead_code)]
-pub(super) fn server_projectile_create_update(
-    wire: u32,
-    team: u8,
-    definition: u64,
-    position: Vec3,
-    velocity: Vec3,
-) -> Option<EntityUpdate> {
-    let team_comp = bot_filter_component(team, false).ok()?;
-    let mut create = Create::new(definition, vec![team_comp]);
-    let yaw = velocity[0].atan2(velocity[2]).to_degrees();
-    let yaw_i32 = (yaw * 65536.0 / 360.0).round_ties_even() as i32;
-    create.position = position.map(|v| v as f32);
-    create.rotation = yaw_rotation(f64::from(yaw_i32));
-    create.movement = Some(Movement {
-        position,
-        velocity,
-        yaw: yaw_i32,
-        ..Movement::default()
-    });
     Some(EntityUpdate {
         entity: wire,
         operation: Some(Operation::Create(Box::new(create))),
@@ -779,7 +738,6 @@ pub(super) struct RoomDeployable {
     pub(super) owner: u32,
     pub(super) ecs_entity: Entity,
     pub(super) team: u8,
-    #[allow(dead_code)]
     pub(super) definition: u64,
     pub(super) position: Vec3,
     pub(super) yaw: i32,
@@ -846,10 +804,10 @@ impl RoomSimulation {
             return;
         }
         let graphs_and_mode = self.deployable_graphs();
-        const MEI_ICE_WALL_ENTITY: u64 = 0x0400_0000_0000_090b;
-        let is_ice_wall_root = definition == MEI_ICE_WALL_ENTITY && attach.is_none();
+        let ice_wall = self.ability_rules.ice_wall.clone();
+        let is_ice_wall_root = definition == ice_wall.entity && attach.is_none();
         let (vitals, authored_body_vitals) = if is_ice_wall_root {
-            (Some(Vitals::new(400.0, 0.0, 0.0)), true)
+            (Some(Vitals::new(ice_wall.pillar_health, 0.0, 0.0)), true)
         } else {
             resolve_entity_vitals(
                 graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
@@ -917,21 +875,20 @@ impl RoomSimulation {
             },
         );
         self.created.push(update);
-        // Mei Ice Wall (`0x040000000000090B`): automatically spawn 4 flanking destructible
-        // 400 HP solid pillars perpendicular to yaw (5 pillars total, 1.6m spacing).
+        // Mei Ice Wall: automatically spawn flanking destructible solid pillars perpendicular to yaw.
         if is_ice_wall_root {
             let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
             let (sin_y, cos_y) = rad.sin_cos();
             let right = [cos_y, 0.0, -sin_y];
-            for idx in [-2i32, -1, 1, 2] {
-                let offset = f64::from(idx) * 1.6;
+            for &idx in &ice_wall.flank_offsets {
+                let offset = f64::from(idx) * ice_wall.pillar_spacing;
                 let pillar_pos = [
                     position[0] + right[0] * offset,
                     position[1],
                     position[2] + right[2] * offset,
                 ];
                 let pillar_id = next_pet_wire_id();
-                let pillar_vitals = Vitals::new(400.0, 0.0, 0.0);
+                let pillar_vitals = Vitals::new(ice_wall.pillar_health, 0.0, 0.0);
                 if let Some(pillar_update) = entity_create_update(
                     pillar_id,
                     team,
@@ -972,8 +929,8 @@ impl RoomSimulation {
     }
 
     /// Spawn a 5-pillar solid destructible Ice Wall perpendicular to `yaw`,
-    /// where each pillar has independent HP (`400.0`) and blocks movement + rays for both teams.
-    #[allow(dead_code)]
+    /// where each pillar has independent HP and blocks movement + rays for both teams.
+    #[cfg(test)]
     pub(super) fn spawn_ice_wall_pillars(
         &mut self,
         owner: u32,
@@ -983,12 +940,13 @@ impl RoomSimulation {
         yaw: i32,
         tick: u32,
     ) -> Vec<u32> {
+        let ice_wall = self.ability_rules.ice_wall.clone();
         let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
         let (sin_y, cos_y) = rad.sin_cos();
         let right = [cos_y, 0.0, -sin_y];
-        let mut ids = Vec::with_capacity(5);
+        let mut ids = Vec::with_capacity(ice_wall.flank_offsets.len() + 1);
         for idx in -2i32..=2i32 {
-            let offset = f64::from(idx) * 1.6;
+            let offset = f64::from(idx) * ice_wall.pillar_spacing;
             let pos = [
                 center[0] + right[0] * offset,
                 center[1],
@@ -1003,7 +961,7 @@ impl RoomSimulation {
                 None,
                 pos,
                 yaw,
-                Some(400.0),
+                Some(ice_wall.pillar_health),
                 None,
                 tick,
             );
@@ -1809,14 +1767,12 @@ impl RoomSimulation {
         }
 
         // 4. Autonomous combat pets (Torbjörn Turret 250 HP & Ashe B.O.B. >= 800 HP) +
-        //    Junkrat Steel Trap proximity root (`0x0385` / `0x11A9`, 80 dmg + 3.0s root).
+        //    Junkrat Steel Trap proximity root from HeroAbilityRules.
         if let Some(frame) = frame_arc {
-            const JUNKRAT_TRAP_A: u64 = 0x0400_0000_0000_0385;
-            const JUNKRAT_TRAP_B: u64 = 0x0400_0000_0000_11a9;
+            let trap_rule = self.ability_rules.junkrat_trap.clone();
             let mut triggered_traps: Vec<(u32, u32, u32)> = Vec::new();
             for (&dep_wire, dep) in &self.room_deployables {
-                let is_trap = dep.definition == JUNKRAT_TRAP_A
-                    || dep.definition == JUNKRAT_TRAP_B
+                let is_trap = trap_rule.matches_entity(dep.definition)
                     || dep.vitals.as_ref().is_some_and(|v| {
                         (90.0..=110.0).contains(&v.maximum()) && dep.component.is_none()
                     });
@@ -1832,7 +1788,9 @@ impl RoomSimulation {
                     }
                     let dist =
                         (c.position[0] - dep.position[0]).hypot(c.position[2] - dep.position[2]);
-                    if dist <= 1.25 && (c.position[1] - dep.position[1]).abs() <= 1.8 {
+                    if dist <= trap_rule.trigger_radius
+                        && (c.position[1] - dep.position[1]).abs() <= trap_rule.trigger_height
+                    {
                         triggered_traps.push((dep_wire, dep.owner, c.entity));
                         break;
                     }
@@ -1851,13 +1809,17 @@ impl RoomSimulation {
                 };
                 let _ = self.apply_health(
                     victim,
-                    crate::game_combat::HealthEffect::Damage(80.0),
+                    crate::game_combat::HealthEffect::Damage(trap_rule.damage),
                     death,
                     now,
                     None,
                 );
                 let st = self.actor_statuses.entry(victim).or_default();
-                st.rooted_until = Some(st.rooted_until.unwrap_or(0).max(tick.saturating_add(186)));
+                st.rooted_until = Some(
+                    st.rooted_until
+                        .unwrap_or(0)
+                        .max(tick.saturating_add(trap_rule.root_ticks)),
+                );
             }
 
             let mut ai_hits: Vec<(u32, u32, f64, Option<Vec3>)> = Vec::new();
@@ -1990,9 +1952,9 @@ impl RoomSimulation {
         }
     }
 
-    /// Scale continuous beam weapon ticks cleanly:
-    /// - Symmetra LMB (`0x26F0`): 1.0x -> 2.0x -> 3.0x (`beam_charge` ramp, 60 -> 120 -> 180 DPS)
-    /// - Echo Focusing Beam (`0x2593`): 4.0x execute damage when target HP <= 50%
+    /// Scale continuous beam weapon ticks cleanly from `HeroAbilityRules`:
+    /// - Symmetra LMB: 1.0x -> 2.0x -> 3.0x (`beam_charge` ramp)
+    /// - Echo Focusing Beam: execute multiplier when target HP <= configured ratio
     pub(super) fn scale_continuous_beam_damage(
         &mut self,
         source_wire: u32,
@@ -2000,47 +1962,50 @@ impl RoomSimulation {
         base_damage: f64,
         tick: u32,
     ) -> f64 {
-        if base_damage <= 0.0 || base_damage > 16.0 || source_wire == target_wire {
+        let beam = self.ability_rules.beam_scaling;
+        if base_damage <= 0.0
+            || base_damage > beam.max_base_tick_damage
+            || source_wire == target_wire
+        {
             return base_damage;
         }
-        const SYMMETRA_BODY: u64 = 0x0400_0000_0000_26f0;
-        const ECHO_BODY: u64 = 0x0400_0000_0000_2593;
         let source_body = self
             .players_by_wire
             .get(&source_wire)
             .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
             .map(|p| p.body_template);
-        match source_body {
-            Some(SYMMETRA_BODY) => {
-                let st = self.actor_statuses.entry(source_wire).or_default();
-                st.beam_charge = (st.beam_charge + 0.013).min(2.0);
-                st.beam_last_hit_tick = tick;
-                let mult = 1.0 + f64::from(st.beam_charge.floor());
-                base_damage * mult
-            }
-            Some(ECHO_BODY) => {
-                let low_hp = self
-                    .by_wire
+        if source_body == Some(beam.symmetra_body) {
+            let st = self.actor_statuses.entry(source_wire).or_default();
+            st.beam_charge =
+                (st.beam_charge + beam.symmetra_charge_per_tick).min(beam.symmetra_max_charge);
+            st.beam_last_hit_tick = tick;
+            let mult = 1.0 + f64::from(st.beam_charge.floor());
+            base_damage * mult
+        } else if source_body == Some(beam.echo_body) {
+            let low_hp = self
+                .by_wire
+                .get(&target_wire)
+                .and_then(|&ent| self.world.get::<super::BotState>(ent))
+                .is_some_and(|b| {
+                    b.vitals.total() <= b.vitals.maximum() * beam.echo_execute_hp_ratio
+                })
+                || self
+                    .players_by_wire
                     .get(&target_wire)
-                    .and_then(|&ent| self.world.get::<super::BotState>(ent))
-                    .is_some_and(|b| b.vitals.total() * 2.0 <= b.vitals.maximum())
-                    || self
-                        .players_by_wire
-                        .get(&target_wire)
-                        .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
-                        .and_then(|p| p.vitals())
-                        .is_some_and(|v| v.total() * 2.0 <= v.maximum());
-                if low_hp {
-                    base_damage * 4.0
-                } else {
-                    base_damage
-                }
+                    .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+                    .and_then(|p| p.vitals())
+                    .is_some_and(|v| v.total() <= v.maximum() * beam.echo_execute_hp_ratio);
+            if low_hp {
+                base_damage * beam.echo_execute_multiplier
+            } else {
+                base_damage
             }
-            _ => base_damage,
+        } else {
+            base_damage
         }
     }
 
-    /// Engage Roadhog 2-stage Chain Hook pull toward 3.5m in front of Roadhog (with LOS check in `step_status_effects`).
+    /// Engage Roadhog 2-stage Chain Hook pull (with LOS check in `step_status_effects`).
     pub(super) fn attach_roadhog_hook_pull(
         &mut self,
         puller_wire: u32,
@@ -2050,6 +2015,7 @@ impl RoomSimulation {
         if puller_wire == victim_wire || self.actor_is_cc_immune(victim_wire, tick) {
             return;
         }
+        let hook = self.ability_rules.roadhog_hook;
         let Some((puller_pos, puller_yaw)) = self
             .players_by_wire
             .get(&puller_wire)
@@ -2068,22 +2034,22 @@ impl RoomSimulation {
             return;
         };
         let dist = (victim_pos[0] - puller_pos[0]).hypot(victim_pos[2] - puller_pos[2]);
-        if !(3.8..=22.0).contains(&dist) {
+        if !(hook.min_distance..=hook.max_distance).contains(&dist) {
             return;
         }
         let rad = f64::from(puller_yaw) * std::f64::consts::TAU / 65_536.0;
         let (sin_y, cos_y) = rad.sin_cos();
         let dest = [
-            puller_pos[0] + sin_y * 3.5,
+            puller_pos[0] + sin_y * hook.pull_stop_distance,
             puller_pos[1],
-            puller_pos[2] + cos_y * 3.5,
+            puller_pos[2] + cos_y * hook.pull_stop_distance,
         ];
-        self.apply_actor_stun(victim_wire, tick, 62);
+        self.apply_actor_stun(victim_wire, tick, hook.pull_ticks);
         let st = self.actor_statuses.entry(victim_wire).or_default();
-        st.hook_pull = Some((puller_wire, dest, tick.saturating_add(62)));
+        st.hook_pull = Some((puller_wire, dest, tick.saturating_add(hook.pull_ticks)));
     }
 
-    /// Detonate owner's oldest Junkrat Concussion Mine (`0x103A`) for 120 AoE damage +
+    /// Detonate owner's oldest Junkrat Concussion Mine for AoE damage +
     /// knockback and zero-self-damage mine-jumping impulse.
     pub(super) fn detonate_owner_concussion_mine(
         &mut self,
@@ -2091,11 +2057,11 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) {
-        const JUNKRAT_MINE: u64 = 0x0400_0000_0000_103a;
+        let mine = self.ability_rules.junkrat_mine;
         let Some((mine_wire, mine_team, center)) = self
             .room_deployables
             .iter()
-            .find(|(_, d)| d.owner == owner_wire && d.definition == JUNKRAT_MINE)
+            .find(|(_, d)| d.owner == owner_wire && d.definition == mine.entity)
             .map(|(&w, d)| (w, d.team, d.position))
         else {
             return;
@@ -2119,7 +2085,7 @@ impl RoomSimulation {
                         let d = (c.position[0] - center[0])
                             .hypot(c.position[2] - center[2])
                             .hypot((c.position[1] + 0.8) - center[1]);
-                        (d <= 4.5).then_some((c.entity, c.position, d))
+                        (d <= mine.blast_radius).then_some((c.entity, c.position, d))
                     })
                     .collect()
             })
@@ -2129,6 +2095,7 @@ impl RoomSimulation {
             frame: tick,
             killer: owner_wire,
         };
+        let falloff_span = 1.0 - mine.min_damage_ratio;
         for (target, pos, d) in targets {
             let dx = pos[0] - center[0];
             let dz = pos[2] - center[2];
@@ -2138,13 +2105,18 @@ impl RoomSimulation {
                 let _ = self.queue_combat_impulse(
                     owner_wire,
                     tick,
-                    [dx / hlen * 7.0, 12.5, dz / hlen * 7.0],
+                    [
+                        dx / hlen * mine.self_horizontal_impulse,
+                        mine.self_vertical_impulse,
+                        dz / hlen * mine.self_horizontal_impulse,
+                    ],
                 );
             } else {
-                let falloff = (1.0 - (d / 4.5) * 0.75).clamp(0.25, 1.0);
+                let falloff = (1.0 - (d / mine.blast_radius) * falloff_span)
+                    .clamp(mine.min_damage_ratio, 1.0);
                 let _ = self.apply_health(
                     target,
-                    crate::game_combat::HealthEffect::Damage(120.0 * falloff),
+                    crate::game_combat::HealthEffect::Damage(mine.max_damage * falloff),
                     death,
                     now,
                     None,
@@ -2152,7 +2124,11 @@ impl RoomSimulation {
                 let _ = self.queue_combat_impulse(
                     target,
                     tick,
-                    [dx / hlen * 10.5, 8.5, dz / hlen * 10.5],
+                    [
+                        dx / hlen * mine.enemy_horizontal_impulse,
+                        mine.enemy_vertical_impulse,
+                        dz / hlen * mine.enemy_horizontal_impulse,
+                    ],
                 );
             }
         }
@@ -2227,14 +2203,14 @@ impl RoomSimulation {
         Some(anchor)
     }
 
-    /// Register an active Echo Duplicate transform (15 seconds = 930 ticks).
-    #[allow(dead_code)]
+    /// Register an active Echo Duplicate transform.
     pub(super) fn start_echo_duplicate(&mut self, owner: u32, original_body: u64, tick: u32) {
+        let duration = self.ability_rules.echo_duplicate.duration_ticks;
         self.active_duplicates.insert(
             owner,
             super::DuplicateState {
                 original_body,
-                expires_tick: tick.saturating_add(62 * 15),
+                expires_tick: tick.saturating_add(duration),
             },
         );
     }
@@ -2243,7 +2219,7 @@ impl RoomSimulation {
         self.pending_duplicate_reverts.remove(&owner)
     }
 
-    /// Spawn a gliding D.Va Self-Destruct bomb that explodes after 3.0s (186 ticks).
+    /// Spawn a gliding D.Va Self-Destruct bomb that explodes after its configured fuse.
     pub(crate) fn spawn_self_destruct_bomb(
         &mut self,
         owner: u32,
@@ -2252,16 +2228,17 @@ impl RoomSimulation {
         velocity: Vec3,
         tick: u32,
     ) {
+        let fuse = self.ability_rules.dva_mech.self_destruct_fuse_ticks;
         self.self_destruct_bombs.push(super::SelfDestructBomb {
             owner,
             team,
             position,
             velocity,
-            detonate_tick: tick.saturating_add(186),
+            detonate_tick: tick.saturating_add(fuse),
         });
     }
 
-    /// D.Va Call Mech crush: 250 AoE damage + knockback to nearby enemies within 3.0m.
+    /// D.Va Call Mech crush: AoE damage + knockback to nearby enemies.
     pub(crate) fn apply_call_mech_crush(
         &mut self,
         owner_wire: u32,
@@ -2270,6 +2247,7 @@ impl RoomSimulation {
         tick: u32,
         now: Duration,
     ) {
+        let dva = self.ability_rules.dva_mech;
         let targets: Vec<(u32, Vec3)> = self
             .spatial_frame
             .as_ref()
@@ -2284,7 +2262,7 @@ impl RoomSimulation {
                         let d = (c.position[0] - center[0])
                             .hypot(c.position[2] - center[2])
                             .hypot(c.position[1] - center[1]);
-                        (d <= 3.0).then_some((c.entity, c.position))
+                        (d <= dva.call_mech_crush_radius).then_some((c.entity, c.position))
                     })
                     .collect()
             })
@@ -2300,7 +2278,7 @@ impl RoomSimulation {
             let len = dx.hypot(dz).max(1e-4);
             let _ = self.apply_health(
                 target,
-                crate::game_combat::HealthEffect::Damage(250.0),
+                crate::game_combat::HealthEffect::Damage(dva.call_mech_crush_damage),
                 death,
                 now,
                 None,
@@ -2782,7 +2760,6 @@ mod tests {
             generation: 1,
         };
         sim.soul_anchors.push(crate::game_combat::SoulAnchor {
-            owner,
             body,
             team: 0,
             position: [10.0, 0.0, 10.0],

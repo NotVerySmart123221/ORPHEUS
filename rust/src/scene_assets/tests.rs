@@ -256,6 +256,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
         let assets = SceneAssets {
             junkenstein_validation: None,
             environment: EnvironmentCatalog::default(),
+            ability_rules: crate::hero_ability_rules::HeroAbilityRules::default_shared(),
             collision: PathBuf::new(),
             junkenstein_map_world: PathBuf::new(),
             last_collision: Mutex::default(),

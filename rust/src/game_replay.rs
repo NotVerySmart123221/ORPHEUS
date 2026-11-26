@@ -245,6 +245,50 @@ impl HighlightRecorder {
     pub fn potg(&self) -> Option<&PotgClip> {
         self.best_potg.as_ref()
     }
+
+    /// Build a frame-by-frame playback cursor for a victim's captured Killcam clip.
+    pub fn start_killcam_playback(&self, victim: u32) -> Option<HighlightPlayback> {
+        let clip = self.killcams.get(&victim)?;
+        (!clip.frames.is_empty()).then(|| HighlightPlayback {
+            camera_target: clip.killer,
+            frames: clip.frames.clone(),
+            cursor: 0,
+        })
+    }
+
+    /// Build a frame-by-frame playback cursor for the highest-scoring Play of the Game clip.
+    pub fn start_potg_playback(&self) -> Option<HighlightPlayback> {
+        let clip = self.best_potg.as_ref()?;
+        (!clip.frames.is_empty()).then(|| HighlightPlayback {
+            camera_target: clip.star_entity,
+            frames: clip.frames.clone(),
+            cursor: 0,
+        })
+    }
+}
+
+/// Chronological 30Hz playback cursor over a recorded Killcam or POTG clip.
+#[derive(Clone, Debug)]
+pub struct HighlightPlayback {
+    pub camera_target: u32,
+    frames: Vec<ReplayFrame>,
+    cursor: usize,
+}
+
+impl HighlightPlayback {
+    pub fn next_frame(&mut self) -> Option<&ReplayFrame> {
+        let frame = self.frames.get(self.cursor)?;
+        self.cursor += 1;
+        Some(frame)
+    }
+
+    pub fn remaining_frames(&self) -> usize {
+        self.frames.len().saturating_sub(self.cursor)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.cursor >= self.frames.len()
+    }
 }
 
 /// In-game voice chat channel identifier.
@@ -413,6 +457,25 @@ mod tests {
         assert_eq!(potg.star_entity, 1);
         assert_eq!(potg.category, PotgCategory::Shutdown);
         assert!(potg.score >= 245.0);
+
+        let mut kc_play = rec.start_killcam_playback(2).unwrap();
+        assert_eq!(kc_play.camera_target, 1);
+        let first_tick = kc_play.next_frame().unwrap().tick;
+        let mut last_tick = first_tick;
+        let mut count = 1usize;
+        while let Some(frame) = kc_play.next_frame() {
+            assert!(frame.tick > last_tick);
+            last_tick = frame.tick;
+            count += 1;
+        }
+        assert!(kc_play.is_finished());
+        assert_eq!(kc_play.remaining_frames(), 0);
+        assert_eq!(count, kc.frames.len());
+
+        let mut potg_play = rec.start_potg_playback().unwrap();
+        assert_eq!(potg_play.camera_target, 1);
+        assert_eq!(potg_play.remaining_frames(), potg.frames.len());
+        assert!(potg_play.next_frame().is_some());
     }
 
     #[test]

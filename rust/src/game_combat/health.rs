@@ -296,7 +296,6 @@ impl RoomSimulation {
                                 .map(|s| s.mover.pose().position)
                                 .unwrap_or([0.0; 3]);
                             self.soul_anchors.push(super::SoulAnchor {
-                                owner,
                                 body: id,
                                 team: victim_team,
                                 position: death_pos,
@@ -420,75 +419,9 @@ impl RoomSimulation {
         is_ally: bool,
         tick: u32,
     ) {
-        enum EffectBehavior {
-            Stun {
-                wrapper_graph: u32,
-                fallback_secs: f64,
-            },
-            Sleep {
-                wrapper_graph: u32,
-                fallback_secs: f64,
-            },
-            ChillFreeze {
-                wrapper_graph: u32,
-                stacks: u8,
-                fallback_secs: f64,
-            },
-            HealModifier {
-                duration_secs: f64,
-            },
-            HoT {
-                duration_secs: f64,
-                total_heal: f64,
-            },
-        }
-        // Data-driven binding from retail 0x04A logical-effect GUID to its
-        // authored wrapper graph (`0x224E` stun/sleep/freeze override carrier)
-        // or combat-modifier / lingering HoT behavior.
-        const EFFECT_TABLE: &[(u64, EffectBehavior)] = &[
-            (
-                0x04a0_0000_0000_0079,
-                EffectBehavior::Stun {
-                    wrapper_graph: 0x0228,
-                    fallback_secs: 0.8,
-                },
-            ),
-            (
-                0x04a0_0000_0000_030e,
-                EffectBehavior::Stun {
-                    wrapper_graph: 0x1684,
-                    fallback_secs: 0.8,
-                },
-            ),
-            (
-                0x04a0_0000_0000_026f,
-                EffectBehavior::Sleep {
-                    wrapper_graph: 0x0bde,
-                    fallback_secs: 5.0,
-                },
-            ),
-            (
-                0x04a0_0000_0000_0169,
-                EffectBehavior::ChillFreeze {
-                    wrapper_graph: 0x05e7,
-                    stacks: 20,
-                    fallback_secs: 1.5,
-                },
-            ),
-            (
-                0x04a0_0000_0000_0267,
-                EffectBehavior::HealModifier { duration_secs: 4.0 },
-            ),
-            (
-                0x04a0_0000_0000_02c8,
-                EffectBehavior::HoT {
-                    duration_secs: 2.0,
-                    total_heal: 35.0,
-                },
-            ),
-        ];
+        use crate::hero_ability_rules::ProjectileStatusEffectBehavior as EffectBehavior;
 
-        let Some((_, behavior)) = EFFECT_TABLE.iter().find(|(guid, _)| *guid == effect_guid) else {
+        let Some(behavior) = self.ability_rules.projectile_status_effect(effect_guid) else {
             return;
         };
         let graphs = self.script_graphs.as_ref().map(|(g, _)| g.as_ref());
@@ -501,7 +434,7 @@ impl RoomSimulation {
             crate::game_combat::Stun::from_seconds(secs).map_or(1, |s| s.ticks)
         };
 
-        match *behavior {
+        match behavior {
             EffectBehavior::Stun {
                 wrapper_graph,
                 fallback_secs,

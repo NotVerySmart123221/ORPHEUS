@@ -51,9 +51,6 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) ult_charge_scale: f64,
 }
 
-#[allow(dead_code)]
-pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
-
 impl PlayerBodyRuntime {
     fn sync_body_health_logged(&mut self) {
         if self.component.snapshot().is_some() {

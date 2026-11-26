@@ -203,7 +203,8 @@ impl RoomScriptRequest {
             ScriptEffect::Cue(_, _) => target.cue_listener,
             ScriptEffect::SpawnPet { .. }
             | ScriptEffect::DespawnPet { .. }
-            | ScriptEffect::StartDuplicate { .. } => true,
+            | ScriptEffect::StartDuplicate { .. }
+            | ScriptEffect::HackHealthPack { .. } => true,
         };
         supported.then_some(Self {
             wire,
@@ -240,6 +241,9 @@ enum ScriptEffect {
     StartDuplicate {
         target_wire: u32,
         original_body: u64,
+    },
+    HackHealthPack {
+        position: Vec3,
     },
 }
 
@@ -457,6 +461,15 @@ impl RoomScriptRequests {
             return false;
         }
         self.queue(frame, target, ScriptEffect::Stun { ticks })
+    }
+
+    pub(crate) fn queue_hack_health_pack(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        owner_wire: u32,
+        position: Vec3,
+    ) -> bool {
+        self.queue(frame, owner_wire, ScriptEffect::HackHealthPack { position })
     }
 
     fn queue(&mut self, frame: &RoomSpatialFrame, wire: u32, effect: ScriptEffect) -> bool {
@@ -744,15 +757,20 @@ impl RoomSimulation {
                     return Ok(());
                 }
                 self.apply_actor_stun(request.wire, tick, ticks);
-                // Roadhog Chain Hook latch stun at distance -> engage 2-stage pull to 3.5m in front.
-                const ROADHOG_BODY: u64 = 0x0400_0000_0000_028f;
+                // Roadhog Chain Hook latch stun at distance -> engage 2-stage pull.
+                let roadhog_body = self.ability_rules.roadhog_hook.body;
                 let is_roadhog = self
                     .players_by_wire
                     .get(&source.wire)
                     .and_then(|&ent| self.world.get::<PlayerBodyState>(ent))
-                    .is_some_and(|p| p.body_template == ROADHOG_BODY);
+                    .is_some_and(|p| p.body_template == roadhog_body);
                 if is_roadhog && request.wire != source.wire {
                     self.attach_roadhog_hook_pull(source.wire, request.wire, tick);
+                }
+            }
+            ScriptEffect::HackHealthPack { position } => {
+                if let Some(team) = self.actor_team(source.wire) {
+                    let _ = self.hack_health_pack(position, team, tick);
                 }
             }
             ScriptEffect::Cue(cue, source_entity) => {
@@ -1206,11 +1224,11 @@ impl RoomSimulation {
                                 self.combat_voice.multikill_target_allowed(&facts.tags)
                             })
                     }));
+        let genji_body = self.ability_rules.genji_dash_reset.body;
         let Some(mut player) = self.world.get_mut::<PlayerBodyState>(entity) else {
             return;
         };
-        const GENJI_BODY: u64 = 0x0400_0000_0000_0225;
-        let is_genji = player.body_template == GENJI_BODY;
+        let is_genji = player.body_template == genji_body;
         let mut elim_queued = 0usize;
         if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
             elim_queued = runtime

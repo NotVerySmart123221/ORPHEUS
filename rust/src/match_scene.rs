@@ -182,11 +182,7 @@ pub fn bot_create(bot: &Bot, vitals: Option<&crate::vitals::Vitals>) -> io::Resu
         crate::vitals::Vitals::component,
     );
     let team = bot_filter_component(bot.spawn.team, bot.dead)?;
-    let mut components = vec![pools, team];
-    if bot.spawn.hero != 0 {
-        components.push(fields(123, vec![Some(ComponentValue::Id(bot.spawn.hero))]));
-    }
-    let mut definition = Create::new(bot.spawn.body, components);
+    let mut definition = Create::new(bot.spawn.body, vec![pools, team]);
     definition.position = bot.position.map(|position| position as f32);
     definition.rotation = yaw_rotation(bot.yaw.round_ties_even());
     Ok(create(bot.entity, definition))

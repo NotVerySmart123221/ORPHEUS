@@ -413,11 +413,6 @@ impl ProjectileFlight {
         direct.max(blast)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn definition(&self) -> Option<u64> {
-        self.ballistics.definition
-    }
-
     pub(crate) fn direct_effect(&self) -> Option<u64> {
         self.direct_effect
     }
