@@ -1268,10 +1268,8 @@ impl World for BodyWorld {
             return None;
         }
         let known_target = target == self.entity
-            || self
-                .spatial_frame
-                .as_deref()
-                .is_some_and(|frame| frame.actor_pose(target).is_some());
+            || self.spatial_frame.is_some()
+            || self.pet_positions.contains_key(&target);
         if !known_target {
             return None;
         }
@@ -1501,6 +1499,8 @@ impl World for BodyWorld {
                 }
             }
             if self.spawned_possessables.contains_key(&entity)
+                || self.pet_positions.contains_key(&entity)
+                || entity >= 0xc008_0000
                 || (self.room_entities().is_none()
                     && self
                         .spatial_frame
@@ -1826,7 +1826,28 @@ impl World for BodyWorld {
             self.spawned_possessables.insert(pet_id, spawn.definition);
             return Some(pet_id);
         }
-        let pos = spawn.position.unwrap_or(self.position);
+        let mut pos = spawn.position.unwrap_or(self.position);
+        // World-placed pets whose `m_position` resolves to the caster's own feet (e.g.
+        // Mei Ice Wall `0x05FE:17`, Torb Turret, barriers with `m_position = self`) should
+        // land at the aimed ground point in front of the caster instead of wrapping the caster.
+        let rules = crate::hero_ability_rules::HeroAbilityRules::defaults();
+        let at_self = (pos[0] - self.position[0]).hypot(pos[2] - self.position[2]) < 0.35;
+        if spawn.attach.is_none() && at_self && spawn.definition == rules.ice_wall.entity {
+            let aimed = match self.select_landing(site) {
+                crate::script_init::LandingSelection::Point(pt) => pt,
+                crate::script_init::LandingSelection::Unhandled
+                | crate::script_init::LandingSelection::Invalid => {
+                    let rad = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
+                    let (sin_y, cos_y) = rad.sin_cos();
+                    [
+                        self.position[0] + sin_y * 6.0,
+                        self.position[1],
+                        self.position[2] + cos_y * 6.0,
+                    ]
+                }
+            };
+            pos = aimed;
+        }
         let authored_pools = self.graphs.entity_body(spawn.definition).and_then(|body| {
             crate::game_pools::authored_pools(&self.graphs, body)
                 .ok()
@@ -1844,11 +1865,18 @@ impl World for BodyWorld {
                 let rad = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
                 let (sin, cos) = rad.sin_cos();
                 let local_x = (dx * cos - dz * sin).clamp(-2.0, 2.0);
-                let local_z = (dx * sin + dz * cos).clamp(-2.0, 2.0);
-                let y = if spawn.bone_attached { dy.max(1.1) } else { dy };
+                let mut local_z = (dx * sin + dz * cos).clamp(-2.0, 2.0);
+                let y = if spawn.bone_attached {
+                    if local_z < 0.85 {
+                        local_z = 1.35;
+                    }
+                    dy.clamp(1.05, 1.45)
+                } else {
+                    dy
+                };
                 [local_x, y, local_z]
             } else if spawn.bone_attached {
-                [0.0, 1.15, 0.35]
+                [0.0, 1.15, 1.35]
             } else {
                 [0.0, 0.0, 0.0]
             }
@@ -2289,6 +2317,43 @@ impl World for BodyWorld {
         })
     }
 
+    fn entities_hostile(
+        &self,
+        site: Site,
+        source: u32,
+        target: u32,
+        _option: bool,
+    ) -> Option<bool> {
+        if !self.is_player_site(site) {
+            return None;
+        }
+        if !valid_entity(source) || !valid_entity(target) || source == target {
+            return Some(false);
+        }
+        let left = self.entity_filter_flags(site, source);
+        let right = self.entity_filter_flags(site, target);
+        if let (Some(left), Some(right)) = (left, right) {
+            if let Some(hostile) = crate::pve_encounter::host::ordinary_hostility(left, right) {
+                return Some(hostile);
+            }
+        }
+        let team_of = |ent: u32| -> Option<u8> {
+            if ent == self.entity {
+                return crate::match_scene::team_from_spawn_filter(self.body_filter);
+            }
+            self.spatial_frame
+                .as_deref()?
+                .candidates()
+                .iter()
+                .find(|c| c.entity == ent)
+                .and_then(|c| c.team)
+        };
+        if let (Some(a), Some(b)) = (team_of(source), team_of(target)) {
+            return Some(a != b);
+        }
+        self.spatial_frame.is_some().then_some(false)
+    }
+
     fn settled_entities_hostile(
         &self,
         site: Site,
@@ -2330,8 +2395,12 @@ impl World for BodyWorld {
             {
                 Some(0)
             }
-            // The authenticated human body has no AI control entity in this world.
-            EntityRelation::AiControlEntity if entity == self.entity => Some(0),
+            // Human bodies and live room actors have no separate AI control entity.
+            EntityRelation::AiControlEntity
+                if entity == self.entity || self.spatial_frame.is_some() =>
+            {
+                Some(0)
+            }
             _ => None,
         }
     }
@@ -2515,9 +2584,8 @@ impl BodyWorld {
         true
     }
 
-    #[cfg(test)]
     pub(super) fn has_deadeye(&self) -> bool {
-        self.hero == crate::game_heroes::CASSIDY && is_junkenstein_mode(self.mode)
+        self.hero == crate::game_heroes::CASSIDY
     }
 
     pub(super) fn own_filter_flags(&self) -> u64 {

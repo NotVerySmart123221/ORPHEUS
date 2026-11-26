@@ -14,9 +14,7 @@ use serde_json::Value as Json;
 
 pub(crate) use self::lifecycle::PlayerBodyRuntime;
 use self::world::BodyWorld;
-pub(crate) use self::world::DeadeyeScene;
-#[cfg(test)]
-pub(crate) use self::world::{DeadeyeTarget, ViewSubject};
+pub(crate) use self::world::{DeadeyeScene, DeadeyeTarget, ViewSubject};
 #[cfg(test)]
 use crate::game_content::PRACTICE_RANGE_MODE;
 use crate::{

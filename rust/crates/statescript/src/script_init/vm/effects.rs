@@ -2828,9 +2828,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if definition >> 48 != 0x0400 || definition & 0x0000_ffff_ffff_ffff == 0 {
             return Ok(());
         }
-        let attach = match self.evaluate(id, node, field(&node.fields, "m_AA26E7DD"), Some(key)) {
-            Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => Some(entity),
-            _ => None,
+        let bone_attached = !field(&node.fields, "m_888BCD8B").is_null();
+        // `m_AA26E7DD` names the owner/subject entity (e.g. Mei Ice Wall `0x05FE:17`
+        // passes `self` with `m_888BCD8B = null`), while `m_888BCD8B` specifies an actual
+        // skeleton bone attachment (e.g. Reinhardt Barrier `0x0095:47`). Only parent the
+        // pet onto the owner's movement transform when bone-attached!
+        let attach = if bone_attached {
+            match self.evaluate(id, node, field(&node.fields, "m_AA26E7DD"), Some(key)) {
+                Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => Some(entity),
+                _ => None,
+            }
+        } else {
+            None
         };
         let position = match self.evaluate(id, node, field(&node.fields, "m_position"), Some(key)) {
             Some(Value::Vector(pos)) if pos.iter().all(|c| c.is_finite()) => Some(pos),
@@ -2839,7 +2848,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             _ => None,
         };
-        let bone_attached = !field(&node.fields, "m_888BCD8B").is_null();
         let possessable = matches!(
             self.evaluate(id, node, field(&node.fields, "m_E5312022"), Some(key)),
             Some(Value::Bool(true)) | Some(Value::Integer(1))
@@ -3930,8 +3938,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .evaluate(id, node, field(&node.fields, "m_1190FA0E"), None)
             .and_then(pool_number)
             .filter(|d| d.is_finite() && *d > 0.2 && *d < 4.0)
-            .unwrap_or(0.95)
-            .max(0.95);
+            .unwrap_or(1.25)
+            .max(1.25);
         let right = [fwd[2], 0.0, -fwd[0]];
         let dirs = if node.class == "STU_92ED01D0" {
             vec![
@@ -3948,6 +3956,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ],
             ]
         } else {
+            // 8-direction ring so Lúcio maintains wallride cleanly around curved/angled walls.
             vec![
                 right,
                 [-right[0], 0.0, -right[2]],
@@ -3962,6 +3971,17 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     fwd[2] * 0.707 - right[2] * 0.707,
                 ],
                 fwd,
+                [
+                    -fwd[0] * 0.707 + right[0] * 0.707,
+                    0.0,
+                    -fwd[2] * 0.707 + right[2] * 0.707,
+                ],
+                [
+                    -fwd[0] * 0.707 - right[0] * 0.707,
+                    0.0,
+                    -fwd[2] * 0.707 - right[2] * 0.707,
+                ],
+                [-fwd[0], 0.0, -fwd[2]],
             ]
         };
         let mut wall_normal = None;
@@ -4011,24 +4031,35 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }],
                 );
             } else if !field(&node.fields, "m_4573AFA0").is_null() && dt > 0.0 {
-                // WallRide (Lúcio): counter downward fall and maintain bounded tangent glide along wall.
-                let boost = 24.0 * dt;
+                // WallRide (Lúcio): project forward glide tangent to the wall normal with gentle
+                // inward cling so Lúcio rides continuously along straight and curved walls.
+                let dot = fwd[0] * normal[0] + fwd[2] * normal[2];
+                let tx = fwd[0] - normal[0] * dot;
+                let tz = fwd[2] - normal[2] * dot;
+                let tlen = tx.hypot(tz);
+                let (gx, gz) = if tlen > 1e-4 {
+                    (tx / tlen, tz / tlen)
+                } else {
+                    (fwd[0], fwd[2])
+                };
+                let boost = 28.0 * dt;
+                let cling = 3.0 * dt;
                 let _ = self.world.apply_velocity_ops(
                     site,
                     frame,
                     &[
                         crate::script_init::VelocityOp::SetSpeed {
                             axis: crate::script_init::VelocityAxis::Vertical,
-                            value: 0.4,
+                            value: 0.35,
                         },
                         crate::script_init::VelocityOp::AddVector([
-                            fwd[0] * boost,
+                            gx * boost - normal[0] * cling,
                             0.0,
-                            fwd[2] * boost,
+                            gz * boost - normal[2] * cling,
                         ]),
                         crate::script_init::VelocityOp::CapSpeed {
                             axis: crate::script_init::VelocityAxis::Horizontal,
-                            max: 11.0,
+                            max: 10.5,
                         },
                     ],
                 );
@@ -4063,7 +4094,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .world
             .body_eye_position(site.entity)
             .or_else(|| self.world.position(site.entity));
-        let dir = self.world.forward(site.entity);
+        let dir = self
+            .world
+            .authored_forward(site.entity)
+            .or_else(|| self.world.forward(site.entity));
         let anchor = if let (Some(origin), Some(dir)) = (origin, dir) {
             if let Some(Some(hit)) =
                 self.world
@@ -4141,19 +4175,30 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             let timed_out = self.machine.now_ms.saturating_sub(grapple.started_ms) >= 2_500;
+            let frame = self.machine.frame;
             if dist <= 1.8 || timed_out || grapple.stall_ticks >= 14 {
-                let frame = self.machine.frame;
                 if dist <= 2.4 {
                     let _ = self.world.apply_velocity_ops(
                         site,
                         frame,
                         &[crate::script_init::VelocityOp::SetSpeed {
                             axis: crate::script_init::VelocityAxis::Vertical,
-                            value: 7.0,
+                            value: 7.5,
                         }],
                     );
                 }
                 self.post(id, Event::Finish(key.raw))?;
+            } else if dist > 1e-4 {
+                let pull_speed = speed.clamp(16.0, 32.0);
+                let _ = self.world.apply_velocity_ops(
+                    site,
+                    frame,
+                    &[crate::script_init::VelocityOp::SetVector([
+                        dx / dist * pull_speed,
+                        dy / dist * pull_speed,
+                        dz / dist * pull_speed,
+                    ])],
+                );
             }
         } else if elapsed_ms > 0 && dist > rope_len.max(2.5) && dist > 1e-4 {
             let dt = (elapsed_ms as f64 / 1000.0).min(0.05);
@@ -4295,9 +4340,14 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .world
             .tracked_targets(site, 0, center, radius, &ANY_FILTER)
             .unwrap_or_default();
-        if let Ok(Some(out_var)) = script_expr::lvalue(field(&node.fields, "m_C33731A1")) {
-            let val = Value::Array(targets.into_iter().map(Value::Entity).collect());
-            self.write(source_key(id, out_var), val)?;
+        // `STU_B5C87F3D` (shared Quick Melee `0043:24` breakable cone) uses `m_C33731A1`
+        // as an INPUT variable (damage = var[476] = 30), NOT an output array! Overwriting
+        // `m_C33731A1` with `Value::Array` corrupted `var[476]` and crashed `0043:10`.
+        if node.class != "STU_B5C87F3D" {
+            if let Ok(Some(out_var)) = script_expr::lvalue(field(&node.fields, "m_C33731A1")) {
+                let val = Value::Array(targets.into_iter().map(Value::Entity).collect());
+                self.write(source_key(id, out_var), val)?;
+            }
         }
         Ok(())
     }

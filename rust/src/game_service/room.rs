@@ -919,11 +919,6 @@ impl Room {
                     | CombatNotice::ScorePopup { .. } => {
                         peer.queue_shooter_notice(cue.listener, cue.notice);
                     }
-                    CombatNotice::DamageReceived { victim, .. }
-                        if victim != cue.listener.entity =>
-                    {
-                        peer.queue_shooter_notice(cue.listener, cue.notice);
-                    }
                     _ => peer.queue_player_cue(cue.listener, cue.source, cue.notice),
                 }
             }

@@ -1294,11 +1294,16 @@ impl RoomSimulation {
     }
 
     pub(crate) fn load_bot_target_tags(&mut self, graphs: &crate::script_graph::GraphStore) {
+        static EMPTY_TAGS: std::sync::LazyLock<std::collections::BTreeSet<u64>> =
+            std::sync::LazyLock::new(std::collections::BTreeSet::new);
         for &entity in self.by_wire.values() {
             if let Some(mut state) = self.world.get_mut::<BotState>(entity) {
                 let body = graphs.entity_body(state.bot.spawn.body);
-                state.base_target_tags = crate::script_init::TargetTagEffects::default()
-                    .snapshot(body.and_then(|body| body.target_tags.as_ref()));
+                state.base_target_tags =
+                    crate::script_init::TargetTagEffects::default().snapshot(Some(
+                        body.and_then(|body| body.target_tags.as_ref())
+                            .unwrap_or(&EMPTY_TAGS),
+                    ));
             }
         }
     }
@@ -1931,6 +1936,27 @@ impl RoomSimulation {
         let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
         let now_secs = f64::from(tick) * dt;
         self.scoreboard.tick_on_fire(dt, now_secs);
+        let owner_fire_states: Vec<(u32, bool)> = self
+            .players_by_owner
+            .keys()
+            .map(|&owner| {
+                (
+                    owner,
+                    self.scoreboard
+                        .player(owner)
+                        .is_some_and(|b| b.on_fire.on_fire),
+                )
+            })
+            .collect();
+        for (owner, on_fire) in owner_fire_states {
+            if let Some(&handle) = self.players_by_owner.get(&owner) {
+                if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(handle.entity) {
+                    if let Some(runtime) = state.runtime.as_mut() {
+                        runtime.set_on_fire(on_fire);
+                    }
+                }
+            }
+        }
         if let Some((catalog, mode)) = &self.stats_catalog {
             let updates = self
                 .scoreboard
@@ -2556,7 +2582,6 @@ impl RoomSimulation {
         Ok(bodies.into_iter())
     }
 
-    #[cfg(test)]
     pub(crate) fn body_script_state(
         &self,
         body: u32,
@@ -2567,14 +2592,12 @@ impl RoomSimulation {
             .map_or_else(Default::default, |state| state.script_state())
     }
 
-    #[cfg(test)]
     pub(crate) fn body_healths(&self) -> Result<std::collections::BTreeMap<u32, f64>, CombatError> {
         self.states()
             .map(|state| state.map(|state| (state.bot.entity, state.vitals.total())))
             .collect()
     }
 
-    #[cfg(test)]
     pub(crate) fn boss_view_subjects(
         &self,
     ) -> Result<std::collections::BTreeMap<u32, crate::script_player::ViewSubject>, CombatError>
@@ -2604,7 +2627,6 @@ impl RoomSimulation {
             .collect())
     }
 
-    #[cfg(test)]
     pub(crate) fn living_enemies(
         &self,
         team: u8,
@@ -3084,6 +3106,27 @@ impl RoomSimulation {
         Some((deflect.reflect, eye, aim))
     }
 
+    pub(super) fn is_ana_direct_rifle(
+        &self,
+        source_wire: u32,
+        damage: f64,
+        geometry: Option<crate::game_hitscan::ImpactGeometry>,
+    ) -> bool {
+        const ANA_BODY: u64 = 0x0400_0000_0000_1424;
+        if damage < 50.0
+            || matches!(
+                geometry,
+                Some(crate::game_hitscan::ImpactGeometry::Blast { .. })
+            )
+        {
+            return false;
+        }
+        self.players_by_wire
+            .get(&source_wire)
+            .and_then(|&e| self.world.get::<PlayerBodyState>(e))
+            .is_some_and(|p| p.body_template == ANA_BODY)
+    }
+
     pub(super) fn actor_team(&self, wire: u32) -> Option<u8> {
         if let Some(&entity) = self.by_wire.get(&wire) {
             return self.world.get::<BotState>(entity).map(|s| s.bot.spawn.team);
@@ -3300,15 +3343,26 @@ impl RoomSimulation {
             || (policy.affects_allies
                 && !ffa
                 && self.actor_team(impact.entity) == Some(context.team));
+        let is_ana_rifle = self.is_ana_direct_rifle(shot.source, impact.damage, impact.geometry);
         if is_ally_heal {
             let death = Death {
                 time: context.now.as_secs_f64(),
                 frame: context.tick,
                 killer: shot.source,
             };
+            let instant_heal = if is_ana_rifle {
+                let rem = impact.damage * 0.75;
+                let entry = self.actor_statuses.entry(impact.entity).or_default();
+                entry.hot_ticks = 37;
+                entry.hot_per_tick = rem / 37.0;
+                entry.hot_source = shot.source;
+                impact.damage * 0.25
+            } else {
+                impact.damage
+            };
             if let Some(outcome) = self.apply_health(
                 impact.entity,
-                HealthEffect::Heal(impact.damage),
+                HealthEffect::Heal(instant_heal),
                 death,
                 context.now,
                 None,
@@ -3318,6 +3372,24 @@ impl RoomSimulation {
                 }
             }
             return Ok(None);
+        }
+        if is_ana_rifle {
+            let mut dot_impact = impact;
+            dot_impact.damage = impact.damage * 0.25;
+            let rem = impact.damage * 0.75;
+            let entry = self.actor_statuses.entry(impact.entity).or_default();
+            entry.dot_ticks = 37;
+            entry.dot_per_tick = rem / 37.0;
+            entry.dot_source = shot.source;
+            if self.players_by_wire.contains_key(&impact.entity) {
+                return self.apply_player_impact(
+                    shot.source,
+                    shot.shot_frame,
+                    context,
+                    &dot_impact,
+                );
+            }
+            return self.apply_bot_impact(shot.source, shot.shot_frame, context, &dot_impact);
         }
         if self.players_by_wire.contains_key(&impact.entity) {
             if let Some((reflect, _, _)) = self.check_player_deflect(impact.entity, shot.direction)
@@ -3845,15 +3917,27 @@ impl RoomSimulation {
                             }
                             continue;
                         }
+                        let is_ana_rifle =
+                            self.is_ana_direct_rifle(owner.entity, impact.damage, impact.geometry);
                         if is_ally_heal {
                             let death = Death {
                                 time: context.now.as_secs_f64(),
                                 frame: context.tick,
                                 killer: owner.entity,
                             };
+                            let instant_heal = if is_ana_rifle {
+                                let rem = impact.damage * 0.75;
+                                let entry = self.actor_statuses.entry(impact.entity).or_default();
+                                entry.hot_ticks = 37;
+                                entry.hot_per_tick = rem / 37.0;
+                                entry.hot_source = owner.entity;
+                                impact.damage * 0.25
+                            } else {
+                                impact.damage
+                            };
                             if let Some(outcome) = self.apply_health(
                                 impact.entity,
-                                HealthEffect::Heal(impact.damage),
+                                HealthEffect::Heal(instant_heal),
                                 death,
                                 context.now,
                                 None,
@@ -3874,6 +3958,33 @@ impl RoomSimulation {
                                     true,
                                     context.tick,
                                 );
+                            }
+                            continue;
+                        }
+                        if is_ana_rifle {
+                            let mut dot_impact = *impact;
+                            dot_impact.damage = impact.damage * 0.25;
+                            let rem = impact.damage * 0.75;
+                            let entry = self.actor_statuses.entry(impact.entity).or_default();
+                            entry.dot_ticks = 37;
+                            entry.dot_per_tick = rem / 37.0;
+                            entry.dot_source = owner.entity;
+                            if self.players_by_wire.contains_key(&impact.entity) {
+                                if let Some(hit) = self.apply_player_impact(
+                                    owner.entity,
+                                    context.tick,
+                                    context,
+                                    &dot_impact,
+                                )? {
+                                    hits.push(hit);
+                                }
+                            } else if let Some(hit) = self.apply_bot_impact(
+                                owner.entity,
+                                context.tick,
+                                context,
+                                &dot_impact,
+                            )? {
+                                hits.push(hit);
                             }
                             continue;
                         }
@@ -4113,11 +4224,11 @@ impl RoomSimulation {
                     killer: source,
                     victim: entity,
                     loadout: impact.loadout.unwrap_or(0),
+                    fire: 100,
                     critical: impact.critical,
                 }),
             ],
         };
-        let bot_body = state.bot.spawn.body;
         self.scripted_health.push(health);
         if let Some(attacker_owner) = self
             .player_handle_for_wire(source)
@@ -4131,21 +4242,6 @@ impl RoomSimulation {
                 context.now.as_secs_f64(),
             );
         }
-        let armor_or_shield = hit
-            .damage
-            .named_pool_losses
-            .iter()
-            .any(|loss| loss.amount > 0.0);
-        self.record_bot_damage_feedback(
-            source,
-            entity,
-            bot_body,
-            result.dealt as f32,
-            impact.critical,
-            armor_or_shield,
-            false,
-            impact.geometry,
-        );
         self.record_health_applied(
             source,
             entity,

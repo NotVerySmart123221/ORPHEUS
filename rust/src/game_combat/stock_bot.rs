@@ -749,10 +749,13 @@ impl StockBotScript {
     }
 
     pub(super) fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
+        static EMPTY_TAGS: std::sync::LazyLock<std::collections::BTreeSet<u64>> =
+            std::sync::LazyLock::new(std::collections::BTreeSet::new);
         let base = self.graphs.entity_body(self.world.body);
-        self.world
-            .target_tag_effects
-            .snapshot(base.and_then(|body| body.target_tags.as_ref()))
+        self.world.target_tag_effects.snapshot(Some(
+            base.and_then(|body| body.target_tags.as_ref())
+                .unwrap_or(&EMPTY_TAGS),
+        ))
     }
 
     pub(super) fn script_state(&self) -> crate::script_entity_state::EntityScriptState {

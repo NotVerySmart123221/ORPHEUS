@@ -62,6 +62,7 @@ pub enum CombatNotice {
         killer: u32,
         victim: u32,
         loadout: u64,
+        fire: u8,
         critical: bool,
     },
     ScorePopup {
@@ -295,6 +296,7 @@ impl CombatNotice {
                 killer,
                 victim,
                 loadout,
+                fire,
                 critical,
             } => (
                 ELIMINATION,
@@ -302,7 +304,7 @@ impl CombatNotice {
                     (0x78, Value::Unsigned(loadout)),
                     (0x80, entity(killer)),
                     (0x84, entity(victim)),
-                    (0x88, Value::Unsigned(0)),
+                    (0x88, Value::Unsigned(u64::from(fire))),
                     (0x89, Value::Bool(critical)),
                 ]),
             ),
@@ -429,6 +431,7 @@ mod tests {
                     killer: KILLER,
                     victim: TARGET,
                     loadout: 0,
+                    fire: 0,
                     critical: false,
                 },
                 Some(TARGET),
@@ -477,6 +480,7 @@ mod tests {
             killer: 0xa000_0101,
             victim: 0xc000_1005,
             loadout: 0,
+            fire: 0,
             critical: false,
         }
         .encode(&schemas)

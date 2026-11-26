@@ -2945,6 +2945,7 @@ fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
             killer: 7,
             victim: first,
             loadout: 0,
+            fire: 100,
             critical: false,
         })
     );
@@ -3241,6 +3242,7 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
                 killer: shot.source,
                 victim: entity,
                 loadout: 0,
+                fire: 100,
                 critical: false,
             })
         );

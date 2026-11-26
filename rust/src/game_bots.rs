@@ -1386,7 +1386,10 @@ impl Bot {
                 travel_velocity[axis] = (starting_velocity[axis] + velocity[axis]) * 0.5;
             }
         }
-        let to = std::array::from_fn(|axis| from[axis] + travel_velocity[axis] * dt);
+        let mut to = std::array::from_fn(|axis| from[axis] + travel_velocity[axis] * dt);
+        if grounded && to[1] < from[1] {
+            to[1] = from[1];
+        }
         let mut velocity = velocity;
         let mut after = match collision.try_advance(
             tick,
@@ -1402,20 +1405,28 @@ impl Bot {
                 from
             }
         };
-        // Clamp combat-motion vertical position against walkable ground so knockback
-        // impulses and landing ticks can never push bots below the floor plane.
-        if let Some(floor_y) = ground(
+        // Clamp combat-motion vertical position against walkable ground so explosive
+        // knockback impulses and landing ticks can never push bots below the floor plane.
+        let floor_probe = ground(
             after[0],
             after[2],
-            after[1].max(from[1]) + 1.5,
-            after[1].min(from[1]) - 1.5,
-        ) {
+            after[1].max(from[1]) + 3.5,
+            after[1].min(from[1]) - 3.5,
+        );
+        if let Some(floor_y) = floor_probe {
             if after[1] <= floor_y + 0.02 {
                 after[1] = floor_y;
                 if velocity[1] < 0.0 {
                     velocity[1] = 0.0;
                 }
                 self.movement_flags &= !IN_AIR;
+            }
+        } else if grounded && after[1] < from[1] - 0.15 {
+            // If an explosive impulse swept a grounded bot off/under thin geometry where
+            // no walkable floor exists beneath, keep feet at or above the starting height.
+            after[1] = from[1];
+            if velocity[1] < 0.0 {
+                velocity[1] = 0.0;
             }
         }
         self.position = after;

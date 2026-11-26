@@ -223,6 +223,7 @@ impl WorldDelivery {
 
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
+        let is_owner_controller = entity == self.owner;
         let live_bot = self.tracks_current_bot(entity);
         let live_remote = self
             .remote_players
@@ -232,7 +233,7 @@ impl WorldDelivery {
             body.id.entity == entity
                 && self.bodies.get(&entity) == Some(&(body.id.generation, Lifetime::Live))
         });
-        if !live_bot && !live_remote && !live_body {
+        if !is_owner_controller && !live_bot && !live_remote && !live_body {
             return;
         }
         self.health_revision = self.health_revision.wrapping_add(1);
@@ -1962,6 +1963,24 @@ impl WorldDelivery {
         let Some(id) = self.body.map(|body| body.id) else {
             return Ok((1, true));
         };
+        let needs_deadeye = scene.simulation().player_body(id).and_then(|state| {
+            state
+                .runtime
+                .as_deref()
+                .filter(|runtime| runtime.has_deadeye())
+                .map(|_| state.team)
+        });
+        if let Some(team) = needs_deadeye {
+            if let Ok(deadeye) = scene.deadeye_scene(team) {
+                if let Some(runtime) = scene
+                    .simulation_mut()
+                    .player_body_mut(id)
+                    .and_then(|state| state.runtime.as_deref_mut())
+                {
+                    runtime.set_deadeye_targets(deadeye);
+                }
+            }
+        }
         let (simulation, rays) = scene.simulation_and_rays();
         let motion_frame = simulation.movement_contact_frame();
         let Some(state) = simulation.player_body_mut(id) else {

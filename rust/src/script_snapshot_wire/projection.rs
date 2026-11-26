@@ -619,6 +619,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::NamedShieldDecay
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects
+            | StateKind::GroundRay
             | StateKind::WitchStaffEffect
             | StateKind::WitchStaffHealing
             | StateKind::SummonerBeamRay

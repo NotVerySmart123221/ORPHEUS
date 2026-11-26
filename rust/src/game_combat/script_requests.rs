@@ -833,6 +833,7 @@ impl RoomSimulation {
                 killer: source.wire,
                 victim: target,
                 loadout: 0,
+                fire: 100,
                 critical: false,
             }),
         ];
@@ -894,57 +895,8 @@ impl RoomSimulation {
         });
     }
 
-    /// Broadcast victim contact feedback (`25000`) to the attacking player when
-    /// damaging an NPC/bot so all weapons trigger retail hit/bleed/spark/shock
-    /// reactions on Training Bots and PvE enemies (not just player-vs-player).
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn record_bot_damage_feedback(
-        &mut self,
-        source_wire: u32,
-        bot_wire: u32,
-        bot_body: u64,
-        dealt: f32,
-        critical: bool,
-        armor_or_shield: bool,
-        special_vfx: bool,
-        geometry: Option<ImpactGeometry>,
-    ) {
-        if !self.received_damage_feedback || !dealt.is_finite() || dealt <= 0.0 {
-            return;
-        }
-        let Some(shooter_id) = self.player_handle_for_wire(source_wire) else {
-            return;
-        };
-        let Some(shooter_owner) = self.player_body(shooter_id).map(|state| state.owner) else {
-            return;
-        };
-        let Some(bot_sample) = self.sample_health_body(bot_wire) else {
-            return;
-        };
-        let contact_set = self.body_contact_sets.get(&bot_body).copied().unwrap_or(0);
-        let origin = geometry
-            .map(ImpactGeometry::origin)
-            .or_else(|| bot_sample.position(&self.world));
-        self.player_cues.push(PlayerRoomCue {
-            owner: shooter_owner,
-            listener: shooter_id,
-            source: bot_sample.identity(),
-            notice: CombatNotice::DamageReceived {
-                source: source_wire,
-                victim: bot_wire,
-                dealt,
-                origin,
-                normal: geometry.and_then(ImpactGeometry::surface_normal),
-                contact_set,
-                critical,
-                armor_or_shield,
-                special_vfx,
-            },
-        });
-    }
-
     /// Trigger a client-side `25000` (`@0xd0 = true`) status hit reaction on a
-    /// stunned/slept/frozen/anti-healed victim so both players and bots display
+    /// stunned/slept/frozen/anti-healed player victim so affected players display
     /// immediate impact VFX/flinch feedback on status application.
     pub(super) fn emit_status_vfx_feedback(&mut self, source_wire: u32, target_wire: u32) {
         if !self.received_damage_feedback || source_wire == target_wire {
@@ -953,24 +905,6 @@ impl RoomSimulation {
         if let Some(id) = self.player_handle_for_wire(target_wire) {
             if let Some(owner) = self.player_body(id).map(|p| p.owner) {
                 self.record_received_damage(owner, id, source_wire, 1.0, None, false, false, true);
-            }
-        } else if let Some(&entity) = self.by_wire.get(&target_wire) {
-            if let Some(bot_body) = self
-                .world
-                .get::<BotState>(entity)
-                .filter(|s| !s.bot.dead)
-                .map(|s| s.bot.spawn.body)
-            {
-                self.record_bot_damage_feedback(
-                    source_wire,
-                    target_wire,
-                    bot_body,
-                    1.0,
-                    false,
-                    false,
-                    true,
-                    None,
-                );
             }
         }
     }
@@ -1181,20 +1115,51 @@ impl RoomSimulation {
         let awarded =
             self.scoreboard
                 .record_elimination(owner, victim_wire, on_objective, now_secs);
-        if self.stats_catalog.is_some() {
-            for (award_owner, points, _ignited) in awarded {
-                if award_owner == owner {
-                    if let Some(victim_sample) = self.sample_health_body(victim_wire) {
-                        self.player_cues.push(PlayerRoomCue {
-                            owner,
-                            listener,
-                            source: victim_sample.identity(),
-                            notice: CombatNotice::ScorePopup {
-                                score: points,
-                                label: crate::game_progression::SCORE_LABEL_ELIMINATION,
-                            },
-                        });
-                    }
+        let owner_on_fire = self
+            .scoreboard
+            .player(owner)
+            .is_some_and(|board| board.on_fire.on_fire);
+        let owner_ignited = awarded
+            .iter()
+            .any(|&(award_owner, _, ignited)| award_owner == owner && ignited);
+        if owner_ignited {
+            if let Some(catalog) = self
+                .spatial_queries
+                .as_ref()
+                .and_then(|q| q.actor_voice.as_deref())
+            {
+                let ctx = crate::actor_voice::VoiceContext {
+                    map: self.map_guid,
+                    target_hero: None,
+                    ally_heroes: &[],
+                };
+                let mut pick = frame as usize;
+                // Retail On-Fire voice criterion (0x0EE0...0023 / 0x0EE0...0024 fallback).
+                let on_fire_line = [0x0EE0_0000_0000_0023, 0x0EE0_0000_0000_0024]
+                    .into_iter()
+                    .find_map(|stim| {
+                        catalog
+                            .stimulus_options(killer_hero, killer_skin, stim)?
+                            .choose_with_context(&ctx, &mut |count| {
+                                pick = pick.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                                pick % count
+                            })
+                    });
+                if let (Some((stimulus, line)), Some(source_body)) =
+                    (on_fire_line, self.sample_health_body(killer_wire))
+                {
+                    self.player_cues.push(PlayerRoomCue {
+                        owner,
+                        listener,
+                        source: source_body.identity(),
+                        notice: CombatNotice::Voice {
+                            anchor: killer_wire,
+                            speaker: killer_wire,
+                            listener: killer_wire,
+                            stimulus,
+                            line,
+                        },
+                    });
                 }
             }
         }
@@ -1229,13 +1194,13 @@ impl RoomSimulation {
             return;
         };
         let is_genji = player.body_template == genji_body;
-        let mut elim_queued = 0usize;
-        if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
-            elim_queued = runtime
-                .receive_authored_elimination_feedback(target.into())
-                .unwrap_or(0);
+        if let Some(runtime) = player.runtime.as_mut() {
+            runtime.set_on_fire(owner_on_fire);
         }
-        if is_genji && elim_queued == 0 {
+        if let Some((target, runtime)) = target.zip(player.runtime.as_mut()) {
+            let _ = runtime.receive_authored_elimination_feedback(target.into());
+        }
+        if is_genji {
             if let Some(runtime) = player.runtime.as_mut() {
                 let _ = runtime.reset_all_cooldowns();
             }

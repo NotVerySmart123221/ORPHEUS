@@ -229,7 +229,8 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         false
     }
 
-    #[cfg(test)]
+    fn set_on_fire(&mut self, _active: bool) {}
+
     fn has_deadeye(&self) -> bool {
         false
     }

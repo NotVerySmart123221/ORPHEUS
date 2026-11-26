@@ -780,6 +780,7 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                             killer: shot.source,
                             victim: entity,
                             loadout: 0,
+                            fire: 100,
                             critical: false,
                         })
                     );

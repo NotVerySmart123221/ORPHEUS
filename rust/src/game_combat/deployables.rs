@@ -200,6 +200,40 @@ fn start_entity_vm(
     }
 }
 
+/// CASC-verified (`0x0400` entity blueprint) support for Mirror components:
+/// `(has_target_tag_filter_26, has_health_51)`.
+///
+/// Only entities verified to carry these components in retail 1.74 CASC may
+/// receive them on `Create` so we never trigger a Mirror deserialization crash
+/// while ensuring all barriers, turrets, and companions receive friendly blue
+/// team coloring (component 26) and health bars (component 51).
+fn casc_verified_entity_components(definition: u64, authored_body_vitals: bool) -> (bool, bool) {
+    if authored_body_vitals {
+        return (true, true);
+    }
+    match definition {
+        // Barriers & destructible turrets/companions verified with STUTargetTagComponent + STUHealthComponent:
+        0x0400_0000_0000_011a // Reinhardt Barrier Field
+        | 0x0400_0000_0000_2284 // Brigitte Barrier Shield
+        | 0x0400_0000_0000_2d25 // Sigma Experimental Barrier
+        | 0x0400_0000_0000_26b0 // Symmetra Photon Barrier
+        | 0x0400_0000_0000_1941 // Barrier / Shield Pet
+        | 0x0400_0000_0000_03da // Torbjörn Turret
+        | 0x0400_0000_0000_13f4 // Torbjörn Turret
+        | 0x0400_0000_0000_0223 // Symmetra Pet / Teleporter
+        | 0x0400_0000_0000_2533 // Ashe Dynamite
+        => (true, true),
+        // Entities verified with STUTargetTagComponent (26) only (no component 51):
+        0x0400_0000_0000_090b // Mei Ice Wall
+        | 0x0400_0000_0000_1846 // Orisa Barrier
+        | 0x0400_0000_0000_2902 // Torbjörn Thrown Turret
+        | 0x0400_0000_0000_2b61 // Ashe B.O.B.
+        | 0x0400_0000_0000_3d10 // Companion Pet
+        => (true, false),
+        _ => (false, false),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn entity_create_update(
     wire: u32,
@@ -216,11 +250,12 @@ fn entity_create_update(
         return None;
     }
     let mut components = Vec::new();
-    // Only attach Filter (74) and Health (51) when the retail entity definition
-    // actually carries authored health pools; bare effect/helper entities crash
-    // the 1.74 client if given components absent from their blueprint.
-    if authored_body_vitals {
+    let (has_filter_26, has_health_51) =
+        casc_verified_entity_components(definition, authored_body_vitals);
+    if has_filter_26 {
         components.push(bot_filter_component(team, false).ok()?);
+    }
+    if has_health_51 {
         if let Some(vitals) = vitals {
             components.push(vitals.component());
         }
@@ -807,13 +842,21 @@ impl RoomSimulation {
         let ice_wall = self.ability_rules.ice_wall.clone();
         let is_ice_wall_root = definition == ice_wall.entity && attach.is_none();
         let (vitals, authored_body_vitals) = if is_ice_wall_root {
-            (Some(Vitals::new(ice_wall.pillar_health, 0.0, 0.0)), true)
+            (Some(Vitals::new(ice_wall.pillar_health, 0.0, 0.0)), false)
         } else {
             resolve_entity_vitals(
                 graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
                 definition,
                 max_health,
             )
+        };
+        // Brigitte's personal barrier (`0x2284`) spawns without `m_888BCD8B`, so
+        // attach it cleanly to Brigitte's front left arm on the wire.
+        const BRIG_SHIELD_DEF: u64 = 0x0400_0000_0000_2284;
+        let (attach, local_offset) = if definition == BRIG_SHIELD_DEF && attach.is_none() {
+            (Some(owner), Some([0.0, 1.0, 0.95]))
+        } else {
+            (attach, local_offset)
         };
         let Some(update) = entity_create_update(
             pet_id,
@@ -846,8 +889,8 @@ impl RoomSimulation {
         };
         let ecs_entity = self.world.spawn_empty().id();
         let max_hp = vitals.as_ref().map_or(0.0, Vitals::maximum);
-        let solid_wall =
-            is_ice_wall_root || (attach.is_none() && (350.0..=550.0).contains(&max_hp));
+        let (_, wire_vitals) = casc_verified_entity_components(definition, authored_body_vitals);
+        let solid_wall = is_ice_wall_root;
         let charge_ticks = if attach.is_none() && max_hp >= 800.0 {
             186 // ~3.0s opening charge for B.O.B. companions
         } else {
@@ -865,7 +908,7 @@ impl RoomSimulation {
                 position,
                 yaw,
                 vitals,
-                wire_vitals: authored_body_vitals,
+                wire_vitals,
                 solid_wall,
                 parent_pet: None,
                 ai_fire_cooldown: 16,
@@ -898,7 +941,7 @@ impl RoomSimulation {
                     yaw,
                     None,
                     Some(&pillar_vitals),
-                    true,
+                    false,
                 ) {
                     let pillar_ecs = self.world.spawn_empty().id();
                     self.room_pets.insert(
@@ -913,7 +956,7 @@ impl RoomSimulation {
                             position: pillar_pos,
                             yaw,
                             vitals: Some(pillar_vitals),
-                            wire_vitals: true,
+                            wire_vitals: false,
                             solid_wall: true,
                             parent_pet: Some(pet_id),
                             ai_fire_cooldown: 0,
@@ -1862,6 +1905,18 @@ impl RoomSimulation {
                     } else {
                         pet.position[0] += dir[0] * step;
                         pet.position[2] += dir[2] * step;
+                        if tick % 2 == 0 {
+                            self.scripted_health.push(EntityUpdate {
+                                entity: pet_wire,
+                                movement: Some(Movement {
+                                    flags: 0,
+                                    position: pet.position,
+                                    yaw: pet.yaw,
+                                    ..Movement::default()
+                                }),
+                                ..EntityUpdate::default()
+                            });
+                        }
                         for c in frame.candidates() {
                             if c.entity == pet.owner || c.entity == pet_wire {
                                 continue;
@@ -1925,7 +1980,20 @@ impl RoomSimulation {
                 }
                 if let Some((_, target, dx, dz)) = best {
                     let yaw_rad = dx.atan2(dz);
-                    pet.yaw = (yaw_rad * 65_536.0 / std::f64::consts::TAU).round() as i32;
+                    let new_yaw = (yaw_rad * 65_536.0 / std::f64::consts::TAU).round() as i32;
+                    if new_yaw != pet.yaw {
+                        pet.yaw = new_yaw;
+                        self.scripted_health.push(EntityUpdate {
+                            entity: pet_wire,
+                            movement: Some(Movement {
+                                flags: 0,
+                                position: pet.position,
+                                yaw: pet.yaw,
+                                ..Movement::default()
+                            }),
+                            ..EntityUpdate::default()
+                        });
+                    }
                     pet.ai_fire_cooldown = if is_bob { 8 } else { 15 };
                     ai_hits.push((pet.owner, target, 14.0, None));
                 } else {
@@ -2539,6 +2607,7 @@ mod tests {
                 "m_2BBEEAB8": 1,
                 "m_beginPlug": { "$": "STUStatescriptInputPlug", "links": [] },
                 "m_entityDefinition": { "$": "STU_8556841E", "m_entityDef": "0x040000000000011A" },
+                "m_888BCD8B": { "$": "STUConfigVarBone", "m_bone": "0x088000000000008C" },
                 "m_AA26E7DD": { "$": "STU_B5A0CAF0" },
                 "m_B3019338": { "$": "STUConfigVarDynamic", "m_60DB8F99": 0, "m_identifier": 38 }
             }

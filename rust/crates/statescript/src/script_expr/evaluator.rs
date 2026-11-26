@@ -1849,9 +1849,10 @@ impl Evaluator {
                 if !native_shape(config, class, Some(operand)) {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
-                let Value::Entity(entity) = self.config(child(config, operand), context, nested)?
-                else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
+                let entity = match self.config(child(config, operand), context, nested)? {
+                    Value::Entity(entity) => entity,
+                    Value::Null if relation == EntityRelation::AiControlEntity => 0,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
                 let related = context
                     .related_entity(relation, entity)
@@ -2179,16 +2180,49 @@ impl Evaluator {
                 ) {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
-                let Value::Entity(entity) = self.config(target, context, nested)? else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
+                let entity = match self.config(target, context, nested)? {
+                    Value::Entity(entity) => entity,
+                    Value::Null => 0,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
-                if entity == 0 || entity & 0x1fff_ffff == 0x1fff_ffff {
+                if entity & 0x1fff_ffff == 0x1fff_ffff {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
                 let scale = context
                     .body_scale(entity)
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Float(scale)
+            }
+            "STU_88687E54" => {
+                // Ground-below-point check (used by Doomfist Seismic Slam `0x0C51:109`,
+                // `0x0B2F:82`, `0x142C:105`): true if terrain lies within `m_83C99CE5`
+                // meters beneath `m_A8D12F28`.
+                let origin = match self.scalar_config(
+                    child(config, "m_A8D12F28"),
+                    context,
+                    nested,
+                    Value::Null,
+                )? {
+                    Value::Vector(pos) if pos.iter().all(|c| c.is_finite()) => Some(pos),
+                    Value::Entity(e) if valid_entity(e) => context.authored_position(e),
+                    _ => None,
+                };
+                let max_dist = match self.scalar_config(
+                    child(config, "m_83C99CE5"),
+                    context,
+                    nested,
+                    Value::Float(50.0),
+                )? {
+                    Value::Float(d) if d.is_finite() && d > 0.0 => d,
+                    Value::Integer(d) if d > 0 => d as f64,
+                    _ => 50.0,
+                };
+                let grounded = origin.is_some_and(|pos| {
+                    context
+                        .spatial_ray_cast(pos, [0.0, -1.0, 0.0], max_dist)
+                        .is_none_or(|hit| hit.is_some())
+                });
+                Value::Bool(grounded)
             }
             "STU_295F1CDE" if native_shape(config, class, None) => {
                 // 104319 CC9A80/C1BBB0: barrier health multiplier for this actor's ruleset.

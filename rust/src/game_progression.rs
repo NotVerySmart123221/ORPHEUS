@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use crate::{
     game_stats::{
         BRONZE, DEATHS, ELIMINATIONS, GOLD, HEALING, HERO_DAMAGE, Medals, OBJECTIVE_KILLS,
-        OBJECTIVE_TIME, PlayerStats, SILVER, StatsCatalog, on_fire_component,
+        OBJECTIVE_TIME, PlayerStats, SILVER, StatsCatalog, with_on_fire,
     },
     world::{EntityUpdate, Operation},
 };
@@ -337,13 +337,13 @@ impl MatchScoreboard {
             }
             board.dirty = false;
             board.last_publish_tick = tick;
-            let stats_comp = catalog.component(
-                &board.stats,
-                mode,
-                (board.hero != 0).then_some(board.hero),
-                medals_by_owner.get(&owner),
-            );
-            let fire_comp = on_fire_component(
+            let stats_comp = with_on_fire(
+                catalog.component(
+                    &board.stats,
+                    mode,
+                    (board.hero != 0).then_some(board.hero),
+                    medals_by_owner.get(&owner),
+                ),
                 Some(board.on_fire.score),
                 Some(board.on_fire.threshold),
                 Some(board.on_fire.on_fire),
@@ -352,7 +352,7 @@ impl MatchScoreboard {
                 owner,
                 EntityUpdate {
                     entity: owner,
-                    operation: Some(Operation::Update(vec![stats_comp, fire_comp])),
+                    operation: Some(Operation::Update(vec![stats_comp])),
                     ..EntityUpdate::default()
                 },
             ));

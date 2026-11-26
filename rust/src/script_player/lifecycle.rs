@@ -110,7 +110,6 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         Some(self.world.own_filter_flags())
     }
 
-    #[cfg(test)]
     fn has_deadeye(&self) -> bool {
         self.world.has_deadeye()
     }
@@ -356,6 +355,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component
             .snapshot()
             .is_some_and(|snapshot| snapshot.instances.values().any(|inst| inst.graph == 0x023a))
+    }
+
+    fn set_on_fire(&mut self, active: bool) {
+        self.world.controller_on_fire = active;
     }
 
     fn vitals(&self) -> Option<&Vitals> {

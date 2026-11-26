@@ -164,6 +164,7 @@ fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
                 killer: shooter.entity,
                 victim: target,
                 loadout: 0,
+                fire: 100,
                 critical: false,
             }),
         ],

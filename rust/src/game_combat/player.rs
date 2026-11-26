@@ -1363,6 +1363,7 @@ impl RoomSimulation {
                     killer: source,
                     victim: id.entity,
                     loadout: impact.loadout.unwrap_or(0),
+                    fire: 100,
                     critical: impact.critical,
                 }),
             ],
