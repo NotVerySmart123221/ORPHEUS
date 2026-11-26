@@ -25,6 +25,7 @@ pub(super) struct State {
     pub(super) next_connection: u32,
     pub(super) next_input_peer: Option<u32>,
     pub(super) recent_faults: VecDeque<FaultRecord>,
+    pub(super) career_recorder: Option<CareerRecorder>,
     #[cfg(feature = "lua-mods")]
     pub(super) mod_host: Option<Arc<std::sync::Mutex<crate::mod_script::ModHost>>>,
     #[cfg(any(test, feature = "inspector"))]
@@ -77,6 +78,7 @@ impl State {
             next_connection: 1,
             next_input_peer: None,
             recent_faults: VecDeque::new(),
+            career_recorder: None,
             #[cfg(feature = "lua-mods")]
             mod_host: None,
             #[cfg(any(test, feature = "inspector"))]
@@ -465,6 +467,10 @@ impl State {
             }
             Request::AiPolicyStatus { reply } => {
                 let _ = reply.send(self.ai_policy_status());
+            }
+            Request::SetCareerRecorder { recorder, reply } => {
+                self.career_recorder = Some(recorder);
+                let _ = reply.send(());
             }
             #[cfg(feature = "lua-mods")]
             Request::SetModHost { host, reply } => {
@@ -1183,6 +1189,21 @@ impl State {
                 let result = self.room_work(id, RoomStage::FinishTick, None, |room| {
                     room.finish_simulation(room_tick, room_now)
                 })?;
+                if let Some(recorder) = &self.career_recorder {
+                    if let Some(room) = self.rooms.get_mut(&id) {
+                        if let Some(world) = &mut room.world {
+                            let records =
+                                world.scene.simulation_mut().take_completed_career_records();
+                            for (owner, record) in records {
+                                if let Some(player) =
+                                    room.players.iter().find(|p| p.entity == owner)
+                                {
+                                    recorder(&player.info.name, &record);
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(result) = result {
                     spawned.insert(id, result.replacements);
                     created.insert(id, result.created);

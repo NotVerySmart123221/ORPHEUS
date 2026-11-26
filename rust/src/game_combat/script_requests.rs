@@ -190,7 +190,9 @@ impl RoomScriptRequest {
             }
             ScriptEffect::Message(_) => target.messages,
             ScriptEffect::Cue(_, _) => target.cue_listener,
-            ScriptEffect::SpawnPet { .. } | ScriptEffect::DespawnPet { .. } => true,
+            ScriptEffect::SpawnPet { .. }
+            | ScriptEffect::DespawnPet { .. }
+            | ScriptEffect::StartDuplicate { .. } => true,
         };
         supported.then_some(Self {
             wire,
@@ -224,6 +226,10 @@ enum ScriptEffect {
     Stun {
         ticks: u32,
     },
+    StartDuplicate {
+        target_wire: u32,
+        original_body: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -238,6 +244,23 @@ pub(crate) struct PlayerRoomCue {
 pub(crate) struct RoomScriptRequests(Vec<RoomScriptRequest>);
 
 impl RoomScriptRequests {
+    pub(crate) fn queue_start_duplicate(
+        &mut self,
+        frame: &RoomSpatialFrame,
+        owner_wire: u32,
+        target_wire: u32,
+        original_body: u64,
+    ) -> bool {
+        self.queue(
+            frame,
+            owner_wire,
+            ScriptEffect::StartDuplicate {
+                target_wire,
+                original_body,
+            },
+        )
+    }
+
     pub(crate) fn queue_health(&mut self, frame: &RoomSpatialFrame, wire: u32, delta: f64) -> bool {
         let Some(effect) = HealthEffect::from_delta(delta) else {
             return false;
@@ -528,8 +551,12 @@ impl RoomSimulation {
             killer: source.wire,
         };
         match request.effect {
-            ScriptEffect::Health(effect) => {
+            ScriptEffect::Health(mut effect) => {
                 let is_heal = matches!(effect, HealthEffect::Heal(_));
+                if let HealthEffect::Damage(ref mut amount) = effect {
+                    *amount =
+                        self.scale_continuous_beam_damage(source.wire, request.wire, *amount, tick);
+                }
                 if let Some(outcome) = self.apply_health(request.wire, effect, death, now, None)? {
                     if is_heal && outcome.delta > 0.0 {
                         self.deliver_applied_heal(source.wire, request.wire, outcome.delta);
@@ -557,6 +584,8 @@ impl RoomSimulation {
                 if same_team_other {
                     return Ok(());
                 }
+                let damage =
+                    self.scale_continuous_beam_damage(source.wire, request.wire, damage, tick);
                 if damage > 0.0 {
                     let target_facts = self
                         .sample_health_body(request.wire)
@@ -619,7 +648,43 @@ impl RoomSimulation {
                 }
             }
             ScriptEffect::Message(message) => {
+                // Authored hero ability messages with room-level gameplay semantics:
+                // - Mercy Resurrect (`0x0785` / `0x1BBE` / `0x0959`) -> revive fallen ally SoulAnchor
+                // - Roadhog Chain Hook (`0x01B3` / `0x076B` / `0x0A44` / `0x0B57`) -> 2-stage hook pull
+                // - Junkrat Concussion Mine detonate (`0x013D` / `0x013E` / `0x013F`) -> remote mine blast
+                let topic = message.id;
+                if matches!(
+                    topic,
+                    0x0240_0000_0000_0785 | 0x0240_0000_0000_1bbe | 0x0240_0000_0000_0959
+                ) {
+                    if let (Some(team), Some(pos)) =
+                        (self.actor_team(source.wire), source.position(&self.world))
+                    {
+                        let _ = self.try_resurrect_nearest_ally(team, pos, tick, now);
+                    }
+                } else if matches!(
+                    topic,
+                    0x0240_0000_0000_01b3
+                        | 0x0240_0000_0000_076b
+                        | 0x0240_0000_0000_0a44
+                        | 0x0240_0000_0000_0b57
+                ) && request.wire != source.wire
+                {
+                    let hostile = self.free_for_all
+                        || self.actor_team(source.wire) != self.actor_team(request.wire);
+                    if hostile {
+                        self.attach_roadhog_hook_pull(source.wire, request.wire, tick);
+                    }
+                } else if matches!(topic, 0x0240_0000_0000_013d..=0x0240_0000_0000_013f) {
+                    self.detonate_owner_concussion_mine(source.wire, tick, now);
+                }
                 self.route_room_message(request.wire, request.entity, source.wire, message);
+            }
+            ScriptEffect::StartDuplicate {
+                target_wire,
+                original_body,
+            } => {
+                self.activate_echo_duplicate(source.wire, target_wire, original_body, tick);
             }
             ScriptEffect::SpawnPet {
                 pet_id,
@@ -665,6 +730,16 @@ impl RoomSimulation {
                     return Ok(());
                 }
                 self.apply_actor_stun(request.wire, tick, ticks);
+                // Roadhog Chain Hook latch stun at distance -> engage 2-stage pull to 3.5m in front.
+                const ROADHOG_BODY: u64 = 0x0400_0000_0000_028f;
+                let is_roadhog = self
+                    .players_by_wire
+                    .get(&source.wire)
+                    .and_then(|&ent| self.world.get::<PlayerBodyState>(ent))
+                    .is_some_and(|p| p.body_template == ROADHOG_BODY);
+                if is_roadhog && request.wire != source.wire {
+                    self.attach_roadhog_hook_pull(source.wire, request.wire, tick);
+                }
             }
             ScriptEffect::Cue(cue, source_entity) => {
                 if source_entity != source.entity {

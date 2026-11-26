@@ -1070,6 +1070,8 @@ pub(crate) struct RoomSimulation {
     pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
     pvp_completion_emitted: bool,
     pending_match_winner: Option<u8>,
+    last_pvp_payload_pos: Option<[f64; 3]>,
+    last_pvp_hud_key: Option<(u8, i32, u8, u8)>,
     completed_career_records: Vec<(u32, crate::game_progression::CareerMatchRecord)>,
     player_names: HashMap<u32, String>,
     #[cfg(feature = "lua-mods")]
@@ -1581,6 +1583,8 @@ impl RoomSimulation {
             pvp_objective: None,
             pvp_completion_emitted: false,
             pending_match_winner: None,
+            last_pvp_payload_pos: None,
+            last_pvp_hud_key: None,
             completed_career_records: Vec::new(),
             player_names: HashMap::new(),
             #[cfg(feature = "lua-mods")]
@@ -1794,6 +1798,36 @@ impl RoomSimulation {
                 if let Some(winner) = pvp.winner() {
                     self.pvp_completion_emitted = true;
                     self.pending_match_winner = Some(winner);
+                }
+            }
+            // Replicate live payload movement pose whenever the cart moves >= 1cm.
+            if let Some((pos, update)) = pvp.payload_entity_update() {
+                let moved = self.last_pvp_payload_pos.is_none_or(|prev| {
+                    (pos[0] - prev[0])
+                        .hypot(pos[1] - prev[1])
+                        .hypot(pos[2] - prev[2])
+                        >= 0.01
+                });
+                if moved {
+                    self.last_pvp_payload_pos = Some(pos);
+                    self.scripted_health.push(update);
+                }
+            }
+            // Replicate live GAME_MODE_ENTITY HUD countdown & phase whenever state changes.
+            let hud_key = pvp.hud_state_key(now_secs);
+            if self.last_pvp_hud_key != Some(hud_key) {
+                self.last_pvp_hud_key = Some(hud_key);
+                if let Some((graphs, _)) = &self.script_graphs {
+                    let vars = pvp.hud_variables(now_secs);
+                    if let Ok(payload) = crate::match_scene::mode_ui(graphs, &vars) {
+                        if let Ok(chunk) = crate::script_wire::chunk(&payload, 0, 1) {
+                            self.scripted_health.push(EntityUpdate {
+                                entity: crate::world::GAME_MODE_ENTITY,
+                                chunk: Some(chunk),
+                                ..EntityUpdate::default()
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -5071,6 +5105,8 @@ impl RoomSimulation {
         self.pvp_objective = None;
         self.pvp_completion_emitted = false;
         self.pending_match_winner = None;
+        self.last_pvp_payload_pos = None;
+        self.last_pvp_hud_key = None;
         self.completed_career_records.clear();
         self.soul_anchors.clear();
         self.active_duplicates.clear();

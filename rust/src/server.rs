@@ -173,7 +173,7 @@ impl Server {
         let protocol =
             Arc::new(Protocol::load(config.runtime.join(BNET_DESCRIPTORS)).map_err(invalid)?);
         let template = config.data.join("profile.json");
-        let accounts = Accounts::new(config.data.join("profiles"), &template)?;
+        let accounts = Arc::new(Accounts::new(config.data.join("profiles"), &template)?);
         let local = local_account(
             &accounts,
             &config.data,
@@ -209,6 +209,14 @@ impl Server {
             );
         }
         let game_addr = game.local_addr();
+        let career_accounts = Arc::clone(&accounts);
+        game.set_career_recorder(Arc::new(move |player_name, record| {
+            if let Ok(account) = career_accounts.get(player_name) {
+                if let Err(error) = account.record_career_match(record) {
+                    eprintln!("[career] failed to persist match for {player_name}: {error}");
+                }
+            }
+        }))?;
         #[cfg(feature = "inspector")]
         let debug = if let Some(port) = config.debug_port {
             const MAX_LINK_DIAGNOSTICS: usize = 16;
@@ -482,7 +490,7 @@ struct Lobby {
     assets: SceneAssets,
     maps: MapCatalog,
     first_scene: Mutex<Option<PreparedScene>>,
-    accounts: Accounts,
+    accounts: Arc<Accounts>,
     local: Arc<Account>,
     active: Mutex<HashMap<u32, ActiveLobbyPeer>>,
     game: Arc<GameService>,

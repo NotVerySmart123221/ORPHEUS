@@ -674,6 +674,12 @@ pub trait World {
         false
     }
 
+    /// Echo Duplicate (`STUStatescriptStateCreateEntity` with `STU_0AC15F78`):
+    /// copy `target`'s hero body for the duplicate duration.
+    fn duplicate_target_entity(&mut self, _site: Site, _target: u32) -> bool {
+        false
+    }
+
     fn set_combat_mod(&mut self, _site: Site, _entry: Option<CombatModEntry>) -> bool {
         false
     }

@@ -454,6 +454,7 @@ impl AssaultRound {
 pub struct EscortRound {
     pub mover: SplineMover,
     pub barriers: DynamicBarrierRegistry,
+    pub payload_placeable: Option<u32>,
     pub checkpoints: Vec<(f64, u32)>,
     pub stage_seconds: Vec<f64>,
     pub debris_distances: BTreeMap<u32, f64>,
@@ -494,6 +495,7 @@ impl EscortRound {
         Self {
             mover,
             barriers,
+            payload_placeable: None,
             checkpoints,
             stage_seconds,
             debris_distances,
@@ -1013,7 +1015,8 @@ impl PvpObjectiveRuntime {
 
         // Hybrid: initial capture point A + payload escort checkpoints
         if let (Some(point_a), Some(pl)) = (points.first(), payload) {
-            if let Some(escort) = build_escort(pl.position) {
+            if let Some(mut escort) = build_escort(pl.position) {
+                escort.payload_placeable = pl.placeable;
                 let capture = CapturePointStage::new(
                     CapturePointSpec {
                         placeable: point_a.placeable.unwrap_or(0),
@@ -1034,6 +1037,7 @@ impl PvpObjectiveRuntime {
         // Escort: payload + checkpoints
         if let Some(pl) = payload {
             if let Some(mut round) = build_escort(pl.position) {
+                round.payload_placeable = pl.placeable;
                 round.start_setup(0.0);
                 return Some(Self::Escort(round));
             }
@@ -1094,6 +1098,81 @@ impl PvpObjectiveRuntime {
             .filter(|a| a.alive && self.is_on_objective(a.position))
             .map(|a| a.entity)
             .collect()
+    }
+
+    /// Live payload vehicle world pose (`MAP_ENTITY_BIT | placeable`) for Escort/Hybrid modes.
+    pub fn payload_entity_update(&self) -> Option<([f64; 3], crate::world::EntityUpdate)> {
+        let escort = match self {
+            Self::Escort(round) => round,
+            Self::Hybrid(round) if round.payload_active() => &round.escort,
+            _ => return None,
+        };
+        let placeable = escort.payload_placeable?;
+        let pose = escort.mover.pose();
+        let update = crate::world::EntityUpdate {
+            entity: MAP_ENTITY_BIT | placeable,
+            movement: Some(crate::world::Movement {
+                flags: 0,
+                position: pose.position,
+                yaw: i32::from(pose.yaw),
+                pitch: i32::from(pose.pitch),
+                ..crate::world::Movement::default()
+            }),
+            ..crate::world::EntityUpdate::default()
+        };
+        Some((pose.position, update))
+    }
+
+    /// Compact state key `(phase, countdown_tenths, stage, progress_pct)` for dirty HUD replication.
+    pub fn hud_state_key(&self, now: f64) -> (u8, i32, u8, u8) {
+        let (deadline, stage, progress) = match self {
+            Self::Assault(r) => (
+                r.deadline,
+                r.stage as u8,
+                (r.current().progress * 100.0) as u8,
+            ),
+            Self::Escort(r) => {
+                let len = r.mover.track.total_length.max(1e-6);
+                (
+                    r.deadline,
+                    r.stage as u8,
+                    ((r.mover.distance / len) * 100.0).clamp(0.0, 100.0) as u8,
+                )
+            }
+            Self::Hybrid(r) => {
+                let pct = if r.payload_active() {
+                    let len = r.escort.mover.track.total_length.max(1e-6);
+                    ((r.escort.mover.distance / len) * 100.0).clamp(0.0, 100.0) as u8
+                } else {
+                    (r.capture.progress * 100.0) as u8
+                };
+                (r.escort.deadline, r.room_stage() as u8, pct)
+            }
+            Self::Control(r) => (
+                r.deadline,
+                r.stage() as u8,
+                r.scores[0].max(r.scores[1]).clamp(0.0, 100.0) as u8,
+            ),
+        };
+        let rem = hud_clock_seconds((deadline - now).max(0.0));
+        (
+            self.phase() as u8,
+            (rem * 10.0).round() as i32,
+            stage,
+            progress,
+        )
+    }
+
+    /// Build `GAME_MODE_ENTITY` StateScript variables (`COUNTDOWN = 1303`) for live PvP HUD sync.
+    pub fn hud_variables(&self, now: f64) -> crate::script_wire::Variables {
+        let deadline = match self {
+            Self::Assault(r) => r.deadline,
+            Self::Escort(r) => r.deadline,
+            Self::Hybrid(r) => r.escort.deadline,
+            Self::Control(r) => r.deadline,
+        };
+        let rem = hud_clock_seconds((deadline - now).max(0.0));
+        crate::script_wire::Variables::from([(1303, crate::script_wire::Value::Float(rem))])
     }
 
     pub fn mode_guid(&self) -> u64 {

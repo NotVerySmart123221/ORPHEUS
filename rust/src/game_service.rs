@@ -114,6 +114,9 @@ pub struct AiPolicyStatus {
     pub active_rooms: usize,
 }
 
+pub type CareerRecorder =
+    Arc<dyn Fn(&str, &crate::game_progression::CareerMatchRecord) + Send + Sync>;
+
 pub struct GameService {
     address: SocketAddr,
     requests: mpsc::SyncSender<Request>,
@@ -154,6 +157,10 @@ enum Request {
     },
     AiPolicyStatus {
         reply: mpsc::SyncSender<AiPolicyStatus>,
+    },
+    SetCareerRecorder {
+        recorder: CareerRecorder,
+        reply: mpsc::SyncSender<()>,
     },
     #[cfg(feature = "lua-mods")]
     SetModHost {
@@ -409,6 +416,10 @@ impl GameService {
         host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
     ) -> io::Result<()> {
         self.request(|reply| Request::SetModHost { host, reply })
+    }
+
+    pub fn set_career_recorder(&self, recorder: CareerRecorder) -> io::Result<()> {
+        self.request(|reply| Request::SetCareerRecorder { recorder, reply })
     }
 
     #[cfg(feature = "lua-mods")]

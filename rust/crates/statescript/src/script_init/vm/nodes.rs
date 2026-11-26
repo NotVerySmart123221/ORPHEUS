@@ -1809,9 +1809,23 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         let mut wave_bonus = false;
         let kind = match node.class.as_str() {
+            "STUStatescriptStateCreateEntity" => {
+                // Echo Duplicate (`m_AA26E7DD` -> `STU_0AC15F78` referencing target entity).
+                let copy_spec = field(&node.fields, "m_AA26E7DD");
+                if copy_spec.get("$").and_then(Json::as_str) == Some("STU_0AC15F78") {
+                    if let Some(Value::Entity(target)) =
+                        self.evaluate(id, node, field(copy_spec, "m_entity"), None)
+                    {
+                        if crate::script_expr::valid_entity(target) {
+                            let site = self.site(id, node);
+                            let _ = self.world.duplicate_target_entity(site, target);
+                        }
+                    }
+                }
+                StateKind::Plain
+            }
             // These client presentation states use the base state lifecycle on the server.
             "STUStatescriptState"
-            | "STUStatescriptStateCreateEntity"
             | "STU_0C3A5D53"
             | "STU_B1FA9C2A"
             | "STU_63D801B1"

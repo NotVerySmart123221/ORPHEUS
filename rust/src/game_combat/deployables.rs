@@ -118,6 +118,8 @@ pub(super) struct RoomPet {
     pub(super) wire_vitals: bool,
     /// Solid world obstacle (e.g. Mei Ice Wall pillar) that blocks movement & shots for both teams.
     pub(super) solid_wall: bool,
+    /// Optional parent pet wire ID for multi-pillar structures (e.g. Mei Ice Wall flanks).
+    pub(super) parent_pet: Option<u32>,
     /// Autonomous combat turret / companion (Torbjörn Turret / Ashe B.O.B.) fire cooldown in ticks.
     pub(super) ai_fire_cooldown: u16,
     /// Opening charge ticks remaining for high-HP autonomous companions (B.O.B.).
@@ -844,11 +846,17 @@ impl RoomSimulation {
             return;
         }
         let graphs_and_mode = self.deployable_graphs();
-        let (vitals, authored_body_vitals) = resolve_entity_vitals(
-            graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
-            definition,
-            max_health,
-        );
+        const MEI_ICE_WALL_ENTITY: u64 = 0x0400_0000_0000_090b;
+        let is_ice_wall_root = definition == MEI_ICE_WALL_ENTITY && attach.is_none();
+        let (vitals, authored_body_vitals) = if is_ice_wall_root {
+            (Some(Vitals::new(400.0, 0.0, 0.0)), true)
+        } else {
+            resolve_entity_vitals(
+                graphs_and_mode.as_ref().map(|(g, _)| g.as_ref()),
+                definition,
+                max_health,
+            )
+        };
         let Some(update) = entity_create_update(
             pet_id,
             team,
@@ -880,7 +888,8 @@ impl RoomSimulation {
         };
         let ecs_entity = self.world.spawn_empty().id();
         let max_hp = vitals.as_ref().map_or(0.0, Vitals::maximum);
-        let solid_wall = attach.is_none() && (350.0..=550.0).contains(&max_hp);
+        let solid_wall =
+            is_ice_wall_root || (attach.is_none() && (350.0..=550.0).contains(&max_hp));
         let charge_ticks = if attach.is_none() && max_hp >= 800.0 {
             186 // ~3.0s opening charge for B.O.B. companions
         } else {
@@ -900,6 +909,7 @@ impl RoomSimulation {
                 vitals,
                 wire_vitals: authored_body_vitals,
                 solid_wall,
+                parent_pet: None,
                 ai_fire_cooldown: 16,
                 charge_ticks,
                 component,
@@ -907,6 +917,58 @@ impl RoomSimulation {
             },
         );
         self.created.push(update);
+        // Mei Ice Wall (`0x040000000000090B`): automatically spawn 4 flanking destructible
+        // 400 HP solid pillars perpendicular to yaw (5 pillars total, 1.6m spacing).
+        if is_ice_wall_root {
+            let rad = f64::from(yaw) * std::f64::consts::TAU / 65_536.0;
+            let (sin_y, cos_y) = rad.sin_cos();
+            let right = [cos_y, 0.0, -sin_y];
+            for idx in [-2i32, -1, 1, 2] {
+                let offset = f64::from(idx) * 1.6;
+                let pillar_pos = [
+                    position[0] + right[0] * offset,
+                    position[1],
+                    position[2] + right[2] * offset,
+                ];
+                let pillar_id = next_pet_wire_id();
+                let pillar_vitals = Vitals::new(400.0, 0.0, 0.0);
+                if let Some(pillar_update) = entity_create_update(
+                    pillar_id,
+                    team,
+                    definition,
+                    None,
+                    pillar_pos,
+                    yaw,
+                    None,
+                    Some(&pillar_vitals),
+                    true,
+                ) {
+                    let pillar_ecs = self.world.spawn_empty().id();
+                    self.room_pets.insert(
+                        pillar_id,
+                        RoomPet {
+                            owner,
+                            ecs_entity: pillar_ecs,
+                            team,
+                            definition,
+                            attach: None,
+                            local_offset: None,
+                            position: pillar_pos,
+                            yaw,
+                            vitals: Some(pillar_vitals),
+                            wire_vitals: true,
+                            solid_wall: true,
+                            parent_pet: Some(pet_id),
+                            ai_fire_cooldown: 0,
+                            charge_ticks: 0,
+                            component: None,
+                            world: None,
+                        },
+                    );
+                    self.created.push(pillar_update);
+                }
+            }
+        }
     }
 
     /// Spawn a 5-pillar solid destructible Ice Wall perpendicular to `yaw`,
@@ -979,6 +1041,20 @@ impl RoomSimulation {
             let _ = self.world.despawn(pet.ecs_entity);
             Arc::make_mut(&mut self.retired_entity_ids).insert(pet_id);
             self.retired_enemies.push(pet_id);
+        }
+        // Clean up any flanking sub-pillars linked to this parent pet (e.g. Mei Ice Wall).
+        let children: Vec<u32> = self
+            .room_pets
+            .iter()
+            .filter(|(_, p)| p.parent_pet == Some(pet_id))
+            .map(|(&id, _)| id)
+            .collect();
+        for child_id in children {
+            if let Some(child) = self.room_pets.shift_remove(&child_id) {
+                let _ = self.world.despawn(child.ecs_entity);
+                Arc::make_mut(&mut self.retired_entity_ids).insert(child_id);
+                self.retired_enemies.push(child_id);
+            }
         }
     }
 
@@ -1732,9 +1808,58 @@ impl RoomSimulation {
             }
         }
 
-        // 4. Autonomous combat pets (Torbjörn Turret 250 HP & Ashe B.O.B. >= 800 HP):
-        //    B.O.B. charges forward with knockup, then acquires LOS targets and fires on cadence.
+        // 4. Autonomous combat pets (Torbjörn Turret 250 HP & Ashe B.O.B. >= 800 HP) +
+        //    Junkrat Steel Trap proximity root (`0x0385` / `0x11A9`, 80 dmg + 3.0s root).
         if let Some(frame) = frame_arc {
+            const JUNKRAT_TRAP_A: u64 = 0x0400_0000_0000_0385;
+            const JUNKRAT_TRAP_B: u64 = 0x0400_0000_0000_11a9;
+            let mut triggered_traps: Vec<(u32, u32, u32)> = Vec::new();
+            for (&dep_wire, dep) in &self.room_deployables {
+                let is_trap = dep.definition == JUNKRAT_TRAP_A
+                    || dep.definition == JUNKRAT_TRAP_B
+                    || dep.vitals.as_ref().is_some_and(|v| {
+                        (90.0..=110.0).contains(&v.maximum()) && dep.component.is_none()
+                    });
+                if !is_trap || dep.vitals.as_ref().is_some_and(|v| v.death().is_some()) {
+                    continue;
+                }
+                for c in frame.candidates() {
+                    if c.entity == dep.owner || c.entity == dep_wire {
+                        continue;
+                    }
+                    if !self.free_for_all && c.team == Some(dep.team) {
+                        continue;
+                    }
+                    let dist =
+                        (c.position[0] - dep.position[0]).hypot(c.position[2] - dep.position[2]);
+                    if dist <= 1.25 && (c.position[1] - dep.position[1]).abs() <= 1.8 {
+                        triggered_traps.push((dep_wire, dep.owner, c.entity));
+                        break;
+                    }
+                }
+            }
+            for (trap_wire, trap_owner, victim) in triggered_traps {
+                if let Some(dep) = self.room_deployables.shift_remove(&trap_wire) {
+                    let _ = self.world.despawn(dep.ecs_entity);
+                    Arc::make_mut(&mut self.retired_entity_ids).insert(trap_wire);
+                    self.retired_enemies.push(trap_wire);
+                }
+                let death = Death {
+                    time: now.as_secs_f64(),
+                    frame: tick,
+                    killer: trap_owner,
+                };
+                let _ = self.apply_health(
+                    victim,
+                    crate::game_combat::HealthEffect::Damage(80.0),
+                    death,
+                    now,
+                    None,
+                );
+                let st = self.actor_statuses.entry(victim).or_default();
+                st.rooted_until = Some(st.rooted_until.unwrap_or(0).max(tick.saturating_add(186)));
+            }
+
             let mut ai_hits: Vec<(u32, u32, f64, Option<Vec3>)> = Vec::new();
             for (&pet_wire, pet) in &mut self.room_pets {
                 if pet.attach.is_some() || pet.solid_wall {
@@ -1865,9 +1990,218 @@ impl RoomSimulation {
         }
     }
 
+    /// Scale continuous beam weapon ticks cleanly:
+    /// - Symmetra LMB (`0x26F0`): 1.0x -> 2.0x -> 3.0x (`beam_charge` ramp, 60 -> 120 -> 180 DPS)
+    /// - Echo Focusing Beam (`0x2593`): 4.0x execute damage when target HP <= 50%
+    pub(super) fn scale_continuous_beam_damage(
+        &mut self,
+        source_wire: u32,
+        target_wire: u32,
+        base_damage: f64,
+        tick: u32,
+    ) -> f64 {
+        if base_damage <= 0.0 || base_damage > 16.0 || source_wire == target_wire {
+            return base_damage;
+        }
+        const SYMMETRA_BODY: u64 = 0x0400_0000_0000_26f0;
+        const ECHO_BODY: u64 = 0x0400_0000_0000_2593;
+        let source_body = self
+            .players_by_wire
+            .get(&source_wire)
+            .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+            .map(|p| p.body_template);
+        match source_body {
+            Some(SYMMETRA_BODY) => {
+                let st = self.actor_statuses.entry(source_wire).or_default();
+                st.beam_charge = (st.beam_charge + 0.013).min(2.0);
+                st.beam_last_hit_tick = tick;
+                let mult = 1.0 + f64::from(st.beam_charge.floor());
+                base_damage * mult
+            }
+            Some(ECHO_BODY) => {
+                let low_hp = self
+                    .by_wire
+                    .get(&target_wire)
+                    .and_then(|&ent| self.world.get::<super::BotState>(ent))
+                    .is_some_and(|b| b.vitals.total() * 2.0 <= b.vitals.maximum())
+                    || self
+                        .players_by_wire
+                        .get(&target_wire)
+                        .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+                        .and_then(|p| p.vitals())
+                        .is_some_and(|v| v.total() * 2.0 <= v.maximum());
+                if low_hp {
+                    base_damage * 4.0
+                } else {
+                    base_damage
+                }
+            }
+            _ => base_damage,
+        }
+    }
+
+    /// Engage Roadhog 2-stage Chain Hook pull toward 3.5m in front of Roadhog (with LOS check in `step_status_effects`).
+    pub(super) fn attach_roadhog_hook_pull(
+        &mut self,
+        puller_wire: u32,
+        victim_wire: u32,
+        tick: u32,
+    ) {
+        if puller_wire == victim_wire || self.actor_is_cc_immune(victim_wire, tick) {
+            return;
+        }
+        let Some((puller_pos, puller_yaw)) = self
+            .players_by_wire
+            .get(&puller_wire)
+            .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+            .map(|p| {
+                let pose = p.mover.pose();
+                (pose.position, pose.yaw)
+            })
+        else {
+            return;
+        };
+        let Some(victim_pos) = self
+            .sample_health_body(victim_wire)
+            .and_then(|s| s.position(&self.world))
+        else {
+            return;
+        };
+        let dist = (victim_pos[0] - puller_pos[0]).hypot(victim_pos[2] - puller_pos[2]);
+        if !(3.8..=22.0).contains(&dist) {
+            return;
+        }
+        let rad = f64::from(puller_yaw) * std::f64::consts::TAU / 65_536.0;
+        let (sin_y, cos_y) = rad.sin_cos();
+        let dest = [
+            puller_pos[0] + sin_y * 3.5,
+            puller_pos[1],
+            puller_pos[2] + cos_y * 3.5,
+        ];
+        self.apply_actor_stun(victim_wire, tick, 62);
+        let st = self.actor_statuses.entry(victim_wire).or_default();
+        st.hook_pull = Some((puller_wire, dest, tick.saturating_add(62)));
+    }
+
+    /// Detonate owner's oldest Junkrat Concussion Mine (`0x103A`) for 120 AoE damage +
+    /// knockback and zero-self-damage mine-jumping impulse.
+    pub(super) fn detonate_owner_concussion_mine(
+        &mut self,
+        owner_wire: u32,
+        tick: u32,
+        now: Duration,
+    ) {
+        const JUNKRAT_MINE: u64 = 0x0400_0000_0000_103a;
+        let Some((mine_wire, mine_team, center)) = self
+            .room_deployables
+            .iter()
+            .find(|(_, d)| d.owner == owner_wire && d.definition == JUNKRAT_MINE)
+            .map(|(&w, d)| (w, d.team, d.position))
+        else {
+            return;
+        };
+        if let Some(dep) = self.room_deployables.shift_remove(&mine_wire) {
+            let _ = self.world.despawn(dep.ecs_entity);
+            Arc::make_mut(&mut self.retired_entity_ids).insert(mine_wire);
+            self.retired_enemies.push(mine_wire);
+        }
+        let targets: Vec<(u32, Vec3, f64)> = self
+            .spatial_frame
+            .as_ref()
+            .map(|(_, frame)| {
+                frame
+                    .candidates()
+                    .iter()
+                    .filter(|c| {
+                        c.entity == owner_wire || self.free_for_all || c.team != Some(mine_team)
+                    })
+                    .filter_map(|c| {
+                        let d = (c.position[0] - center[0])
+                            .hypot(c.position[2] - center[2])
+                            .hypot((c.position[1] + 0.8) - center[1]);
+                        (d <= 4.5).then_some((c.entity, c.position, d))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: owner_wire,
+        };
+        for (target, pos, d) in targets {
+            let dx = pos[0] - center[0];
+            let dz = pos[2] - center[2];
+            let hlen = dx.hypot(dz).max(1e-4);
+            if target == owner_wire {
+                // Zero self-damage mine jump!
+                let _ = self.queue_combat_impulse(
+                    owner_wire,
+                    tick,
+                    [dx / hlen * 7.0, 12.5, dz / hlen * 7.0],
+                );
+            } else {
+                let falloff = (1.0 - (d / 4.5) * 0.75).clamp(0.25, 1.0);
+                let _ = self.apply_health(
+                    target,
+                    crate::game_combat::HealthEffect::Damage(120.0 * falloff),
+                    death,
+                    now,
+                    None,
+                );
+                let _ = self.queue_combat_impulse(
+                    target,
+                    tick,
+                    [dx / hlen * 10.5, 8.5, dz / hlen * 10.5],
+                );
+            }
+        }
+    }
+
+    /// Activate Echo Duplicate (`STUStatescriptStateCreateEntity` -> `STU_0AC15F78`):
+    /// look up `target_wire`'s hero body definition, schedule body swap into that hero,
+    /// and register the 15s / 0-HP revert back to `original_body`.
+    pub(super) fn activate_echo_duplicate(
+        &mut self,
+        echo_wire: u32,
+        target_wire: u32,
+        original_body: u64,
+        tick: u32,
+    ) {
+        let Some(owner) = self
+            .players_by_wire
+            .get(&echo_wire)
+            .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+            .map(|p| p.owner)
+        else {
+            return;
+        };
+        let target_body = self
+            .players_by_wire
+            .get(&target_wire)
+            .and_then(|&ent| self.world.get::<super::PlayerBodyState>(ent))
+            .map(|p| p.body_template)
+            .or_else(|| {
+                self.by_wire
+                    .get(&target_wire)
+                    .and_then(|&ent| self.world.get::<super::BotState>(ent))
+                    .map(|b| b.bot.spawn.body)
+            });
+        let Some(target_body) = target_body.filter(|&b| b != 0 && b != original_body) else {
+            return;
+        };
+        let valid_body = self
+            .deployable_graphs()
+            .is_some_and(|(g, _)| g.entity_body(target_body).is_some());
+        if !valid_body {
+            return;
+        }
+        self.start_echo_duplicate(owner, original_body, tick);
+        self.pending_duplicate_reverts.insert(owner, target_body);
+    }
+
     /// Mercy Resurrect: revive the nearest fallen ally soul anchor within 5.5m
     /// by clearing their respawn timer immediately.
-    #[allow(dead_code)]
     pub(super) fn try_resurrect_nearest_ally(
         &mut self,
         healer_team: u8,
@@ -2462,5 +2796,31 @@ mod tests {
             sim.try_resurrect_nearest_ally(0, [12.0, 0.0, 11.0], 200, Duration::from_secs(3));
         assert_eq!(revived.map(|a| a.body), Some(body));
         assert!(sim.soul_anchors.is_empty());
+    }
+
+    #[test]
+    fn mei_ice_wall_entity_auto_spawns_five_solid_pillars_and_cleans_up_together() {
+        let mut sim = RoomSimulation::new(Vec::new()).unwrap();
+        let owner = 0xa000_0101;
+        let root_pet = next_pet_wire_id();
+        sim.spawn_room_pet(
+            owner,
+            0,
+            root_pet,
+            0x0400_0000_0000_090b,
+            None,
+            [0.0, 0.0, 8.0],
+            0,
+            None,
+            None,
+            20,
+        );
+        // Center + 4 flanking pillars = 5 independent solid wall pillars!
+        assert_eq!(sim.active_room_pets(), 5);
+        assert_eq!(sim.solid_wall_capsules().len(), 5);
+        // Despawning the root pet cleans up all 4 flanking sub-pillars automatically.
+        sim.despawn_room_pet(root_pet);
+        assert_eq!(sim.active_room_pets(), 0);
+        assert_eq!(sim.solid_wall_capsules().len(), 0);
     }
 }

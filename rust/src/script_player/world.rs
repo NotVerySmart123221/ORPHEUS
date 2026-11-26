@@ -1902,6 +1902,17 @@ impl World for BodyWorld {
         false
     }
 
+    fn duplicate_target_entity(&mut self, site: Site, target: u32) -> bool {
+        if !self.is_player_site(site) || !valid_entity(target) || target == self.entity {
+            return false;
+        }
+        let Some(frame) = self.spatial_frame.as_deref() else {
+            return false;
+        };
+        self.script_requests
+            .queue_start_duplicate(frame, self.entity, target, self.body_definition)
+    }
+
     fn set_combat_mod(
         &mut self,
         site: Site,
