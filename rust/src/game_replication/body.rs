@@ -120,7 +120,15 @@ impl BodyScript {
         frame_us: u32,
         previously_processed: Option<u32>,
     ) {
-        if frame_us == 0 || !mover.needs_owner_correction_at(frame) {
+        if frame_us == 0 {
+            return;
+        }
+        if !mover.needs_owner_correction_at(frame) {
+            if let Some(history) = self.corrections.as_mut() {
+                if self.continuous_corrections || history.impulse_correction().is_some() {
+                    history.record(mover.pose());
+                }
+            }
             return;
         }
         let history = self.corrections.get_or_insert_with(|| {
@@ -191,6 +199,7 @@ impl BodyScript {
         mover.set_cinematic_aim(runtime.cinematic_aim());
         mover.set_authored_facing(runtime.authored_facing());
         mover.set_move_request(runtime.move_request());
+        mover.set_ball_roll_speed(runtime.ball_roll_speed());
         let velocity_changes = runtime.take_velocity_changes();
         if runtime
             .vitals()

@@ -19,7 +19,7 @@ use crate::{
 mod hurt_volumes;
 
 pub use crate::script_init::HitTags as DamageTags;
-pub(crate) use hurt_volumes::{HurtPose, HurtVolumeCatalog};
+pub(crate) use hurt_volumes::{HurtPose, HurtVolumeCatalog, SkeletalStance};
 
 pub const DEFAULT_REACH: f64 = 200.0;
 const HISTORY: usize = 64;

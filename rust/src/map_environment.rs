@@ -29,10 +29,57 @@ impl LethalVolume {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct HealthPackSpec {
+    pub position: [f64; 3],
+    #[serde(default)]
+    pub mega: bool,
+}
+
+impl HealthPackSpec {
+    pub(crate) fn valid(&self) -> bool {
+        self.position.into_iter().all(f64::is_finite)
+    }
+
+    pub(crate) fn heal_amount(&self) -> f64 {
+        if self.mega { 250.0 } else { 75.0 }
+    }
+
+    pub(crate) fn respawn_ticks(&self, hacked: bool) -> u32 {
+        let base = if self.mega { 62 * 15 } else { 62 * 10 };
+        if hacked { base / 4 } else { base }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JumpPadSpec {
+    pub position: [f64; 3],
+    #[serde(default = "default_pad_radius")]
+    pub radius: f64,
+    pub velocity: [f64; 3],
+}
+
+fn default_pad_radius() -> f64 {
+    1.6
+}
+
+impl JumpPadSpec {
+    pub(crate) fn valid(&self) -> bool {
+        self.position.into_iter().all(f64::is_finite)
+            && self.velocity.into_iter().all(f64::is_finite)
+            && self.radius.is_finite()
+            && self.radius > 0.0
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct MapEnvironment {
     lethal_volumes: Vec<LethalVolume>,
     player_respawns: HashMap<u64, Duration>,
+    health_packs: Vec<HealthPackSpec>,
+    jump_pads: Vec<JumpPadSpec>,
 }
 
 impl MapEnvironment {
@@ -43,6 +90,14 @@ impl MapEnvironment {
 
     pub(crate) fn player_respawn_delay(&self, mode: u64) -> Option<Duration> {
         self.player_respawns.get(&mode).copied()
+    }
+
+    pub(crate) fn health_packs(&self) -> &[HealthPackSpec] {
+        &self.health_packs
+    }
+
+    pub(crate) fn jump_pads(&self) -> &[JumpPadSpec] {
+        &self.jump_pads
     }
 
     /// Box faces count as inside. Invalid poses do not imply a gameplay death.
@@ -68,6 +123,10 @@ struct MapEnvironmentData {
     lethal_volumes: Vec<LethalVolume>,
     #[serde(default)]
     player_respawns: Vec<PlayerRespawnData>,
+    #[serde(default)]
+    health_packs: Vec<HealthPackSpec>,
+    #[serde(default)]
+    jump_pads: Vec<JumpPadSpec>,
 }
 
 #[derive(Deserialize)]
@@ -138,9 +197,21 @@ impl EnvironmentCatalog {
                     )));
                 }
             }
+            if data.health_packs.iter().any(|pack| !pack.valid()) {
+                return Err(invalid(format!(
+                    "map {key:?} contains invalid health pack coordinates"
+                )));
+            }
+            if data.jump_pads.iter().any(|pad| !pad.valid()) {
+                return Err(invalid(format!(
+                    "map {key:?} contains invalid jump pad spec"
+                )));
+            }
             let environment = MapEnvironment {
                 lethal_volumes: data.lethal_volumes,
                 player_respawns,
+                health_packs: data.health_packs,
+                jump_pads: data.jump_pads,
             };
             if maps.insert(map, environment).is_some() {
                 return Err(invalid(format!("duplicate environment map GUID {key:?}")));

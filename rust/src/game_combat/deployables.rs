@@ -232,21 +232,25 @@ fn entity_create_update(
         }
     }
     let mut create = Create::new(definition, components);
-    create.position = position.map(|v| v as f32);
-    create.rotation = yaw_rotation(f64::from(yaw));
     if let Some(parent) = attach {
         create.movement_parent = Some(parent);
         let offset = local_offset
             .filter(|v| v.iter().all(|a| a.is_finite()))
             .unwrap_or([0.0; 3]);
-        // Do NOT set KEEP_MOVEMENT_ROTATION on hero-attached barriers/pets so they
-        // inherit their owner's facing rotation and follow smoothly on the client.
+        // Attached pets (e.g. Reinhardt/Brigitte barriers) use local transforms
+        // relative to `movement_parent`: setting world `yaw` here double-rotates
+        // the shield (180° backwards when facing South).
+        create.position = offset.map(|v| v as f32);
+        create.rotation = [0.0, 0.0, 0.0, 1.0];
         create.movement = Some(Movement {
             flags: 0,
             position: offset,
-            yaw,
+            yaw: 0,
             ..Movement::default()
         });
+    } else {
+        create.position = position.map(|v| v as f32);
+        create.rotation = yaw_rotation(f64::from(yaw));
     }
     Some(EntityUpdate {
         entity: wire,
@@ -1238,8 +1242,161 @@ impl RoomSimulation {
         Some((wire, dist))
     }
 
+    /// Check whether a player's shot intersects one of their own active throwable
+    /// explosive deployables (e.g. Ashe Dynamite) and detonate it immediately with
+    /// splash + burn DoT.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn detonate_owner_deployable_ray(
+        &mut self,
+        shooter: u32,
+        shooter_team: u8,
+        ffa: bool,
+        origin: Vec3,
+        direction: Vec3,
+        max_dist: f64,
+        tick: u32,
+        now: Duration,
+    ) -> Option<f64> {
+        if self.room_deployables.is_empty() || max_dist <= 0.0 {
+            return None;
+        }
+        let mut hit: Option<(u32, f64, Vec3)> = None;
+        for (&wire, dep) in &self.room_deployables {
+            // Only owner-shootable unarmored/low-HP throwables (not turrets/lamps with >= 100 HP).
+            if dep.owner != shooter || dep.vitals.as_ref().is_some_and(|v| v.maximum() >= 100.0) {
+                continue;
+            }
+            let center = [dep.position[0], dep.position[1] + 0.25, dep.position[2]];
+            if let Some(dist) = crate::static_ray::capsule_entry_distance(
+                origin, direction, max_dist, center, center, 0.45,
+            ) {
+                if hit.is_none_or(|(_, prev, _)| dist < prev) {
+                    hit = Some((wire, dist, center));
+                }
+            }
+        }
+        let (wire, dist, center) = hit?;
+        if let Some(dep) = self.room_deployables.shift_remove(&wire) {
+            let _ = self.world.despawn(dep.ecs_entity);
+            Arc::make_mut(&mut self.retired_entity_ids).insert(wire);
+            self.retired_enemies.push(wire);
+        }
+        let radius = 5.0_f64;
+        let targets: Vec<(u32, f64)> = self
+            .spatial_frame
+            .as_ref()
+            .map(|(_, frame)| {
+                frame
+                    .candidates()
+                    .iter()
+                    .filter(|c| ffa || c.team != Some(shooter_team) || c.entity == shooter)
+                    .filter_map(|c| {
+                        let dx = c.position[0] - center[0];
+                        let dy = (c.position[1] + 0.9) - center[1];
+                        let dz = c.position[2] - center[2];
+                        let d = dx.hypot(dy).hypot(dz);
+                        (d <= radius).then_some((c.entity, d))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let death = Death {
+            time: now.as_secs_f64(),
+            frame: tick,
+            killer: shooter,
+        };
+        let burn_ticks: u16 = 310; // ~5.0s at 62Hz
+        let burn_per_tick = 100.0 / f64::from(burn_ticks);
+        for (target, d) in targets {
+            let falloff = (1.0 - (d / radius) * 0.6).clamp(0.4, 1.0);
+            let burst = if target == shooter {
+                37.5 * falloff
+            } else {
+                75.0 * falloff
+            };
+            let _ = self.apply_health(
+                target,
+                crate::game_combat::HealthEffect::Damage(burst),
+                death,
+                now,
+                None,
+            );
+            let entry = self.actor_statuses.entry(target).or_default();
+            entry.dot_ticks = burn_ticks;
+            entry.dot_per_tick = if target == shooter {
+                burn_per_tick * 0.5
+            } else {
+                burn_per_tick
+            };
+            entry.dot_source = shooter;
+        }
+        Some(dist)
+    }
+
+    /// Immortality Field check: if a living actor stands within 6.5m of an allied
+    /// grounded deployable with a retail lamp health pool (`120..=260` HP), return
+    /// the 20% minimum HP clamp floor.
+    pub(super) fn immortality_floor_active(&self, position: Vec3, team: u8) -> bool {
+        let near = |dep_pos: Vec3| {
+            let dx = dep_pos[0] - position[0];
+            let dy = dep_pos[1] - position[1];
+            let dz = dep_pos[2] - position[2];
+            dx.hypot(dz) <= 6.5 && dy.abs() <= 4.0
+        };
+        self.room_deployables.values().any(|dep| {
+            dep.team == team
+                && dep
+                    .vitals
+                    .as_ref()
+                    .is_some_and(|v| v.death().is_none() && (120.0..=260.0).contains(&v.maximum()))
+                && near(dep.position)
+        }) || self.room_pets.values().any(|pet| {
+            pet.team == team
+                && pet.attach.is_none()
+                && pet
+                    .vitals
+                    .as_ref()
+                    .is_some_and(|v| v.death().is_none() && (120.0..=260.0).contains(&v.maximum()))
+                && near(pet.position)
+        })
+    }
+
+    /// Teleporter interact (`F`): when an allied player presses Interact within 2.5m
+    /// of one pad of a paired allied deployable/pet (e.g. Symmetra Teleporter),
+    /// return the paired exit pad position.
+    pub(super) fn teleporter_exit_for(&self, position: Vec3, team: u8) -> Option<Vec3> {
+        let pads: Vec<(u32, u64, Vec3)> = self
+            .room_pets
+            .iter()
+            .filter(|(_, p)| p.team == team && p.attach.is_none())
+            .map(|(&w, p)| (w, p.definition, p.position))
+            .chain(
+                self.room_deployables
+                    .iter()
+                    .filter(|(_, d)| d.team == team)
+                    .map(|(&w, d)| (w, d.definition, d.position)),
+            )
+            .collect();
+        for &(wire, def, pos) in &pads {
+            let dist = (pos[0] - position[0])
+                .hypot(pos[2] - position[2])
+                .hypot(pos[1] - position[1]);
+            if dist <= 2.5 {
+                if let Some(&(_, _, dest)) = pads
+                    .iter()
+                    .find(|&&(other_w, other_def, _)| other_w != wire && other_def == def)
+                {
+                    return Some([dest[0], dest[1] + 0.1, dest[2]]);
+                }
+            }
+        }
+        None
+    }
+
     pub(super) fn advance_deployables(&mut self, tick: u32) {
         self.step_status_effects(tick);
+        self.advance_scheduled_voices(tick);
+        self.advance_progression_and_replay(tick);
         let frame = self.spatial_frame.as_ref().map(|(_, f)| Arc::clone(f));
 
         // Step active room pets (barriers, turrets, walls, teleporters).

@@ -610,6 +610,80 @@ impl Account {
         *profile = edited;
         Ok(Some(result))
     }
+
+    /// Persist a completed match's career stats, XP, level-ups, and level-up loot boxes.
+    /// Returns the number of levels gained.
+    pub fn record_career_match(
+        &self,
+        record: &crate::game_progression::CareerMatchRecord,
+    ) -> io::Result<u32> {
+        let gained = self.edit_profile(|profile| {
+            let bump_map = |map: &mut Map<String, Value>, key: &str, delta: u64| {
+                let prev = map.get(key).and_then(Value::as_u64).unwrap_or(0);
+                map.insert(key.to_owned(), Value::from(prev.saturating_add(delta)));
+            };
+            bump_map(&mut profile.matches, &record.mode_name, 1);
+            if record.won {
+                bump_map(&mut profile.wins, &record.mode_name, 1);
+            }
+            bump_map(&mut profile.stats, "eliminations", record.eliminations);
+            bump_map(&mut profile.stats, "deaths", record.deaths);
+            bump_map(&mut profile.stats, "hero_damage", record.hero_damage);
+            bump_map(&mut profile.stats, "healing", record.healing);
+            bump_map(
+                &mut profile.stats,
+                "objective_kills",
+                record.objective_kills,
+            );
+            bump_map(
+                &mut profile.stats,
+                "objective_time_secs",
+                record.objective_time_secs,
+            );
+            bump_map(&mut profile.stats, "final_blows", record.final_blows);
+            bump_map(
+                &mut profile.stats,
+                "gold_medals",
+                u64::from(record.gold_medals),
+            );
+            bump_map(
+                &mut profile.stats,
+                "silver_medals",
+                u64::from(record.silver_medals),
+            );
+            bump_map(
+                &mut profile.stats,
+                "bronze_medals",
+                u64::from(record.bronze_medals),
+            );
+            let prev_xp = profile
+                .stats
+                .get("xp_progress")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let total_xp = prev_xp.saturating_add(record.xp.total_xp);
+            let levels_gained = (total_xp / crate::game_progression::XP_PER_LEVEL) as u32;
+            let remainder_xp = total_xp % crate::game_progression::XP_PER_LEVEL;
+            profile
+                .stats
+                .insert("xp_progress".to_owned(), Value::from(remainder_xp));
+            bump_map(&mut profile.stats, "total_xp", record.xp.total_xp);
+            if levels_gained > 0 {
+                profile.level = profile.level.saturating_add(i64::from(levels_gained));
+                for _ in 0..levels_gained {
+                    let id = profile.next_box_id;
+                    profile.next_box_id = profile.next_box_id.saturating_add(1);
+                    profile.loot_boxes.push(LootBox {
+                        id,
+                        box_type: 0,
+                        name: "Standard".into(),
+                    });
+                }
+            }
+            Ok(Some(levels_gained))
+        })?;
+        Ok(gained.unwrap_or(0))
+    }
 }
 
 pub struct Accounts {

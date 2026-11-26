@@ -2943,7 +2943,9 @@ fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
         result.notices[1],
         Some(CombatNotice::Elimination {
             killer: 7,
-            victim: first
+            victim: first,
+            loadout: 0,
+            critical: false,
         })
     );
     let actors = bots.debug_actors().unwrap().collect::<Vec<_>>();
@@ -3238,6 +3240,8 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
             terminal.then_some(CombatNotice::Elimination {
                 killer: shot.source,
                 victim: entity,
+                loadout: 0,
+                critical: false,
             })
         );
         assert_eq!(

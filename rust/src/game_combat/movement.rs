@@ -43,9 +43,19 @@ impl MovementContactFrame {
     }
 
     pub(crate) fn ally_separation(&self, source: u32, team: u8, pose: CapsulePose) -> [f64; 2] {
+        self.ally_separation_where(source, team, pose, |_| true)
+    }
+
+    pub(crate) fn ally_separation_where(
+        &self,
+        source: u32,
+        team: u8,
+        pose: CapsulePose,
+        mut visible: impl FnMut(u32) -> bool,
+    ) -> [f64; 2] {
         let mut push = [0.0f64; 2];
         for (&entity, &(other_team, other_pose)) in &self.actors {
-            if entity == source || other_team != Some(team) {
+            if entity == source || other_team != Some(team) || !visible(entity) {
                 continue;
             }
             let self_top = pose.position[1] + pose.top + 2.0 * pose.radius;
@@ -72,7 +82,7 @@ impl MovementContactFrame {
             push[1] += nz * overlap;
         }
         let mag = push[0].hypot(push[1]);
-        let max_step = 1.5 * crate::game_clock::TICK_PERIOD.as_secs_f64();
+        let max_step = 2.8 * crate::game_clock::TICK_PERIOD.as_secs_f64();
         if mag > 1.0e-6 {
             let step = (mag * max_step).min(max_step);
             [push[0] / mag * step, push[1] / mag * step]

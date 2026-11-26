@@ -1981,9 +1981,14 @@ impl WorldDelivery {
         let blockers = motion_frame.as_ref().map_or_else(Vec::new, |frame| {
             self.owner_movement_blockers(frame, id.entity, team)
         });
-        let ally_sep = if alive {
+        let ally_sep = if alive && self.body_script.is_some() {
             motion_frame.as_ref().map_or([0.0; 2], |frame| {
-                frame.ally_separation(id.entity, team, state.mover.contact_capsule())
+                frame.ally_separation_where(
+                    id.entity,
+                    team,
+                    state.mover.contact_capsule(),
+                    |entity| self.actor_contact_ready(entity),
+                )
             })
         } else {
             [0.0; 2]
@@ -2001,8 +2006,7 @@ impl WorldDelivery {
             ..
         } = state;
         if ally_sep != [0.0; 2] {
-            let dt = f64::from(frame_us) / 1_000_000.0;
-            let _ = mover.apply_ally_separation(ally_sep, &blockers, dt);
+            mover.set_ally_separation(ally_sep);
         }
         let mut buffers = StepBuffers {
             frame: body_frame,

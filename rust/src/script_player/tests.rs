@@ -3548,6 +3548,7 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         deflect: Default::default(),
         recall_history: Default::default(),
         active_auras: Default::default(),
+        ball_roll_speed: None,
     };
     let mut component = Component::start(
         graphs,
@@ -4908,6 +4909,7 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             deflect: Default::default(),
             recall_history: Default::default(),
             active_auras: Default::default(),
+            ball_roll_speed: None,
         };
         let component = Component::start(
             Arc::clone(&graphs),
@@ -5127,6 +5129,7 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
         deflect: Default::default(),
         recall_history: Default::default(),
         active_auras: Default::default(),
+        ball_roll_speed: None,
     };
     let mut component = Component::start(
         Arc::clone(&graphs),

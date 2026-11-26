@@ -276,6 +276,13 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             .next()
     }
 
+    fn ball_roll_speed(&self) -> Option<f64> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.world.ball_roll_speed
+    }
+
     fn take_body_swap(&mut self) -> Option<u64> {
         self.world.pending_body_swap.take()
     }

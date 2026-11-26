@@ -316,6 +316,7 @@ impl PlayerBodyFactory {
             deflect: Default::default(),
             recall_history: Default::default(),
             active_auras: Default::default(),
+            ball_roll_speed: None,
         };
         let mut component = Component::start_with_public_schema(
             Arc::clone(&self.graphs),

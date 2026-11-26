@@ -779,6 +779,8 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         terminal.then_some(CombatNotice::Elimination {
                             killer: shot.source,
                             victim: entity,
+                            loadout: 0,
+                            critical: false,
                         })
                     );
                     let current = room

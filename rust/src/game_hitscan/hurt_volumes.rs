@@ -8,11 +8,22 @@ use crate::{
     static_ray::{SurfaceHit, Vec3, capsule_entry_hit, norm, segment_separation},
 };
 
+/// Live skeletal posture inputs used to articulate multi-region hurtboxes for
+/// hero bodies that do not carry a separate static calibration entry.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SkeletalStance {
+    pub yaw: i32,
+    pub speed: f64,
+    pub crouched: bool,
+    pub head_protected: bool,
+}
+
 /// Sampled movement pose plus an optional combat profile for that posture.
 #[derive(Clone, Copy)]
 pub(crate) struct HurtPose {
     movement: TargetPose,
     calibrated: Option<HurtProfile>,
+    stance: Option<SkeletalStance>,
 }
 
 impl From<TargetPose> for HurtPose {
@@ -20,11 +31,17 @@ impl From<TargetPose> for HurtPose {
         Self {
             movement,
             calibrated: None,
+            stance: None,
         }
     }
 }
 
 impl HurtPose {
+    pub(crate) fn with_stance(mut self, stance: SkeletalStance) -> Self {
+        self.stance = Some(stance);
+        self
+    }
+
     pub(crate) fn feet(self) -> Vec3 {
         self.movement.feet
     }
@@ -52,12 +69,58 @@ impl HurtPose {
                 head,
             )
         };
-        let regions = match self.calibrated {
-            Some(profile) => [
+        let regions = match (self.calibrated, self.stance) {
+            (Some(profile), _) => [
                 Some(world(profile.body, false)),
                 profile.head.map(|shape| world(shape, true)),
+                None,
             ],
-            None => [
+            (None, Some(stance)) => {
+                let h = self.movement.height.max(0.8);
+                let r = self.movement.radius.max(0.25);
+                let rad = f64::from(stance.yaw) * std::f64::consts::TAU / 65_536.0;
+                let (sin, cos) = rad.sin_cos();
+                let lean = if stance.crouched {
+                    0.09
+                } else {
+                    (stance.speed / 8.0).clamp(0.0, 1.0) * 0.08
+                };
+                let legs_r = (r * 0.62).max(0.18);
+                let legs_top = (h * 0.46).max(legs_r + 0.05);
+                let legs = Capsule {
+                    ends: [[x, y + legs_r, z], [x, y + legs_top, z]],
+                    radius: legs_r,
+                };
+                let torso_r = (r * 0.94).max(0.24);
+                let torso_low = (h * 0.46).max(torso_r);
+                let torso_high = (h * 0.78).max(torso_low + 0.05);
+                let torso = Capsule {
+                    ends: [
+                        [
+                            x + sin * (lean * 0.4),
+                            y + torso_low,
+                            z + cos * (lean * 0.4),
+                        ],
+                        [x + sin * lean, y + torso_high, z + cos * lean],
+                    ],
+                    radius: torso_r,
+                };
+                let head = (!stance.head_protected).then(|| {
+                    let head_r = (r * 0.42).clamp(0.18, 0.28);
+                    let head_y = (self.movement.eye + 0.04).clamp(torso_high, h - head_r * 0.5);
+                    let head_fwd = lean * 1.35;
+                    let center = [x + sin * head_fwd, y + head_y, z + cos * head_fwd];
+                    (
+                        Capsule {
+                            ends: [center, center],
+                            radius: head_r,
+                        },
+                        true,
+                    )
+                });
+                [Some((legs, false)), Some((torso, false)), head]
+            }
+            (None, None) => [
                 Some((
                     Capsule {
                         ends: self.movement.segment(),
@@ -65,6 +128,7 @@ impl HurtPose {
                     },
                     false,
                 )),
+                None,
                 None,
             ],
         };
@@ -78,14 +142,40 @@ impl HurtPose {
         reach: f64,
         padding: f64,
     ) -> Option<HurtContact> {
-        let mut contact = self
-            .capsules()
-            .filter_map(|(capsule, head)| {
-                let [a, b] = capsule.ends;
+        let mut best_body: Option<HurtContact> = None;
+        let mut best_head: Option<HurtContact> = None;
+        for (capsule, head) in self.capsules() {
+            let [a, b] = capsule.ends;
+            if let Some(hit) =
                 capsule_entry_hit(origin, direction, reach, a, b, capsule.radius + padding)
-                    .map(|hit| HurtContact { capsule, hit, head })
-            })
-            .min_by(|a, b| a.hit.distance.total_cmp(&b.hit.distance))?;
+            {
+                let candidate = HurtContact { capsule, hit, head };
+                let slot = if head { &mut best_head } else { &mut best_body };
+                if slot
+                    .as_ref()
+                    .is_none_or(|prev| candidate.hit.distance < prev.hit.distance)
+                {
+                    *slot = Some(candidate);
+                }
+            }
+        }
+        let mut contact = match (best_head, best_body) {
+            (Some(head), Some(body)) => {
+                // When a ray/projectile intersects both the head sphere and a wider
+                // chest capsule whose upper dome protrudes slightly further forward,
+                // prioritize the headshot so projectiles and face shots are not stolen
+                // by the torso volume.
+                let front_margin = (body.capsule.radius - head.capsule.radius).max(0.0) + 0.15;
+                if head.hit.distance <= body.hit.distance + front_margin {
+                    head
+                } else {
+                    body
+                }
+            }
+            (Some(head), None) => head,
+            (None, Some(body)) => body,
+            (None, None) => return None,
+        };
         if self.calibrated.is_none() {
             // Compatibility for bodies that have no separately measured combat profile.
             let impact_y = origin[1] + direction[1] * contact.hit.distance;
@@ -258,6 +348,7 @@ impl HurtVolumeCatalog {
         HurtPose {
             movement,
             calibrated,
+            stance: None,
         }
     }
 }

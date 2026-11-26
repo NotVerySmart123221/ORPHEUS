@@ -691,6 +691,11 @@ impl RoomSimulation {
                             line: cue.line,
                         },
                     });
+                    if cue.stimulus == crate::actor_voice::STIMULUS_HELLO
+                        && request.wire == source.wire
+                    {
+                        self.trigger_nearby_bot_hello_reply(source.wire, tick);
+                    }
                 }
             }
         }
@@ -720,6 +725,8 @@ impl RoomSimulation {
             killed.then_some(CombatNotice::Elimination {
                 killer: source.wire,
                 victim: target,
+                loadout: 0,
+                critical: false,
             }),
         ];
         self.player_cues
@@ -769,6 +776,51 @@ impl RoomSimulation {
                 origin,
                 normal: geometry.and_then(ImpactGeometry::surface_normal),
                 contact_set,
+                critical: false,
+            },
+        });
+    }
+
+    /// Broadcast victim contact feedback (`25000`) to the attacking player when
+    /// damaging an NPC/bot so all weapons trigger retail hit/bleed/spark/shock
+    /// reactions on Training Bots and PvE enemies (not just player-vs-player).
+    pub(super) fn record_bot_damage_feedback(
+        &mut self,
+        source_wire: u32,
+        bot_wire: u32,
+        bot_body: u64,
+        dealt: f32,
+        critical: bool,
+        geometry: Option<ImpactGeometry>,
+    ) {
+        if !self.received_damage_feedback || !dealt.is_finite() || dealt <= 0.0 {
+            return;
+        }
+        let Some(shooter_id) = self.player_handle_for_wire(source_wire) else {
+            return;
+        };
+        let Some(shooter_owner) = self.player_body(shooter_id).map(|state| state.owner) else {
+            return;
+        };
+        let Some(bot_sample) = self.sample_health_body(bot_wire) else {
+            return;
+        };
+        let contact_set = self.body_contact_sets.get(&bot_body).copied().unwrap_or(0);
+        let origin = geometry
+            .map(ImpactGeometry::origin)
+            .or_else(|| bot_sample.position(&self.world));
+        self.player_cues.push(PlayerRoomCue {
+            owner: shooter_owner,
+            listener: shooter_id,
+            source: bot_sample.identity(),
+            notice: CombatNotice::DamageReceived {
+                source: source_wire,
+                victim: bot_wire,
+                dealt,
+                origin,
+                normal: geometry.and_then(ImpactGeometry::surface_normal),
+                contact_set,
+                critical,
             },
         });
     }
@@ -903,6 +955,39 @@ impl RoomSimulation {
         }
         let owner = player.owner;
         let listener = player.id;
+        let now_secs = f64::from(frame) * crate::game_clock::TICK_PERIOD.as_secs_f64();
+        let awarded = self
+            .scoreboard
+            .record_elimination(owner, victim_wire, false, now_secs);
+        if self.stats_catalog.is_some() {
+            for (award_owner, points, _ignited) in awarded {
+                if award_owner == owner {
+                    if let Some(victim_sample) = self.sample_health_body(victim_wire) {
+                        self.player_cues.push(PlayerRoomCue {
+                            owner,
+                            listener,
+                            source: victim_sample.identity(),
+                            notice: CombatNotice::ScorePopup {
+                                score: points,
+                                label: crate::game_progression::SCORE_LABEL_ELIMINATION,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        self.replay.record_event(crate::game_replay::ReplayEvent {
+            tick: frame,
+            kind: crate::game_replay::ReplayEventKind::Elimination {
+                killer: killer_wire,
+                victim: victim_wire,
+                critical: false,
+                environmental: false,
+                ult_shutdown: false,
+                lifesaver: false,
+                distance: 10.0,
+            },
+        });
         let target = self.authored_elimination_target(victim_wire);
         let window = self.combat_voice.multikill_window_ticks();
         let eligible = window != 0

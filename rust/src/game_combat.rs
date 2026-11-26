@@ -234,6 +234,12 @@ pub(crate) struct PosedProjectile {
     pub blast_effect: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct HealthPackState {
+    pub(super) ready_at_tick: u32,
+    pub(super) hacked_by: Option<(u8, u32)>,
+}
+
 /// Room-authoritative per-actor combat status effects driven by retail `m_277A4ECA`
 /// effect GUIDs (anti-heal / heal-boost, sleep, freeze buildup, lingering HoT).
 #[derive(Clone, Copy, Debug, Default)]
@@ -250,6 +256,9 @@ pub(super) struct ActorStatus {
     pub(super) hot_ticks: u16,
     pub(super) hot_per_tick: f64,
     pub(super) hot_source: u32,
+    pub(super) dot_ticks: u16,
+    pub(super) dot_per_tick: f64,
+    pub(super) dot_source: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -581,6 +590,10 @@ impl RoomSpatialFrame {
 
     pub(crate) fn entity_facts(&self) -> Option<&BTreeMap<u32, RoomEntityFacts>> {
         self.entity_facts.as_ref()
+    }
+
+    pub(crate) fn voice_line_duration(&self, line: u64) -> Option<f64> {
+        Some(self.actor_voice.as_deref()?.line_duration(line))
     }
 
     pub(crate) fn terrain_category(&self) -> u16 {
@@ -1004,6 +1017,15 @@ pub(crate) struct RoomSimulation {
     room_pets: IndexMap<u32, deployables::RoomPet>,
     room_deployables: IndexMap<u32, deployables::RoomDeployable>,
     actor_statuses: HashMap<u32, ActorStatus>,
+    health_pack_states: Vec<HealthPackState>,
+    jump_pad_cooldowns: HashMap<u32, u32>,
+    scheduled_voices: Vec<(u32, u32, u64, u64)>,
+    bot_reply_cooldowns: HashMap<u32, u32>,
+    banter_scheduled: bool,
+    scoreboard: crate::game_progression::MatchScoreboard,
+    stats_catalog: Option<(Arc<crate::game_stats::StatsCatalog>, u64)>,
+    replay: crate::game_replay::HighlightRecorder,
+    voice_chat: crate::game_replay::VoiceChatRouter,
     interactive_props: crate::room_primitives::InteractivePropRuntime,
     interactive_prop_floor_y: f64,
     pvp_objective: Option<crate::pvp_mode::PvpObjectiveRuntime>,
@@ -1499,6 +1521,15 @@ impl RoomSimulation {
             room_pets: IndexMap::new(),
             room_deployables: IndexMap::new(),
             actor_statuses: HashMap::new(),
+            health_pack_states: Vec::new(),
+            jump_pad_cooldowns: HashMap::new(),
+            scheduled_voices: Vec::new(),
+            bot_reply_cooldowns: HashMap::new(),
+            banter_scheduled: false,
+            scoreboard: crate::game_progression::MatchScoreboard::default(),
+            stats_catalog: None,
+            replay: crate::game_replay::HighlightRecorder::default(),
+            voice_chat: crate::game_replay::VoiceChatRouter::default(),
             interactive_props: crate::room_primitives::InteractivePropRuntime::default(),
             interactive_prop_floor_y: 0.0,
             pvp_objective: None,
@@ -1557,13 +1588,50 @@ impl RoomSimulation {
         let mut melee_centers = Vec::new();
         #[cfg(feature = "lua-mods")]
         let mut button_edges = Vec::new();
-        let has_props =
-            !self.interactive_props.props.is_empty() || !self.interactive_props.buttons.is_empty();
+        let has_props = !self.interactive_props.props.is_empty()
+            || !self.interactive_props.buttons.is_empty()
+            || !self.room_pets.is_empty()
+            || !self.room_deployables.is_empty();
         #[cfg(feature = "lua-mods")]
         let has_mods = self.mod_host.is_some();
         #[cfg(not(feature = "lua-mods"))]
         let has_mods = false;
+        let mut teleports: Vec<(BodyId, u32, Vec3)> = Vec::new();
         if has_props || has_mods {
+            let tp_candidates: Vec<(BodyId, u8, u32, Vec3)> = self
+                .players_by_wire
+                .values()
+                .filter_map(|&entity| {
+                    let state = self.world.get::<PlayerBodyState>(entity)?;
+                    (state.alive()
+                        && state.pending_pressed_buttons
+                            & crate::room_primitives::INTERACT_BUTTON_BIT
+                            != 0)
+                        .then(|| {
+                            (
+                                state.id,
+                                state.team,
+                                state.frame,
+                                state.mover.pose().position,
+                            )
+                        })
+                })
+                .collect();
+            for (id, team, frame, pos) in tp_candidates {
+                if let Some(exit) = self.teleporter_exit_for(pos, team) {
+                    teleports.push((id, frame, exit));
+                }
+            }
+            for (id, frame, exit) in teleports {
+                if let Some(reloc) = crate::script_init::Relocation::new(exit) {
+                    if let Some(state) = self.player_body_mut(id) {
+                        state.mover.queue_scripted_motion(
+                            frame.saturating_add(1),
+                            crate::script_init::ScriptedMotion::Teleport(reloc),
+                        );
+                    }
+                }
+            }
             for (&wire, &entity) in &self.players_by_wire {
                 if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
                     let pressed = std::mem::take(&mut state.pending_pressed_buttons);
@@ -1678,6 +1746,286 @@ impl RoomSimulation {
 
     pub(crate) fn set_body_contact_sets(&mut self, sets: BTreeMap<u64, u16>) {
         self.body_contact_sets = sets;
+    }
+
+    pub(crate) fn set_stats_catalog(
+        &mut self,
+        catalog: Arc<crate::game_stats::StatsCatalog>,
+        mode_guid: u64,
+    ) {
+        self.stats_catalog = Some((catalog, mode_guid));
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scoreboard(&self) -> &crate::game_progression::MatchScoreboard {
+        &self.scoreboard
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn scoreboard_mut(&mut self) -> &mut crate::game_progression::MatchScoreboard {
+        &mut self.scoreboard
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn replay(&self) -> &crate::game_replay::HighlightRecorder {
+        &self.replay
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn voice_chat_mut(&mut self) -> &mut crate::game_replay::VoiceChatRouter {
+        &mut self.voice_chat
+    }
+
+    pub(super) fn advance_progression_and_replay(&mut self, tick: u32) {
+        let dt = crate::game_clock::TICK_PERIOD.as_secs_f64();
+        let now_secs = f64::from(tick) * dt;
+        self.scoreboard.tick_on_fire(dt, now_secs);
+        if let Some((catalog, mode)) = &self.stats_catalog {
+            let updates = self
+                .scoreboard
+                .collect_board_updates(catalog, *mode, tick, 30);
+            for (_, update) in updates {
+                self.scripted_health.push(update);
+            }
+        }
+        // Record compact 30Hz actor snapshots for Killcam & POTG playback.
+        if tick % 2 == 0 && !self.players_by_wire.is_empty() {
+            let mut poses = Vec::with_capacity(self.players_by_wire.len() + self.by_wire.len());
+            for (&wire, &entity) in &self.players_by_wire {
+                if let Some(p) = self.world.get::<PlayerBodyState>(entity) {
+                    let mp = p.mover.pose();
+                    poses.push(crate::game_replay::ReplayActorPose {
+                        entity: wire,
+                        team: p.team,
+                        hero: p.hero,
+                        position: mp.position,
+                        yaw: mp.yaw,
+                        pitch: mp.pitch,
+                        health: p.vitals().map_or(0.0, |v| v.total() as f32),
+                        alive: p.alive(),
+                    });
+                }
+            }
+            for (&wire, &entity) in &self.by_wire {
+                if let Some(s) = self.world.get::<BotState>(entity) {
+                    let mp = s.bot.movement(tick);
+                    poses.push(crate::game_replay::ReplayActorPose {
+                        entity: wire,
+                        team: s.bot.spawn.team,
+                        hero: s.bot.spawn.hero,
+                        position: mp.position,
+                        yaw: mp.yaw,
+                        pitch: mp.pitch,
+                        health: s.vitals.total() as f32,
+                        alive: !s.bot.dead,
+                    });
+                }
+            }
+            self.replay.record_frame(tick, poses);
+        }
+    }
+
+    pub(super) fn queue_hero_spawn_voice(
+        &mut self,
+        owner: u32,
+        listener: BodyId,
+        hero: u64,
+        skin: u64,
+        tick: u32,
+    ) {
+        let Some(catalog) = self
+            .spatial_queries
+            .as_ref()
+            .and_then(|q| q.actor_voice.as_deref())
+        else {
+            return;
+        };
+        let ally_heroes: Vec<u64> = self
+            .players_by_wire
+            .values()
+            .filter_map(|&e| self.world.get::<PlayerBodyState>(e))
+            .filter(|p| p.id != listener)
+            .map(|p| p.hero)
+            .collect();
+        let ctx = crate::actor_voice::VoiceContext {
+            map: None,
+            target_hero: None,
+            ally_heroes: &ally_heroes,
+        };
+        let mut pick = (tick as usize).wrapping_add(listener.entity as usize);
+        let Some((stimulus, line)) = catalog
+            .stimulus_options(hero, skin, crate::actor_voice::STIMULUS_HERO_SPAWN)
+            .and_then(|opts| {
+                opts.choose_with_context(&ctx, &mut |count| {
+                    pick = pick.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                    pick % count
+                })
+            })
+        else {
+            return;
+        };
+        let Some(source) = self.sample_health_body(listener.entity) else {
+            return;
+        };
+        self.player_cues.push(PlayerRoomCue {
+            owner,
+            listener,
+            source: source.identity(),
+            notice: CombatNotice::Voice {
+                anchor: listener.entity,
+                speaker: listener.entity,
+                listener: listener.entity,
+                stimulus,
+                line,
+            },
+        });
+    }
+
+    pub(super) fn schedule_bot_voice_reply(
+        &mut self,
+        bot_wire: u32,
+        stimulus: u64,
+        delay_ticks: u32,
+        now_tick: u32,
+    ) {
+        if self
+            .bot_reply_cooldowns
+            .get(&bot_wire)
+            .is_some_and(|&until| now_tick < until)
+        {
+            return;
+        }
+        let Some(hero) = self
+            .by_wire
+            .get(&bot_wire)
+            .and_then(|&entity| self.world.get::<BotState>(entity))
+            .filter(|s| !s.bot.dead)
+            .map(|s| s.bot.spawn.hero)
+        else {
+            return;
+        };
+        let Some(catalog) = self
+            .spatial_queries
+            .as_ref()
+            .and_then(|q| q.actor_voice.as_deref())
+        else {
+            return;
+        };
+        let pick = (now_tick as usize).wrapping_add(bot_wire as usize);
+        let Some((resolved_stimulus, line)) = catalog
+            .stimulus_options(hero, 0, stimulus)
+            .and_then(|opts| opts.choose(&mut |count| pick % count))
+        else {
+            return;
+        };
+        self.bot_reply_cooldowns
+            .insert(bot_wire, now_tick.saturating_add(62 * 6));
+        self.scheduled_voices.push((
+            now_tick.saturating_add(delay_ticks),
+            bot_wire,
+            resolved_stimulus,
+            line,
+        ));
+    }
+
+    pub(super) fn trigger_nearby_bot_hello_reply(&mut self, speaker_wire: u32, tick: u32) {
+        let Some(speaker_pos) = self
+            .players_by_wire
+            .get(&speaker_wire)
+            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
+            .map(|p| p.mover.pose().position)
+        else {
+            return;
+        };
+        let mut nearest: Option<(f64, u32)> = None;
+        for (&wire, &entity) in &self.by_wire {
+            let Some(state) = self.world.get::<BotState>(entity) else {
+                continue;
+            };
+            if state.bot.dead {
+                continue;
+            }
+            let d = (state.bot.position[0] - speaker_pos[0])
+                .hypot(state.bot.position[1] - speaker_pos[1])
+                .hypot(state.bot.position[2] - speaker_pos[2]);
+            if d <= 12.0 && nearest.is_none_or(|(prev, _)| d < prev) {
+                nearest = Some((d, wire));
+            }
+        }
+        if let Some((_, bot_wire)) = nearest {
+            self.schedule_bot_voice_reply(bot_wire, crate::actor_voice::STIMULUS_HELLO, 28, tick);
+        }
+    }
+
+    pub(super) fn advance_scheduled_voices(&mut self, tick: u32) {
+        if !self.banter_scheduled && self.players_by_wire.len() >= 2 && tick > 62 * 3 {
+            if let Some(catalog) = self
+                .spatial_queries
+                .as_ref()
+                .and_then(|q| q.actor_voice.as_deref())
+            {
+                let active: Vec<(u32, u64)> = self
+                    .players_by_wire
+                    .values()
+                    .filter_map(|&e| self.world.get::<PlayerBodyState>(e))
+                    .filter(|p| p.alive())
+                    .map(|p| (p.id.entity, p.hero))
+                    .collect();
+                let heroes: Vec<u64> = active.iter().map(|&(_, h)| h).collect();
+                if let Some(conv) = catalog.matching_conversation(None, &heroes) {
+                    let mut cursor = tick.saturating_add(62);
+                    for turn in &conv.turns {
+                        if let Some(&(wire, _)) = active.iter().find(|&&(_, h)| h == turn.hero) {
+                            self.scheduled_voices
+                                .push((cursor, wire, turn.stimulus, turn.line));
+                            let dur =
+                                catalog.line_duration(turn.line) + turn.delay_after_secs.max(0.5);
+                            cursor = cursor.saturating_add((dur * 62.5).ceil() as u32);
+                        }
+                    }
+                    self.banter_scheduled = true;
+                }
+            }
+        }
+        if self.scheduled_voices.is_empty() {
+            return;
+        }
+        let mut due = Vec::new();
+        self.scheduled_voices.retain(|entry| {
+            if entry.0 <= tick {
+                due.push(*entry);
+                false
+            } else {
+                true
+            }
+        });
+        for (_, speaker_wire, stimulus, line) in due {
+            let Some(source) = self.sample_health_body(speaker_wire) else {
+                continue;
+            };
+            let source_id = source.identity();
+            let listeners: Vec<(u32, BodyId)> = self
+                .players_by_wire
+                .values()
+                .filter_map(|&entity| self.world.get::<PlayerBodyState>(entity))
+                .filter(|p| p.alive())
+                .map(|p| (p.owner, p.id))
+                .collect();
+            for (owner, listener) in listeners {
+                self.player_cues.push(PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: source_id,
+                    notice: CombatNotice::Voice {
+                        anchor: speaker_wire,
+                        speaker: speaker_wire,
+                        listener: listener.entity,
+                        stimulus,
+                        line,
+                    },
+                });
+            }
+        }
     }
 
     pub(crate) fn enable_spatial_queries(
@@ -2655,6 +3003,21 @@ impl RoomSimulation {
             &visible,
             &mut candidates,
         );
+        if self
+            .detonate_owner_deployable_ray(
+                shot.source,
+                context.team,
+                ffa,
+                ray.origin,
+                ray.direction,
+                ray.reach,
+                context.tick,
+                context.now,
+            )
+            .is_some()
+        {
+            return Ok(None);
+        }
         let barrier_probe = if policy.affects_enemies
             && (!self.room_pets.is_empty() || !self.room_deployables.is_empty())
         {
@@ -3241,6 +3604,36 @@ impl RoomSimulation {
                             );
                         }
                     }
+                    #[cfg(any(test, feature = "inspector"))]
+                    self.record_debug_ray(crate::game_debug::DebugRay {
+                        tick: context.tick,
+                        source: owner.entity,
+                        kind: "projectile",
+                        origin: crate::static_ray::along(
+                            end.point,
+                            {
+                                let len = crate::static_ray::norm(proj_dir);
+                                if len > 1e-6 {
+                                    proj_dir.map(|v| v / len)
+                                } else {
+                                    [0.0, 0.0, 1.0]
+                                }
+                            },
+                            -end.travelled.min(5.0),
+                        ),
+                        end: end.point,
+                        hit: if end.contact.is_some() {
+                            "actor"
+                        } else if end.expired {
+                            "none"
+                        } else {
+                            "world"
+                        },
+                        target: end.contact,
+                        critical: end.impacts.iter().any(|i| i.critical),
+                        surface: None,
+                        script: None,
+                    });
                     #[cfg(feature = "inspector")]
                     {
                         let surface = if end.expired {
@@ -3563,10 +3956,33 @@ impl RoomSimulation {
                 result.killed.then_some(CombatNotice::Elimination {
                     killer: source,
                     victim: entity,
+                    loadout: impact.loadout.unwrap_or(0),
+                    critical: impact.critical,
                 }),
             ],
         };
+        let bot_body = state.bot.spawn.body;
         self.scripted_health.push(health);
+        if let Some(attacker_owner) = self
+            .player_handle_for_wire(source)
+            .and_then(|id| self.player_body(id).map(|p| p.owner))
+        {
+            self.scoreboard.record_damage(
+                attacker_owner,
+                entity,
+                result.dealt,
+                impact.critical,
+                context.now.as_secs_f64(),
+            );
+        }
+        self.record_bot_damage_feedback(
+            source,
+            entity,
+            bot_body,
+            result.dealt as f32,
+            impact.critical,
+            impact.geometry,
+        );
         self.record_health_applied(
             source,
             entity,

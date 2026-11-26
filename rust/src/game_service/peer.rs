@@ -30,6 +30,9 @@ pub(super) struct CombatUi {
     /// already admitted to the wire, preventing multi-pellet shotguns (Doomfist,
     /// Reaper) whose pellets land across adjacent ticks from replaying hit dings.
     recent_hit_notices: VecDeque<(BodyId, u32, u32, bool, bool)>,
+    /// Recent `(healer_body, target, last_frame)` heal confirmation notices
+    /// throttled to ~100ms (6 ticks) so continuous beams emit crisp heal cues.
+    recent_heal_notices: VecDeque<(BodyId, u32, u32)>,
 }
 
 struct AuthoredCueIdentity {
@@ -215,6 +218,55 @@ impl Peer {
                 self.combat_ui
                     .recent_hit_notices
                     .push_back((body, target, shot_frame, critical, killed));
+            }
+        } else if let CombatNotice::HealConfirm {
+            target,
+            amount,
+            shot_frame,
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::HealConfirm {
+                        amount: existing_amount,
+                        shot_frame: existing_frame,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::HealConfirm {
+                            target: existing_target,
+                            ..
+                        }
+                    ) if *existing_body == body && *existing_target == target
+                )
+            }) {
+                *existing_amount += amount;
+                *existing_frame = (*existing_frame).max(shot_frame);
+                return;
+            }
+            if let Some(recent) = self
+                .combat_ui
+                .recent_heal_notices
+                .iter_mut()
+                .rev()
+                .find(|entry| entry.0 == body && entry.1 == target)
+            {
+                if shot_frame.saturating_sub(recent.2) < 6 {
+                    return;
+                }
+                recent.2 = shot_frame;
+            } else {
+                if self.combat_ui.recent_heal_notices.len() >= 32 {
+                    self.combat_ui.recent_heal_notices.pop_front();
+                }
+                self.combat_ui
+                    .recent_heal_notices
+                    .push_back((body, target, shot_frame));
             }
         }
         self.queue_notice(notice, CombatAudience::Shooter(body));

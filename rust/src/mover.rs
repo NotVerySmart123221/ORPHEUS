@@ -286,6 +286,8 @@ pub struct Mover {
     scripted_motion: Option<(u32, ScriptedMotion)>,
     scripted_motion_frame: Option<u32>,
     actor_contact: bool,
+    pending_ally_separation: [f64; 2],
+    ball_roll_speed: Option<f64>,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
@@ -323,6 +325,8 @@ impl Mover {
             scripted_motion: None,
             scripted_motion_frame: None,
             actor_contact: false,
+            pending_ally_separation: [0.0; 2],
+            ball_roll_speed: None,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -523,6 +527,16 @@ impl Mover {
         self.scripted_motion_at(frame) || (self.pose.frame == Some(frame) && self.actor_contact)
     }
 
+    pub(crate) fn set_ally_separation(&mut self, delta: [f64; 2]) {
+        if delta[0].is_finite() && delta[1].is_finite() {
+            self.pending_ally_separation = delta;
+        }
+    }
+
+    pub(crate) fn set_ball_roll_speed(&mut self, speed: Option<f64>) {
+        self.ball_roll_speed = speed.filter(|s| s.is_finite() && *s > 0.0);
+    }
+
     /// Apply a soft horizontal separation nudge when overlapping an allied actor.
     pub(crate) fn apply_ally_separation(
         &mut self,
@@ -658,7 +672,14 @@ impl Mover {
             settings
         };
         #[cfg(not(feature = "lua-mods"))]
-        let settings = active.settings(&self.base);
+        let mut settings = active.settings(&self.base);
+        #[cfg(feature = "lua-mods")]
+        let mut settings = settings;
+        if let Some(roll_speed) = self.ball_roll_speed {
+            settings.run_forward = settings.run_forward.max(roll_speed);
+            settings.run_backward = settings.run_backward.max(roll_speed);
+            settings.run_strafe = settings.run_strafe.max(roll_speed);
+        }
         let blockers = if settings.character_collision != 0 {
             blockers
         } else {
@@ -738,7 +759,7 @@ impl Mover {
             input.pitch = pitch;
             input.pitch_held = false;
         }
-        let probe = self.probe.probe(
+        let mut probe = self.probe.probe(
             rays,
             self.body.world(),
             &settings,
@@ -752,6 +773,42 @@ impl Mover {
             dt,
             self.category,
         )?;
+        // Allow standing solidly on top of an enemy actor's head capsule.
+        let mut standing_on_actor = false;
+        if !blockers.is_empty() && self.pose.velocity[1] <= 0.5 {
+            let self_radius = if self.posture.crouched() {
+                settings.crouch_radius
+            } else {
+                settings.stand_radius
+            };
+            let feet_y = self.pose.position[1];
+            let mut best_crown: Option<f64> = None;
+            for blocker in blockers {
+                let b_top = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                let dx = self.pose.position[0] - f64::from(blocker.position[0]);
+                let dz = self.pose.position[2] - f64::from(blocker.position[2]);
+                let min_dist = self_radius + f64::from(blocker.radius);
+                if dx.hypot(dz) < min_dist
+                    && feet_y >= b_top - 0.55
+                    && feet_y <= b_top + settings.step_down + 0.15
+                    && best_crown.is_none_or(|prev| b_top > prev)
+                {
+                    best_crown = Some(b_top);
+                }
+            }
+            if let Some(crown_y) = best_crown {
+                if probe.ground.is_none_or(|hit| crown_y > hit.y) {
+                    probe.ground = Some(crate::collision_index::GroundHit {
+                        y: crown_y,
+                        normal: [0.0, 1.0, 0.0],
+                        plane_offset: 0.0,
+                        mask: self.category,
+                        surface: 0,
+                    });
+                    standing_on_actor = true;
+                }
+            }
+        }
         #[cfg(any(test, feature = "inspector"))]
         {
             let origin = self.pose.position;
@@ -797,9 +854,22 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let (vertical, actor_contact) =
-            self.move_body(rays, velocity, normal, dt, command.frame, blockers)?;
+        let (vertical, actor_contact) = self.move_body(
+            rays,
+            velocity,
+            normal,
+            dt,
+            command.frame,
+            blockers,
+            settings.gravity_scale,
+        )?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
+        let pending_ally = std::mem::take(&mut self.pending_ally_separation);
+        let ally_pushed = if pending_ally != [0.0; 2] {
+            self.apply_ally_separation(pending_ally, blockers, dt)
+        } else {
+            false
+        };
 
         if input.throttles != [0; 2] {
             self.last_input = Some(command.frame);
@@ -821,7 +891,7 @@ impl Mover {
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
         self.scripted_motion_frame = scripted_motion_changed.then_some(command.frame);
-        self.actor_contact = actor_contact;
+        self.actor_contact = actor_contact || standing_on_actor || ally_pushed;
         Ok(())
     }
 
@@ -897,6 +967,7 @@ impl Mover {
         [x as f32, (y + f64::from(lift)) as f32, z as f32]
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn move_body(
         &mut self,
         rays: &TriangleIndex,
@@ -905,6 +976,7 @@ impl Mover {
         dt: f64,
         _frame: u32,
         blockers: &[CapsulePose],
+        gravity_scale: f64,
     ) -> Result<(f64, bool), HullContactError> {
         let grounded = self.posture.ground() == Ground::Standing;
         let [x, y, z] = velocity;
@@ -934,14 +1006,26 @@ impl Mover {
         }
         self.posture.flags =
             (self.posture.flags & !TOUCHING) | (u32::from(movement.touching) * TOUCHING);
+        // Preserve wall-ride / wall-climb vertical glide when touching a wall with
+        // reduced gravity so Lúcio/Genji/Hanzo are not dragged down by wall friction.
+        if !grounded && movement.touching && gravity_scale <= 0.25 && y < 0.0 {
+            y = 0.0;
+        }
         let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
+        #[cfg(any(test, feature = "inspector"))]
+        let contact_planes: Vec<[f64; 3]> = movement
+            .planes
+            .iter()
+            .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
+            .map(|plane| plane.normal.map(f64::from))
+            .collect();
         let [px, py, pz] = movement.position;
         let feet = f64::from(py - lift);
         let floor = rays.lowest() - ABYSS;
         let mut resolved = [f64::from(px), feet.max(floor), f64::from(pz)];
-        // Hard-block against enemy capsules: if client prediction or an enemy
-        // stepping toward us created an overlap, depenetrate horizontally and
-        // cancel inward velocity so enemies never clip through each other.
+        // Hard-block against enemy capsules: use true standing bounds (`blocker.position[1]`
+        // is `feet + pogo` and `blocker.top` is `segment + radius`), allow standing cleanly
+        // on top of an enemy's head, and wall-safely depenetrate all side overlaps.
         if !blockers.is_empty() {
             let self_radius = if self.posture.crouched() {
                 self.base.crouch_radius
@@ -954,14 +1038,18 @@ impl Mover {
                 self.base.stand_height
             };
             let self_top = resolved[1] + self_height;
+            let mut depen_x = 0.0_f64;
+            let mut depen_z = 0.0_f64;
             for blocker in blockers {
-                let b_bottom = f64::from(blocker.position[1]);
-                let b_top = b_bottom + f64::from(blocker.top + 2.0 * blocker.radius);
-                if resolved[1] >= b_top || b_bottom >= self_top {
+                let b_top = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                let b_bottom = f64::from(blocker.position[1] - blocker.radius) - 0.55;
+                if resolved[1] >= b_top - 0.35 || b_bottom >= self_top {
                     continue;
                 }
-                let dx = resolved[0] - f64::from(blocker.position[0]);
-                let dz = resolved[2] - f64::from(blocker.position[2]);
+                let cur_x = resolved[0] + depen_x;
+                let cur_z = resolved[2] + depen_z;
+                let dx = cur_x - f64::from(blocker.position[0]);
+                let dz = cur_z - f64::from(blocker.position[2]);
                 let min_dist = self_radius + f64::from(blocker.radius);
                 let dist = dx.hypot(dz);
                 if dist < min_dist && min_dist > 0.0 {
@@ -970,9 +1058,9 @@ impl Mover {
                     } else {
                         (1.0, 0.0)
                     };
-                    let push = min_dist - dist + 0.005;
-                    resolved[0] += nx * push;
-                    resolved[2] += nz * push;
+                    let push = min_dist - dist + 0.01;
+                    depen_x += nx * push;
+                    depen_z += nz * push;
                     let inward = x * nx + z * nz;
                     if inward < 0.0 {
                         x -= inward * nx;
@@ -981,24 +1069,38 @@ impl Mover {
                     actor_contact = true;
                 }
             }
+            if depen_x != 0.0 || depen_z != 0.0 {
+                let start = [
+                    resolved[0] as f32,
+                    (resolved[1] + f64::from(lift)) as f32,
+                    resolved[2] as f32,
+                ];
+                let mut staged = self.body.fresh_at(start);
+                if let Ok(pushed) =
+                    staged.move_capsule_against([depen_x as f32, 0.0, depen_z as f32], dt, &[])
+                {
+                    resolved[0] += f64::from(pushed.position[0]) - f64::from(start[0]);
+                    resolved[2] += f64::from(pushed.position[2]) - f64::from(start[2]);
+                } else {
+                    resolved[0] += depen_x;
+                    resolved[2] += depen_z;
+                }
+            }
         }
         self.pose.position = resolved.map(snap);
         #[cfg(any(test, feature = "inspector"))]
         {
             let point = self.pose.position;
             self.last_contact_normals.clear();
-            self.last_contact_normals.extend(
-                movement
-                    .planes
-                    .iter()
-                    .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
-                    .map(|plane| crate::game_debug::DebugContactNormal {
+            self.last_contact_normals
+                .extend(contact_planes.into_iter().map(|normal| {
+                    crate::game_debug::DebugContactNormal {
                         tick: _frame,
                         entity: 0,
                         point,
-                        normal: plane.normal.map(f64::from),
-                    }),
-            );
+                        normal,
+                    }
+                }));
         }
         let [px, py, pz] = self.pose.position;
         self.body

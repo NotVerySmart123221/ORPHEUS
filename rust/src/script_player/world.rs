@@ -185,6 +185,7 @@ pub(super) struct BodyWorld {
     pub(super) deflect: BTreeMap<Site, crate::script_init::DeflectState>,
     pub(super) recall_history: VecDeque<(u32, [f64; 3], f64)>,
     pub(super) active_auras: BTreeMap<Site, (Vec<u32>, u64, Option<f64>)>,
+    pub(super) ball_roll_speed: Option<f64>,
 }
 
 impl World for BodyWorld {
@@ -309,8 +310,16 @@ impl World for BodyWorld {
         Ok(Some(u32::from(self.queue_room_cue(site, &listeners, cue))))
     }
 
-    fn voice_duration(&mut self, site: Site, handle: u32, _guid: u64, _mode: bool) -> Option<f64> {
-        (self.actor_voice_available(site) && handle != 0).then_some(1.0)
+    fn voice_duration(&mut self, site: Site, handle: u32, guid: u64, _mode: bool) -> Option<f64> {
+        if !self.actor_voice_available(site) || handle == 0 {
+            return None;
+        }
+        Some(
+            self.spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.voice_line_duration(guid))
+                .unwrap_or(1.0),
+        )
     }
 
     fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {
@@ -1829,12 +1838,15 @@ impl World for BodyWorld {
             .or_else(|| self.authored_pet_max_health(site.graph));
         let local_offset = spawn.attach.map(|_| {
             if let Some(world_pos) = spawn.position {
+                let dx = world_pos[0] - self.position[0];
                 let dy = (world_pos[1] - self.position[1]).clamp(0.0, 2.2);
-                let horiz = (world_pos[0] - self.position[0])
-                    .hypot(world_pos[2] - self.position[2])
-                    .clamp(0.0, 2.0);
+                let dz = world_pos[2] - self.position[2];
+                let rad = f64::from(self.movement.yaw) * std::f64::consts::TAU / 65_536.0;
+                let (sin, cos) = rad.sin_cos();
+                let local_x = (dx * cos - dz * sin).clamp(-2.0, 2.0);
+                let local_z = (dx * sin + dz * cos).clamp(-2.0, 2.0);
                 let y = if spawn.bone_attached { dy.max(1.1) } else { dy };
-                [0.0, y, horiz]
+                [local_x, y, local_z]
             } else if spawn.bone_attached {
                 [0.0, 1.15, 0.35]
             } else {
@@ -2037,8 +2049,18 @@ impl World for BodyWorld {
         Some(target_pos)
     }
 
-    fn set_ball_roll_state(&mut self, site: Site, _active: bool, _max_speed: f64) -> bool {
-        self.is_player_site(site)
+    fn set_ball_roll_state(&mut self, site: Site, active: bool, max_speed: f64) -> bool {
+        if !self.is_player_site(site) {
+            return false;
+        }
+        self.ball_roll_speed = active.then(|| {
+            if max_speed.is_finite() && max_speed > 0.0 {
+                max_speed
+            } else {
+                10.0
+            }
+        });
+        true
     }
 
     fn apply_physics_explosion(
@@ -2083,7 +2105,12 @@ impl World for BodyWorld {
                 let len = d[0].hypot(d[1]).hypot(d[2]).max(1e-5);
                 [d[0] / len, d[1] / len, d[2] / len]
             } else if dist > 1e-4 {
-                [dx / dist, (dy / dist).max(0.25), dz / dist]
+                let uy = if impulse > 0.0 {
+                    (dy / dist).max(0.25)
+                } else {
+                    dy / dist
+                };
+                [dx / dist, uy, dz / dist]
             } else {
                 [0.0, 1.0, 0.0]
             };

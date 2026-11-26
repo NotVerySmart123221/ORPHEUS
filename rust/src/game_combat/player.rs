@@ -416,17 +416,30 @@ impl RoomSimulation {
         }
         let observer_create = state.observer_create.take();
         let spawn_frame = state.frame;
+        let spawn_hero = state.hero;
+        let spawn_team = state.team;
+        let spawn_name = state.name.clone();
         let entity = self.world.spawn(state).id();
         let handle = PlayerBodyHandle { entity, id };
         self.players_by_wire.insert(id.entity, entity);
         self.players_by_owner.insert(owner, handle);
         self.player_targets_active = true;
+        self.scoreboard.register_player(
+            owner,
+            spawn_team,
+            spawn_hero,
+            spawn_name,
+            f64::from(spawn_frame) * crate::game_clock::TICK_PERIOD.as_secs_f64(),
+        );
         if let Some(update) = observer_create {
             self.player_events.push(PlayerBodyEvent::Created {
                 owner,
                 id,
                 update: Box::new(update),
             });
+        }
+        if !transfer_pets {
+            self.queue_hero_spawn_voice(owner, id, spawn_hero, 0, spawn_frame);
         }
         #[cfg(feature = "lua-mods")]
         self.mod_on_player_spawn(id, spawn_frame);
@@ -691,6 +704,7 @@ impl RoomSimulation {
         if !amount.is_finite() || amount <= 0.0 {
             return;
         }
+        let mut heal_cue = None;
         if let Some(id) = self.player_handle_for_wire(source) {
             if let Some(state) = self.player_body_mut(id) {
                 if let Some(runtime) = &mut state.runtime {
@@ -701,6 +715,40 @@ impl RoomSimulation {
                         );
                     }
                 }
+                if target != source {
+                    heal_cue = Some((state.owner, state.id, state.frame));
+                }
+            }
+        }
+        if let Some((owner, listener, shot_frame)) = heal_cue {
+            let now_secs = f64::from(shot_frame) * crate::game_clock::TICK_PERIOD.as_secs_f64();
+            self.scoreboard.record_heal(owner, amount, now_secs);
+            self.replay.record_event(crate::game_replay::ReplayEvent {
+                tick: shot_frame,
+                kind: crate::game_replay::ReplayEventKind::HealBurst {
+                    healer: source,
+                    amount,
+                },
+            });
+            if let Some(target_sample) = self.sample_health_body(target) {
+                self.player_cues.push(super::PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: target_sample.identity(),
+                    notice: CombatNotice::HealConfirm {
+                        target,
+                        amount,
+                        shot_frame,
+                    },
+                });
+            }
+            if amount >= 15.0 && self.by_wire.contains_key(&target) {
+                self.schedule_bot_voice_reply(
+                    target,
+                    crate::actor_voice::STIMULUS_THANKS,
+                    24,
+                    shot_frame,
+                );
             }
         }
     }
@@ -1098,9 +1146,20 @@ impl RoomSimulation {
                 continue;
             }
             if let Some(pose) = state.history.at(view, state.target_pose()) {
+                let m_pose = state.mover.pose();
+                let speed = m_pose.velocity[0].hypot(m_pose.velocity[2]);
+                let stance = crate::game_hitscan::SkeletalStance {
+                    yaw: m_pose.yaw,
+                    speed,
+                    crouched: state.mover.crouched(),
+                    // Wrecking Ball in Roll form (wide radius + high speed) protects head critbox.
+                    head_protected: pose.radius >= 0.68 && pose.height <= 2.05 && speed > 8.5,
+                };
                 candidates.push((
                     state.id.entity,
-                    queries.hurt_pose(state.body_template, pose),
+                    queries
+                        .hurt_pose(state.body_template, pose)
+                        .with_stance(stance),
                 ));
             }
         }
@@ -1252,6 +1311,8 @@ impl RoomSimulation {
                 killed.then_some(CombatNotice::Elimination {
                     killer: source,
                     victim: id.entity,
+                    loadout: impact.loadout.unwrap_or(0),
+                    critical: impact.critical,
                 }),
             ],
         }))

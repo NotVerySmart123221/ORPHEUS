@@ -41,7 +41,7 @@ pub struct StatSlot {
     pub no_medal: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PlayerStats {
     values: HashMap<u64, f64>,
 }

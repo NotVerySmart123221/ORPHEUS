@@ -163,6 +163,8 @@ fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
             Some(CombatNotice::Elimination {
                 killer: shooter.entity,
                 victim: target,
+                loadout: 0,
+                critical: false,
             }),
         ],
     };

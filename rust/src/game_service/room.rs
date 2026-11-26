@@ -801,7 +801,15 @@ impl Room {
             });
             if let Some(peer) = peer {
                 match cue.notice {
-                    CombatNotice::Hit { .. } | CombatNotice::Elimination { .. } => {
+                    CombatNotice::Hit { .. }
+                    | CombatNotice::HealConfirm { .. }
+                    | CombatNotice::Elimination { .. }
+                    | CombatNotice::ScorePopup { .. } => {
+                        peer.queue_shooter_notice(cue.listener, cue.notice);
+                    }
+                    CombatNotice::DamageReceived { victim, .. }
+                        if victim != cue.listener.entity =>
+                    {
                         peer.queue_shooter_notice(cue.listener, cue.notice);
                     }
                     _ => peer.queue_player_cue(cue.listener, cue.source, cue.notice),

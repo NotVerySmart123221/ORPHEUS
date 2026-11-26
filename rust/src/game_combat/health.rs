@@ -130,6 +130,32 @@ impl RoomSimulation {
         };
         let critical = impact.is_some_and(|impact| impact.critical);
         let loadout = impact.and_then(|impact| impact.loadout);
+        let effect = match effect {
+            HealthEffect::Damage(amount) if amount > 0.0 => {
+                let clamp_floor = if let Some(&entity) = self.by_wire.get(&wire) {
+                    self.world.get::<BotState>(entity).and_then(|s| {
+                        (!s.bot.dead
+                            && self.immortality_floor_active(s.bot.position, s.bot.spawn.team))
+                        .then(|| (s.vitals.total(), s.vitals.maximum() * 0.20))
+                    })
+                } else if let Some(id) = self.player_handle_for_wire(wire) {
+                    self.player_body(id).and_then(|p| {
+                        let vitals = p.vitals()?;
+                        (p.alive()
+                            && self.immortality_floor_active(p.mover.pose().position, p.team))
+                        .then(|| (vitals.total(), vitals.maximum() * 0.20))
+                    })
+                } else {
+                    None
+                };
+                if let Some((current, floor)) = clamp_floor {
+                    HealthEffect::Damage((current - floor).max(0.0).min(amount))
+                } else {
+                    HealthEffect::Damage(amount)
+                }
+            }
+            other => other,
+        };
         if let Some(state) = self.state_mut(wire)? {
             let victim_team = state.bot.spawn.team;
             let target_facts = impact.map(|_| state.health_target_facts());
@@ -256,6 +282,7 @@ impl RoomSimulation {
                     }
                     if outcome.killed {
                         self.actor_statuses.remove(&wire);
+                        self.scoreboard.record_death(owner, wire);
                         self.player_deaths.push(PlayerDeath {
                             owner,
                             body: id,
@@ -522,6 +549,7 @@ impl RoomSimulation {
             return;
         }
         let mut heals = Vec::new();
+        let mut dots = Vec::new();
         let mut unstunned_players = Vec::new();
         let mut dead_wires = Vec::new();
         for (&wire, status) in &self.actor_statuses {
@@ -576,6 +604,10 @@ impl RoomSimulation {
                 status.hot_ticks -= 1;
                 heals.push((status.hot_source, wire, status.hot_per_tick));
             }
+            if status.dot_ticks > 0 {
+                status.dot_ticks -= 1;
+                dots.push((status.dot_source, wire, status.dot_per_tick));
+            }
             status.anti_heal_until.is_some()
                 || status.heal_boost_until.is_some()
                 || status.sleep_until.is_some()
@@ -585,6 +617,7 @@ impl RoomSimulation {
                 || status.cc_immune_until.is_some()
                 || status.chill_stacks > 0
                 || status.hot_ticks > 0
+                || status.dot_ticks > 0
         });
         for wire in unstunned_players {
             if let Some(id) = self.player_handle_for_wire(wire) {
@@ -608,6 +641,14 @@ impl RoomSimulation {
                     self.deliver_applied_heal(source, target, outcome.delta);
                 }
             }
+        }
+        for (source, target, amount) in dots {
+            let death = Death {
+                time: now.as_secs_f64(),
+                frame: tick,
+                killer: source,
+            };
+            let _ = self.apply_health(target, HealthEffect::Damage(amount), death, now, None);
         }
     }
 }

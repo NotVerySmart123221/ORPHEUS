@@ -2,10 +2,17 @@
   "version": 1,
   "maps": {
     "0x0800000000000688": {
-      "lethal_volumes": [],
+      "lethal_volumes": [
+        {"min": [-200.0, -250.0, -200.0], "max": [250.0, -18.0, 200.0]}
+      ],
       "player_respawns": [
         {"mode": "0x0230000000000018", "delay_ms": 3000}
-      ]
+      ],
+      "health_packs": [
+        {"position": [52.0, -2.0, 6.0], "mega": false},
+        {"position": [76.5, -2.0, -15.5], "mega": true}
+      ],
+      "jump_pads": []
     }
   }
 }

@@ -188,6 +188,10 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
         None
     }
 
+    fn ball_roll_speed(&self) -> Option<f64> {
+        None
+    }
+
     fn take_body_swap(&mut self) -> Option<u64> {
         None
     }

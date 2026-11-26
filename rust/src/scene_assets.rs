@@ -219,7 +219,7 @@ pub struct SceneAssets {
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
     anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
     combat_voice: Arc<CombatVoiceCatalog>,
-    stats: StatsCatalog,
+    stats: Arc<StatsCatalog>,
     heroes: Arc<HeroCatalog>,
     pools: Arc<PoolCatalog>,
 }
@@ -273,7 +273,7 @@ impl SceneAssets {
             actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
             anim_timing: crate::anim_timing::AnimationTiming::load(&data)?.map(Arc::new),
             combat_voice: Arc::new(combat_voice),
-            stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
+            stats: Arc::new(StatsCatalog::load(data.join("game_stats_174.json"))?),
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
             pools,
         })
@@ -540,6 +540,7 @@ impl SceneAssets {
         simulation.load_bot_target_tags(&self.graphs);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
         simulation.set_body_contact_sets(self.graphs.body_contact_sets());
+        simulation.set_stats_catalog(Arc::clone(&self.stats), map.mode_guid);
         if std::env::var_os("ORPHEUS_PLAYTEST_RECEIVED_DAMAGE").is_none_or(|value| value != "0") {
             simulation.enable_received_damage_feedback();
         }
