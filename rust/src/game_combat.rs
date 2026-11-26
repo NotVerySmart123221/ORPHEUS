@@ -453,16 +453,7 @@ impl RoomSpatialFrame {
     ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
         #[cfg(not(any(test, feature = "inspector")))]
         let _ = (site, vm_frame);
-        let result = self
-            .ground
-            .checked_cast_ray(origin, direction, max_distance, MOVER_CATEGORY)
-            .map(|hit| {
-                hit.map(|hit| crate::script_expr::SpatialRayHit {
-                    distance: hit.distance,
-                    point: hit.point,
-                    normal: hit.normal,
-                })
-            });
+        let result = self.profiled_static_ray(origin, direction, max_distance, MOVER_CATEGORY);
         #[cfg(any(test, feature = "inspector"))]
         {
             let (hit, end) = match result {
@@ -479,6 +470,24 @@ impl RoomSpatialFrame {
             self.record_script_ray(site, vm_frame, "script_static", [origin, end], (hit, None));
         }
         result
+    }
+
+    pub(crate) fn profiled_static_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+        category: u16,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.ground
+            .checked_cast_ray(origin, direction, max_distance, category)
+            .map(|hit| {
+                hit.map(|hit| crate::script_expr::SpatialRayHit {
+                    distance: hit.distance,
+                    point: hit.point,
+                    normal: hit.normal,
+                })
+            })
     }
 
     pub(crate) fn actor_ray_cast(

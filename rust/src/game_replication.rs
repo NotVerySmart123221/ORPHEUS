@@ -115,6 +115,15 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn take_scripted_motion(&mut self) -> Option<(u32, crate::script_init::ScriptedMotion)> {
         None
     }
+    /// Begins a state in the owner stream through the production lifecycle
+    /// begin — the same entry a subgraph launch edge takes. Test lanes use
+    /// it for the authored re-arm that support graphs will call in the
+    /// room feed.
+    #[cfg(test)]
+    fn begin_state(&mut self, instance: u16, raw: u16) -> Result<(), InitFault>;
+    fn owner_move(&self) -> Option<(crate::script_init::MoveToKey, [f64; 3], f64)> {
+        None
+    }
     fn take_script_requests(&mut self) -> Vec<crate::game_combat::RoomScriptRequest> {
         Vec::new()
     }

@@ -473,7 +473,10 @@ pub enum SnapshotError {
     UnsupportedState {
         site: StateSite,
         class: String,
-        kind: StateKind,
+        /// Boxed: the payload variants of `StateKind` include the full
+        /// static-trace record; the error must stay below Clippy's
+        /// large-`Err` threshold that every projection result carries.
+        kind: Box<StateKind>,
     },
     UnsupportedTimer {
         site: StateSite,

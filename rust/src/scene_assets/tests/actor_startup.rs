@@ -311,7 +311,7 @@ fn actor_row(assets: &SceneAssets, scene: &PreparedScene, hero: &Hero) -> Json {
         }
     };
     // Exercise the same preparation gate without admitting the actor to the scene.
-    let setup = scene.owner_body_setup(OWNER_PROBE_CONTROLLER);
+    let setup = scene.owner_body_setup(OWNER_PROBE_CONTROLLER, 0);
     let bootstrap = match assets.prepare_owner_factory(scene, hero, setup.clone()) {
         Err(error) => json!({
             "status": "factory_error", "error_kind": "Unsupported",
@@ -355,7 +355,7 @@ fn measure_scene(runtime: &Path) -> Result<(Json, Vec<Json>), (&'static str, io:
         .map(|hero| actor_row(&assets, &scene, hero))
         .collect();
     let owner_startup_spatial = scene
-        .owner_body_setup(OWNER_PROBE_CONTROLLER)
+        .owner_body_setup(OWNER_PROBE_CONTROLLER, 0)
         .spatial_frame
         .map(|frame| {
             json!({

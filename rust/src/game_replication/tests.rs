@@ -29,6 +29,7 @@ mod owner_fault_shields;
 mod owner_model;
 mod owner_swept_motion;
 mod owner_synchronous_fault;
+mod owner_walk;
 mod player_respawn;
 pub(crate) mod practice_observation;
 mod wheel_input;
@@ -1226,6 +1227,16 @@ struct SyntheticOwner {
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
+    fn begin_state(
+        &mut self,
+        _instance: u16,
+        _raw: u16,
+    ) -> Result<(), crate::script_init::InitFault> {
+        // This probe runtime carries no state table; a lifecycle begin is
+        // a loud error rather than a silent no-op.
+        Err(crate::script_init::InitFault::InvalidRoot(_instance))
+    }
+
     fn authored_facing(&self) -> Option<[i32; 2]> {
         *self.authored_facing.lock().unwrap()
     }

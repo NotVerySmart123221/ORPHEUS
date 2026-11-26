@@ -3309,6 +3309,8 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
+        collision_category: 0x08,
+        mover_settings: Default::default(),
         scripted_motion: None,
     };
     let mut component = Component::start(
@@ -3891,6 +3893,8 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
+            collision_category: 0x08,
+            mover_settings: Default::default(),
             scripted_motion: None,
         };
         let component = Component::start(

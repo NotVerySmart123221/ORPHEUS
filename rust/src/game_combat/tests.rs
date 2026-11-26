@@ -336,6 +336,16 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
         vitals: Option<Vitals>,
     }
     impl OwnerBodyRuntime for FrameProbe {
+        fn begin_state(
+            &mut self,
+            _instance: u16,
+            _raw: u16,
+        ) -> Result<(), crate::script_init::InitFault> {
+            // This probe runtime carries no state table; a lifecycle begin is
+            // a loud error rather than a silent no-op.
+            Err(crate::script_init::InitFault::InvalidRoot(_instance))
+        }
+
         fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
             *self.view.lock().unwrap() = Some(frame);
         }

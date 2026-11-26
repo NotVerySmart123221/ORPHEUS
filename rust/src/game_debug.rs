@@ -639,6 +639,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::LivingBodyArray => ("LivingBodyArray", None),
         StateKind::Shockwave { .. } => ("Shockwave", None),
         StateKind::PlacementSelector { .. } => ("PlacementSelector", None),
+        StateKind::StaticTrace { .. } => ("StaticTrace", None),
         StateKind::MoveTo { .. } => ("MoveTo", None),
         StateKind::WeaponVolley { .. } => ("WeaponVolley", None),
     }

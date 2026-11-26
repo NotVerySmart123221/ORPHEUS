@@ -21,8 +21,8 @@ use crate::{
     script_expr::{EntityRelation, OnFire, RoomEntityFacts, native_shape, valid_entity},
     script_graph::GraphStore,
     script_init::{
-        HealthTargetFacts, MAX_INIT_WORK, MovementSample, RoomMessage, ScriptedMotion, Site,
-        TargetTagEffect, TargetTagEffects, World,
+        HealthTargetFacts, HookPullGeometry, MAX_INIT_WORK, MovementSample, RoomMessage,
+        ScriptedMotion, Site, TargetTagEffect, TargetTagEffects, World,
     },
     script_wire::{Value, Variables},
     static_ray::{Vec3, capsule_entry_distance, norm},
@@ -164,6 +164,8 @@ pub(super) struct BodyWorld {
     pub(super) deadeye_scene: DeadeyeScene,
     pub(super) velocity_changes: Vec<(u32, crate::mover::VelocityChange)>,
     pub(super) scripted_motion: Option<(u32, ScriptedMotion)>,
+    pub(super) collision_category: u16,
+    pub(super) mover_settings: crate::mover_settings::MoverSettings,
 }
 
 impl World for BodyWorld {
@@ -589,6 +591,48 @@ impl World for BodyWorld {
             .ray_cast(site, vm_frame, origin, direction, max_distance)
     }
 
+    fn profiled_static_ray(
+        &self,
+        site: Site,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        max_distance: f64,
+        category: u16,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        if !self.is_player_site(site) || self.vitals.death().is_some() {
+            return None;
+        }
+        self.spatial_frame.as_deref()?.profiled_static_ray(
+            origin,
+            direction,
+            max_distance,
+            category,
+        )
+    }
+
+    fn owner_collision_category(&self, site: Site) -> Option<u16> {
+        self.is_player_site(site).then_some(self.collision_category)
+    }
+
+    /// The standing-capsule dimensions, step band and walkable slope of the
+    /// owner's own mover (the reference promotion reads exactly
+    /// `mover.data.capsule(False)`, `step_down` and `slope_cos`), and only
+    /// while the body lives: a dead body pulls nothing.
+    fn hook_pull_geometry(&self, site: Site) -> Option<HookPullGeometry> {
+        (self.is_player_site(site) && self.vitals.death().is_none()).then(|| {
+            let radius = self.mover_settings.stand_radius.max(0.02);
+            HookPullGeometry {
+                radius,
+                segment: (self.mover_settings.stand_height
+                    - self.mover_settings.stand_pogo
+                    - 2.0 * radius)
+                    .max(0.1 * radius),
+                step_down: self.mover_settings.step_down,
+                slope_cos: self.mover_settings.max_slope.to_radians().cos(),
+            }
+        })
+    }
+
     fn spatial_actor_ray_cast(
         &self,
         site: Site,
@@ -666,6 +710,14 @@ impl World for BodyWorld {
                 .get(&entity)
                 .map(|subject| subject.forward)
         }
+    }
+
+    fn pitch(&self, entity: u32) -> Option<f64> {
+        // Only the body's own mover pose is live in this replica; the
+        // authored operand reads it through GetViewPitch (the hook line and
+        // wheel aim accessors), where the 104319 reference converts the raw
+        // pose pitch to degrees.
+        (entity == self.entity).then(|| f64::from(self.movement.pitch) * 360.0 / 65_536.0)
     }
 
     fn send_message(

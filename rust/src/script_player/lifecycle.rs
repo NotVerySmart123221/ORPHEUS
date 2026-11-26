@@ -28,7 +28,8 @@ use crate::{
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{
-        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, ScriptedMotion, Snapshot,
+        Component, HostEvent, HostHealthContext, InitFault, MoveToKey, RoomMessage, ScriptedMotion,
+        Snapshot,
     },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
@@ -237,6 +238,11 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     #[cfg(test)]
+    fn begin_state(&mut self, instance: u16, raw: u16) -> Result<(), InitFault> {
+        self.component.begin_state(instance, raw, &mut self.world)
+    }
+
+    #[cfg(test)]
     fn random_checkpoint(&self) -> Option<crate::script_init::RandomCheckpoint> {
         self.component
             .snapshot()
@@ -282,9 +288,12 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;
+            self.world.collision_category = mover.collision_category();
         }
         if step == BodyStep::Posed {
             self.world.throttles = [command.right, command.forward];
+            self.report_move(command.frame, mover)
+                .map_err(unsupported)?;
             self.component
                 .advance_command(command, &mut self.world)
                 .map_err(unsupported)?;
@@ -323,6 +332,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             .scripted_motion
             .take()
             .filter(|_| self.world.vitals.death().is_none())
+    }
+
+    fn owner_move(&self) -> Option<(MoveToKey, [f64; 3], f64)> {
+        self.live_move()
     }
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {

@@ -105,14 +105,35 @@ impl<'a> SnapshotEncoder<'a> {
                 if view == View::Owner && uncertain_polled_switch(node, state) {
                     continue;
                 }
-                let payload = codec
-                    .filter(|codec| codec.projected())
-                    .and_then(|codec| state_payload(state, codec, snapshot.now_ms))
-                    .ok_or_else(|| SnapshotError::UnsupportedState {
-                        site,
-                        class: node.class.clone(),
-                        kind: state.kind,
-                    })?;
+                let payload = match codec.filter(|codec| codec.projected()) {
+                    Some(codec) => match state_payload(state, codec, snapshot.now_ms) {
+                        Some(payload) => payload,
+                        // The reference coverage rule (`coverage.py` doc):
+                        // a networked state whose payload the encoder
+                        // cannot write is replicated only while it is off.
+                        // An unmodeled class under the compatibility policy
+                        // always carries the plain base payload, which a
+                        // mapped layout cannot represent, so its ACTIVE
+                        // entry is omitted and the client keeps its own
+                        // prediction. The strict policy keeps the report.
+                        None if !snapshot.strict => continue,
+                        None => {
+                            return Err(SnapshotError::UnsupportedState {
+                                site,
+                                class: node.class.clone(),
+                                kind: Box::new(state.kind),
+                            });
+                        }
+                    },
+                    None if snapshot.strict => {
+                        return Err(SnapshotError::UnsupportedState {
+                            site,
+                            class: node.class.clone(),
+                            kind: Box::new(state.kind),
+                        });
+                    }
+                    None => continue,
+                };
                 states.insert(
                     raw,
                     ProjectedState {
@@ -606,6 +627,10 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (StateKind::BooleanSwitch(current), Some("switch")) => {
             StatePayload::from([("current".into(), Value::Bool(current))])
         }
+        (StateKind::StaticTrace { .. }, Some("start")) => StatePayload::from([(
+            "start".into(),
+            Value::Integer(i64::try_from(state.start_ms).ok()?),
+        )]),
         (StateKind::DelayedSwitch { current, undecided }, Some("two_bits")) => {
             StatePayload::from([
                 ("current".into(), Value::Bool(current)),

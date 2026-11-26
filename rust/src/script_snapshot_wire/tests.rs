@@ -367,6 +367,23 @@ fn runtime_class_metadata_preserves_owner_and_observer_wire_format() {
             unmapped_encoder.project(&mapped_snapshot, view),
             Err(SnapshotError::UnsupportedState { class, .. }) if class == PLAIN
         ));
+        // A normal-policy (reference production) snapshot omits the
+        // writerless state and still projects the instance; it must never
+        // serialize an unverified payload for it. In this fixture the
+        // writerless state is the only projected entry, so the state table
+        // comes back empty while the instance itself survives.
+        let mut relaxed = mapped_snapshot.clone();
+        relaxed.strict = false;
+        let projected = unmapped_encoder.project(&relaxed, view).unwrap();
+        assert!(
+            projected.instances.contains_key(&1),
+            "the instance must still project"
+        );
+        assert!(
+            projected.instances[&1].states.is_empty(),
+            "the writerless state must be omitted, not projected with an unverified payload: {:?}",
+            projected.instances[&1].states.keys().collect::<Vec<_>>()
+        );
     }
 }
 

@@ -785,6 +785,16 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     }
 
     impl OwnerBodyRuntime for HealthListener {
+        fn begin_state(
+            &mut self,
+            _instance: u16,
+            _raw: u16,
+        ) -> Result<(), crate::script_init::InitFault> {
+            // This probe runtime carries no state table; a lifecycle begin is
+            // a loud error rather than a silent no-op.
+            Err(crate::script_init::InitFault::InvalidRoot(_instance))
+        }
+
         fn receive_host_event(
             &mut self,
             event: HostEvent,

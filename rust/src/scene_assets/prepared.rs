@@ -60,6 +60,11 @@ impl PreparedScene {
     }
 
     #[cfg(test)]
+    pub(crate) fn fixture_set_movement_probe(&mut self, ground: Arc<CollisionScene>) {
+        self.ground = ground;
+    }
+
+    #[cfg(test)]
     pub(crate) fn fixture_set_combat_voice(&mut self, catalog: CombatVoiceCatalog) {
         self.simulation.set_combat_voice(Arc::new(catalog));
     }
@@ -209,7 +214,11 @@ impl PreparedScene {
         let Some(factory) = &self.owner_body_factory else {
             return Ok(None);
         };
-        let runtime = factory(hero, spawn, self.owner_body_setup(spawn.controller))?;
+        let runtime = factory(
+            hero,
+            spawn,
+            self.owner_body_setup(spawn.controller, hero.body),
+        )?;
         if let Some(runtime) = &runtime {
             crate::game_replication::validate_body_baselines(runtime.as_ref(), spawn.entity)
                 .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, error))?;
@@ -217,11 +226,12 @@ impl PreparedScene {
         Ok(runtime)
     }
 
-    pub(super) fn owner_body_setup(&self, owner: u32) -> OwnerBodySetup {
+    pub(super) fn owner_body_setup(&self, owner: u32, body: u64) -> OwnerBodySetup {
         OwnerBodySetup {
             team_member_counts: self.simulation.team_member_counts(),
             spatial_frame: self.simulation.owner_startup_spatial_frame(owner),
             room_activity: Some(self.owner_room_activity()),
+            mover_settings: *self.movers.for_body(Some(body)),
         }
     }
 
