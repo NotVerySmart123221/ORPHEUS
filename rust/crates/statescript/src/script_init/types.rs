@@ -158,6 +158,32 @@ pub enum StateKind {
         confirmed: bool,
         sampled: bool,
     },
+    StaticTrace {
+        origin: [f64; 3],
+        direction: [f64; 3],
+        speed: f64,
+        /// Authored ray length; the arrival re-cast uses the same parameters,
+        /// and static geometry cannot change between begin and arrival.
+        length: f64,
+        /// Traveled distance along the launch line: the promoted anchor gap,
+        /// the begin-time hit distance, or the full length.
+        distance: f64,
+        /// Resolved static collision category of the authored profile group.
+        category: u16,
+        /// Rope anchor: the raw hit point, or the validated wall-to-walkable-
+        /// top transition when a near-lip candidate promoted. None on a miss.
+        anchor: Option<[f64; 3]>,
+        /// Unadjusted point on the centre ray, if it made contact.
+        raw_hit: Option<[f64; 3]>,
+        /// Arrival normal: the hit face, the face behind the promoted lip,
+        /// or the probed floor normal for a centre-miss aim assist.
+        face: Option<[f64; 3]>,
+        promoted: bool,
+        /// Promoted standing feet destination on the validated top (the
+        /// movement target the wall branch's MoveTo consumes); None keeps
+        /// the direct hit's raw point.
+        standing: Option<[f64; 3]>,
+    },
     MoveTo {
         movement: Option<([f64; 3], f64)>,
     },
@@ -219,6 +245,13 @@ impl State {
             StateKind::MoveTo { movement } if self.active => movement,
             _ => None,
         }
+    }
+
+    pub(super) fn accepts_move_result(&self, key: MoveToKey) -> bool {
+        !self.ending
+            && self.activation == key.activation
+            && self.start_ms == key.start_ms
+            && self.move_request().is_some()
     }
 
     pub(super) fn dormant(kind: StateKind) -> Self {
@@ -377,6 +410,27 @@ pub struct Diagnostic {
     pub server_only: bool,
 }
 
+/// The outcome of one owner travel request, reported to the state that
+/// authored it through the MoveTo lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MoveOutcome {
+    /// The body's feet reached the authored destination.
+    Arrived,
+    /// A posed capsule sweep stopped short of its requested displacement.
+    Blocked,
+}
+
+/// Activation-scoped identity of the state owning one in-flight move
+/// request. Hosts report results with this key alone; it embeds no graph,
+/// node or hero identity.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct MoveToKey {
+    pub instance: u16,
+    pub raw: u16,
+    pub activation: u16,
+    pub start_ms: u64,
+}
+
 /// A read-only checkpoint of a component's random stream.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RandomCheckpoint {
@@ -445,6 +499,13 @@ pub struct Snapshot {
     pub resolved_bindings: IndexMap<(u16, u32), Value>,
     pub frame_actions: VecDeque<FrameAction>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The component policy this snapshot was produced under. The projection
+    /// applies the reference observer rule only to a non-strict snapshot:
+    /// an active remote state whose class has no verified payload writer is
+    /// omitted from the state table (`observers.py` warn-and-continue),
+    /// never projected with an unverified payload. A strict snapshot keeps
+    /// the loud error because strict components must not replicate.
+    pub strict: bool,
     #[cfg(feature = "node-observations")]
     pub(super) node_observations: NodeObservations,
 }

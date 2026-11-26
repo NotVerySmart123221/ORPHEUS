@@ -208,16 +208,17 @@ mod world;
 pub use knockback::Knockback;
 pub use types::{
     AbilityCooldown, ChasePayload, Diagnostic, FrameAction, FrameCallout, InitFault, Instance,
-    Issue, NodeObservations, PendingTimer, RandomCheckpoint, ReportedShot, ShotEvent, Snapshot,
-    SpawnSearch, SpawnSearchKey, StackBinding, State, StateKind,
+    Issue, MoveOutcome, MoveToKey, NodeObservations, PendingTimer, RandomCheckpoint, ReportedShot,
+    ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding, State, StateKind,
 };
 pub use world::{
     AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
-    ContactVolume, CreationKind, EmptyWorld, EntityCreation, HealthTargetFacts, HitTags, HostEvent,
-    HostHealthContext, LandingSelection, MovementSample, NamedPoolLoss, PlayScript, Relocation,
-    RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage, ScriptedMotion, Site,
-    SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot, ViewSightProfile,
-    ViewTargetQuery, World, named_pool_records,
+    ContactVolume, CreationKind, EmptyWorld, EntityCreation, HealthTargetFacts, HitTags,
+    HookPullGeometry, HostEvent, HostHealthContext, LandingSelection, MovementSample,
+    NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker,
+    RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
+    TargetTagEffects, TargetTagSnapshot, ViewSightProfile, ViewTargetQuery, World,
+    named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -295,7 +296,32 @@ impl Component {
             roots,
             frame,
             world,
-            (max_work, false),
+            (max_work, false, true),
+        )
+    }
+
+    /// Starts the machine under the reference component policy. `strict`
+    /// mirrors `Component.strict`: strict keeps every unresolved native and
+    /// unmodeled state class a loud report; the normal policy applies the
+    /// reference fallbacks (typed null from `default_native`, plain base
+    /// lifecycle for unmodeled classes).
+    pub fn start_with_policy(
+        graphs: Arc<GraphStore>,
+        entity: u32,
+        entity_variables: Variables,
+        roots: Vec<Root>,
+        frame: u32,
+        world: &mut impl World,
+        (max_work, strict): (usize, bool),
+    ) -> Result<Self, InitFault> {
+        Self::start_with_options(
+            graphs,
+            entity,
+            entity_variables,
+            roots,
+            frame,
+            world,
+            (max_work, false, strict),
         )
     }
 
@@ -315,7 +341,7 @@ impl Component {
             roots,
             frame,
             world,
-            (max_work, true),
+            (max_work, true, true),
         )
     }
 
@@ -326,10 +352,12 @@ impl Component {
         roots: Vec<Root>,
         frame: u32,
         world: &mut impl World,
-        (max_work, public_schemas): (usize, bool),
+        (max_work, public_schemas, strict): (usize, bool, bool),
     ) -> Result<Self, InitFault> {
         let mut machine = Machine::new(entity, entity_variables, frame, max_work)?;
         machine.public_schemas = public_schemas;
+        machine.strict = strict;
+        machine.snapshot.strict = strict;
         Vm::new(&graphs, world, &mut machine).start(roots)?;
         machine.capture_outputs();
         Ok(Self {
@@ -410,6 +438,43 @@ impl Component {
         self.machine
             .queues
             .push(key.instance, due_ms, Event::SpawnResult { key, positions })?;
+        Ok(())
+    }
+
+    /// Report the outcome of an in-flight owner move request to its state.
+    /// The state clears the request at delivery, so only the first report
+    /// for an activation reaches the graph. Results for exited or replaced
+    /// activations are discarded without an error.
+    pub fn queue_move_result(
+        &mut self,
+        frame: u32,
+        key: MoveToKey,
+        outcome: MoveOutcome,
+    ) -> Result<(), InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        let active = self
+            .machine
+            .snapshot
+            .instances
+            .get(&key.instance)
+            .and_then(|instance| instance.states.get(&key.raw))
+            .is_some_and(|state| state.accepts_move_result(key));
+        if !active || self.machine.owner_dead {
+            return Ok(());
+        }
+        // Settle current-frame input and scope cancellation before delivery.
+        let due_ms = frame_start(frame) + FRAME_MS - 1;
+        if due_ms < self.machine.now_ms {
+            return Err(InitFault::FrameOrder {
+                frame,
+                now_ms: self.machine.now_ms,
+            });
+        }
+        self.machine
+            .queues
+            .push(key.instance, due_ms, Event::MoveResult { key, outcome })?;
         Ok(())
     }
 

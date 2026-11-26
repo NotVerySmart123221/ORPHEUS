@@ -1647,6 +1647,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .graph(id)
             .state(usize::from(key.raw))
             .expect("chase state");
+        // An explicit object/bone destination cannot be coerced to zero.
+        // Abort through the authored plugs rather than strand the chase.
+        if field(&node.fields, "m_destination").is_null()
+            && (configured(node, "m_destinationBone") || configured(node, "m_destinationObject"))
+        {
+            return self.post(id, Event::Abort(key.raw));
+        }
         let Some(destination) =
             self.evaluate(id, node, field(&node.fields, "m_destination"), Some(key))
         else {
@@ -2569,12 +2576,35 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         }
         let speed_config = field(&node.fields, "m_speed");
-        if field(&node.fields, "m_B060F688").as_u64() != Some(0)
-            || speed_config.is_null()
-            || !field(&node.fields, "m_destinationBone").is_null()
-            || !field(&node.fields, "m_5BEFF040").is_null()
-        {
+        if field(&node.fields, "m_B060F688").as_u64() != Some(0) || speed_config.is_null() {
             return Ok(());
+        }
+        self.register_tick(key, self.machine.now_ms);
+        self.refresh_world_move_to(key, node)
+    }
+
+    pub(in crate::script_init) fn refresh_world_move_to(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        // An unavailable operand must not keep driving the previous request.
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::MoveTo { movement: None };
+        }
+        let speed_config = field(&node.fields, "m_speed");
+        // The optional destination slots may carry expressions whose authored
+        // none branch selects them; reject a resolved bone, not its presence.
+        for optional in ["m_destinationBone", "m_5BEFF040"] {
+            let config = field(&node.fields, optional);
+            if !config.is_null()
+                && !matches!(
+                    self.evaluate(key.instance, node, config, None),
+                    None | Some(Value::Null) | Some(Value::Integer(0)) | Some(Value::Float(0.0))
+                )
+            {
+                return Ok(());
+            }
         }
         let entity_config = field(&node.fields, "m_destinationEntity");
         if !entity_config.is_null()

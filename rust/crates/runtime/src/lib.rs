@@ -14,6 +14,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod format;
 mod graph_bundle;
 mod npc_movers;
+mod state_groups;
 mod target_tags;
 
 pub const LOBBY_RUNTIME_DATA: &[&str] = &[
@@ -393,11 +394,25 @@ pub fn prepare_with_target_tags(
     )
 }
 
+/// Restore state-group (subgraph box) begin edges into a graph bundle array
+/// from a DataTool `.01B` graph XML export directory. Composed into pack
+/// preparation through [`GraphMetadata::state_groups_xml`].
+pub fn state_groups_apply(
+    input: &Path,
+    xml_dir: &Path,
+    graphs: &mut serde_json::Value,
+) -> Result<(), RuntimeError> {
+    state_groups::apply(input, xml_dir, graphs)
+}
+
 /// Optional local inputs to compose with the selected graph bundle.
 #[derive(Default)]
 pub struct GraphMetadata<'a> {
     pub target_tags_xml: Option<&'a Path>,
     pub mode_rulesets: Option<&'a Path>,
+    /// A DataTool `.01B` graph XML directory whose item tables restore the
+    /// state-group (subgraph box) begin edges the reference packer dropped.
+    pub state_groups_xml: Option<&'a Path>,
 }
 
 /// Prepare a pack and hash the final graph bundle after composing local metadata.
@@ -431,6 +446,7 @@ pub fn prepare_with_graph_metadata(
         &inputs[GRAPH_BUNDLE],
         metadata.target_tags_xml,
         metadata.mode_rulesets,
+        metadata.state_groups_xml,
     )?;
     let npc_movers = metadata
         .target_tags_xml
@@ -571,6 +587,7 @@ mod tests {
             GraphMetadata {
                 target_tags_xml: Some(&xml),
                 mode_rulesets: Some(&rules),
+                state_groups_xml: None,
             },
         )
         .unwrap();

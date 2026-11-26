@@ -835,7 +835,9 @@ impl Evaluator {
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
             }
-            "STU_021D01CD" | "STU_C8C4C20D" if native_shape(config, class, Some("m_entity")) => {
+            "STU_021D01CD" | "STU_C8C4C20D" | "STU_40AC5AE4"
+                if native_shape(config, class, Some("m_entity")) =>
+            {
                 if let Some(value) = context.native(config) {
                     return Ok(value);
                 }
@@ -844,6 +846,16 @@ impl Evaluator {
                     // The native transform lookup has no entity for a position literal.
                     return Ok(Value::Null);
                 };
+                if class == "STU_40AC5AE4" {
+                    // GetViewPitch, as reconstructed by the 104319 scene
+                    // reference (driver 40AC5AE4): the entity's pitch in
+                    // degrees, straight from its mover pose.
+                    let pitch = context
+                        .pitch(*entity)
+                        .filter(|degrees| degrees.is_finite())
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
+                    return Ok(Value::Float(rounded(pitch)));
+                }
                 let forward = context
                     .forward(*entity)
                     .filter(|point| point.iter().all(|axis| axis.is_finite()))
@@ -1088,11 +1100,17 @@ impl Evaluator {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
                 let (tag, entity) = native_target_tag_operand(config).ok_or_else(unsupported)?;
                 match self.config(entity, context, nested)? {
-                    Value::Entity(entity) if valid_entity(entity) => Value::Bool(
-                        context
-                            .has_target_tag(entity, tag)
-                            .ok_or_else(unsupported)?,
-                    ),
+                    Value::Entity(entity) if valid_entity(entity) => {
+                        match context.has_target_tag(entity, tag) {
+                            Some(present) => Value::Bool(present),
+                            // scene.py `_has_target_tag` answers NotImplemented for an
+                            // entity whose tag component never arrived; the reference
+                            // then falls through to `default_native`, which warns and
+                            // writes null under the normal policy.
+                            None if !context.strict() => Value::Null,
+                            None => return Err(unsupported()),
+                        }
+                    }
                     Value::Entity(_) | Value::Null => Value::Bool(false),
                     _ => return Err(unsupported()),
                 }
@@ -1101,6 +1119,10 @@ impl Evaluator {
                 return match self.entity_filter(config, context, nested) {
                     Err(error @ EvalError::UnsupportedConfig(_)) => match context.native(config) {
                         Some(value @ Value::Bool(_)) => Ok(value),
+                        // Every fall-through the reference `_filter_entity` reports as
+                        // NotImplemented lands on the same `default_native` null
+                        // (scene.py:2700..2706) under the normal policy.
+                        _ if !context.strict() => Ok(Value::Null),
                         _ => Err(error),
                     },
                     result => result,
@@ -1543,6 +1565,11 @@ impl Evaluator {
                     "STU_98E9109B" => Value::Bool(false), // CustomGameLogicEnabled
                     "STU_5E75FF05" => Value::Integer(0),  // ReticleType
                     "STU_C76C63AF" => Value::Float(0.0),  // ReticleNumericSetting
+                    // Every other unhandled native is a world the context cannot
+                    // answer. The reference `default_native` (expr.py:349) warns
+                    // and writes a typed null under the normal policy; only a
+                    // strict component turns it into a report.
+                    _ if !context.strict() => Value::Null,
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
             }

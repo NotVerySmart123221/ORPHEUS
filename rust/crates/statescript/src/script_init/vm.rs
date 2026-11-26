@@ -13,7 +13,8 @@ use serde_json::Value as Json;
 use crate::{
     script_expr::{self, EvalError, Scope, StackPriority, truthy},
     script_graph::{
-        Graph, GraphStore, Node, asset_guid, directed_numeric_payload, message_parameter_id,
+        Graph, GraphStore, Node, asset_guid, decode_link, directed_numeric_payload,
+        message_parameter_id,
     },
     script_runtime::{ButtonEdge, FRAME_MS, button_edges, frame_start},
     script_wire::{Value, Variables},
@@ -41,6 +42,7 @@ use super::{
 mod contact_combat;
 mod effects;
 mod nodes;
+mod static_trace;
 mod target_tracking;
 mod transitions;
 
@@ -1254,6 +1256,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
 
                         Event::SpawnResult { key, positions } => {
                             self.finish_spawn_search(key, positions)?
+                        }
+                        Event::MoveResult { key, outcome } => {
+                            self.deliver_move_result(key, outcome)?
                         }
                         Event::Message {
                             position,
@@ -2733,94 +2738,120 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         }
         self.spend("plug traversal")?;
         let mut taken = false;
-        let graph = self.graph(id);
-        for (position, input) in node.links(path) {
-            self.spend("plug target")?;
-            let Some(position) = position else {
-                // The reference treats an unresolved plug as taken.
-                taken = true;
-                continue;
-            };
-            let Some(target) = graph.node(position) else {
-                self.report(self.site(id, node), Issue::MissingNode(position));
-                taken = true;
-                continue;
-            };
-            if target.host_event_kind().is_some() || !self.observed_server_path(id, target) {
-                continue;
-            }
-            if target.is_state() {
-                if let Some(raw) = target.state {
-                    let key = StateKey { instance: id, raw };
-                    if target.class == "STU_01178155" && input == "m_inPlug" {
-                        let state = self.machine.snapshot.instances[&id]
-                            .states
-                            .entry(raw)
-                            .or_insert_with(|| State::dormant(StateKind::ActiveQuery));
-                        let output = if state.active {
-                            "m_7273C81B"
-                        } else {
-                            "m_C6F3744E"
-                        };
-                        self.follow(id, target, output, Some(key), depth + 1)?;
-                        taken = true;
-                        continue;
-                    }
-                    if target.class == "STU_7B9E8909" && input == "m_inPlug" {
-                        // The bridge consumes its input even when inactive. Only an
-                        // explicit begin request can open it.
-                        let state = self.machine.snapshot.instances[&id]
-                            .states
-                            .entry(raw)
-                            .or_insert_with(|| State::dormant(StateKind::Plain));
-                        if state.active {
-                            self.follow(id, target, "m_outPlug", Some(key), depth + 1)?;
-                        }
-                        taken = true;
-                        continue;
-                    }
-                    if graph.index == 0x0cba
-                        && target.class == "STU_5E805B5A"
-                        && input == "m_F4DD996D"
-                    {
-                        let key = StateKey { instance: id, raw };
-                        if self.state(key).is_some_and(|state| state.active) {
-                            self.select_recent_input(key, target, depth + 1)?;
-                        }
-                        taken = true;
-                        continue;
-                    }
-                    if target.class == "STUStatescriptStateAbility" && input == "m_3B7BED2E" {
-                        self.stop_ability(key, target, depth + 1)?;
-                        taken = true;
-                        continue;
-                    }
-                    let event = if input == ABORT_PLUG {
-                        Event::Abort(raw)
-                    } else if let Some(input) = &self.observed_input {
-                        Event::BeginObserved {
-                            state: raw,
-                            input: input.clone(),
-                        }
-                    } else {
-                        Event::Begin(raw)
-                    };
-                    self.post(id, event)?;
-                    taken = true;
-                }
-            } else {
-                let caller = if target.is_action() { None } else { caller };
-                let linked = if target.class == "STU_1113EBD5"
-                    && matches!((graph.index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
-                {
-                    self.join_inputs(id, target, (node.pos, path), caller, depth + 1)?
-                } else {
-                    self.run_node(id, target, caller, depth + 1)?
-                };
-                taken |= linked;
-            }
+        for link in node.links(path) {
+            taken |= self.route_link(id, node, (node.pos, path), link, caller, depth)?;
         }
         Ok(taken)
+    }
+
+    /// Takes one decoded plug link. A target position naming a subgraph box
+    /// with recorded begin edges routes through the box (a taken edge into a
+    /// box forwards to the edge leaving it); a tag-only box keeps the loud
+    /// missing-node report, because the packer carried no routing for it and
+    /// the launch edge's meaning is not something to guess back.
+    pub(in crate::script_init) fn route_link(
+        &mut self,
+        id: u16,
+        node: &Node,
+        via: (u16, &str),
+        link: (Option<u16>, &str),
+        caller: Option<StateKey>,
+        depth: usize,
+    ) -> Result<bool, InitFault> {
+        if depth >= MAX_PLUG_DEPTH {
+            return Err(InitFault::PlugDepth);
+        }
+        self.spend("plug target")?;
+        let (position, input) = link;
+        let Some(position) = position else {
+            // The reference treats an unresolved plug as taken.
+            return Ok(true);
+        };
+        let graph = self.graph(id);
+        let Some(target) = graph.node(position) else {
+            let links = graph
+                .container(position)
+                .filter(|container| !container.links.is_empty())
+                .map(|container| container.links.clone());
+            let Some(links) = links else {
+                self.report(self.site(id, node), Issue::MissingNode(position));
+                return Ok(true);
+            };
+            let mut taken = false;
+            for forwarded in &links {
+                let Some(link) = decode_link(forwarded) else {
+                    taken = true;
+                    continue;
+                };
+                taken |= self.route_link(id, node, via, link, caller, depth + 1)?;
+            }
+            return Ok(taken);
+        };
+        if target.host_event_kind().is_some() || !self.observed_server_path(id, target) {
+            return Ok(false);
+        }
+        if target.is_state() {
+            let Some(raw) = target.state else {
+                return Ok(false);
+            };
+            let key = StateKey { instance: id, raw };
+            if target.class == "STU_01178155" && input == "m_inPlug" {
+                let state = self.machine.snapshot.instances[&id]
+                    .states
+                    .entry(raw)
+                    .or_insert_with(|| State::dormant(StateKind::ActiveQuery));
+                let output = if state.active {
+                    "m_7273C81B"
+                } else {
+                    "m_C6F3744E"
+                };
+                self.follow(id, target, output, Some(key), depth + 1)?;
+                return Ok(true);
+            }
+            if target.class == "STU_7B9E8909" && input == "m_inPlug" {
+                // The bridge consumes its input even when inactive. Only an
+                // explicit begin request can open it.
+                let state = self.machine.snapshot.instances[&id]
+                    .states
+                    .entry(raw)
+                    .or_insert_with(|| State::dormant(StateKind::Plain));
+                if state.active {
+                    self.follow(id, target, "m_outPlug", Some(key), depth + 1)?;
+                }
+                return Ok(true);
+            }
+            if graph.index == 0x0cba && target.class == "STU_5E805B5A" && input == "m_F4DD996D" {
+                if self.state(key).is_some_and(|state| state.active) {
+                    self.select_recent_input(key, target, depth + 1)?;
+                }
+                return Ok(true);
+            }
+            if target.class == "STUStatescriptStateAbility" && input == "m_3B7BED2E" {
+                self.stop_ability(key, target, depth + 1)?;
+                return Ok(true);
+            }
+            let event = if input == ABORT_PLUG {
+                Event::Abort(raw)
+            } else if let Some(input) = &self.observed_input {
+                Event::BeginObserved {
+                    state: raw,
+                    input: input.clone(),
+                }
+            } else {
+                Event::Begin(raw)
+            };
+            self.post(id, event)?;
+            return Ok(true);
+        }
+        let caller = if target.is_action() { None } else { caller };
+        let linked = if target.class == "STU_1113EBD5"
+            && matches!((graph.index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
+        {
+            self.join_inputs(id, target, via, caller, depth + 1)?
+        } else {
+            self.run_node(id, target, caller, depth + 1)?
+        };
+        Ok(linked)
     }
 
     pub(in crate::script_init) fn join_inputs(

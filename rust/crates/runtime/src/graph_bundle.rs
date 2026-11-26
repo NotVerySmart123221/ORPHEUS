@@ -14,7 +14,7 @@ use serde_json::{Map, Value, value::RawValue};
 use crate::{
     RuntimeError, at,
     format::{MAX_GRAPH_BYTES, ModeRulesets},
-    target_tags,
+    state_groups, target_tags,
 };
 
 #[derive(Deserialize)]
@@ -28,8 +28,9 @@ pub(super) fn rewrite(
     input: &Path,
     target_tags_xml: Option<&Path>,
     mode_rulesets: Option<&Path>,
+    state_groups_xml: Option<&Path>,
 ) -> Result<Option<Vec<u8>>, RuntimeError> {
-    if target_tags_xml.is_none() && mode_rulesets.is_none() {
+    if target_tags_xml.is_none() && mode_rulesets.is_none() && state_groups_xml.is_none() {
         return Ok(None);
     }
     let decoder = MultiGzDecoder::new(BufReader::new(at(input, File::open(input))?));
@@ -47,6 +48,11 @@ pub(super) fn rewrite(
         drop(bundle_bytes);
         if let Some(xml) = target_tags_xml {
             target_tags::apply(input, xml, &mut bundle)?;
+        }
+        if let Some(xml) = state_groups_xml {
+            if let Some(graphs) = bundle.get_mut("graphs") {
+                state_groups::apply(input, xml, graphs)?;
+            }
         }
         return encode(input, &bundle).map(Some);
     }
@@ -71,6 +77,17 @@ pub(super) fn rewrite(
     // Keep the rule tokens intact when importing XML into an already-authored pack.
     if let Some(xml) = target_tags_xml {
         apply_tags(input, xml, &mut bundle)?;
+    }
+    if let Some(xml) = state_groups_xml {
+        if let Some(raw) = bundle.get("graphs") {
+            let mut graphs: Value = at(input, decode(raw.get().as_bytes()))?;
+            state_groups::apply(input, xml, &mut graphs)?;
+            let raw = at(
+                input,
+                serde_json::value::to_raw_value(&graphs).map_err(invalid),
+            )?;
+            bundle.insert("graphs".into(), raw);
+        }
     }
     encode(input, &bundle).map(Some)
 }

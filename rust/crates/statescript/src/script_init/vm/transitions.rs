@@ -136,6 +136,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                     Some(StateKind::Switch { .. }) => self.post(id, Event::Reevaluate(raw))?,
                     Some(StateKind::Shockwave { .. }) => self.tick_shockwave(key)?,
+                    Some(StateKind::StaticTrace { .. }) => self.tick_static_trace(key)?,
+                    Some(StateKind::MoveTo { .. }) => {
+                        let node = self.graph(id).state(usize::from(raw)).expect("move to");
+                        self.refresh_world_move_to(key, node)?;
+                    }
                     Some(StateKind::ModifyHealth) => {
                         let node = self
                             .graph(id)
@@ -444,6 +449,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         };
         let kind = state.kind;
+        if matches!(kind, StateKind::StaticTrace { .. }) && parameter == 1 {
+            return self.tick_static_trace(key);
+        }
         if let StateKind::Interval {
             period_frames,
             next_frame: Some(next),
@@ -460,7 +468,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .expect("active timer state");
         if parameter == 1
             && (kind == StateKind::Wait
-                || (kind == StateKind::Plain && parent_owned_graph_duration(node).is_some()))
+                || (kind == StateKind::Plain
+                    && (parent_owned_graph_duration(node).is_some()
+                        || crate::script_init::shapes::timed_position_duration(node).is_some())))
         {
             self.post(key.instance, Event::Finish(key.raw))?;
         }

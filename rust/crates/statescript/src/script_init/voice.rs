@@ -429,6 +429,10 @@ impl<W: World> InstanceContext<'_, W> {
 }
 
 impl<W: World> Context for InstanceContext<'_, W> {
+    fn strict(&self) -> bool {
+        self.machine.strict
+    }
+
     fn asset_has_category(&mut self, asset: u64, kind: u64, id: u64) -> Option<bool> {
         self.graphs.asset_has_category(asset, kind, id)
     }
@@ -513,6 +517,10 @@ impl<W: World> Context for InstanceContext<'_, W> {
 
     fn forward(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.world.forward(entity)
+    }
+
+    fn pitch(&mut self, entity: u32) -> Option<f64> {
+        self.world.pitch(entity)
     }
 
     fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {

@@ -20,12 +20,15 @@ use super::super::{
         is_message_recipient_set, is_named_shield_decay, is_networked_for_code_synced,
         is_owner_movement_sampler, is_parent_owned_timed_graph, is_projected_self_message,
         is_self_shield_recharge, is_self_stat_timer, is_self_target, is_stat_action,
-        is_static_map_explosion, is_vertical_velocity_impulse, is_wave_health_pool,
-        living_body_array_shape, named_temporary_shield, parent_owned_graph_duration,
-        participant_filter, persistent_message, placement_collection_tag, pool_number, raw_indices,
-        registered_state, source_key, static_target_operand, stored,
+        is_static_map_explosion, is_unlinked_plug, is_vertical_velocity_impulse,
+        is_wave_health_pool, living_body_array_shape, named_temporary_shield,
+        parent_owned_graph_duration, participant_filter, persistent_message,
+        placement_collection_tag, pool_number, raw_indices, registered_state, source_key,
+        static_target_operand, stored,
     },
-    types::{InitFault, Issue, SpawnSearch, SpawnSearchKey, State, StateKind},
+    types::{
+        InitFault, Issue, MoveOutcome, MoveToKey, SpawnSearch, SpawnSearchKey, State, StateKind,
+    },
     world::{
         CreationKind, EntityCreation, Relocation, ScriptedMotion, Site, SweptDisplacement, World,
     },
@@ -601,13 +604,27 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 self.follow(id, node, "m_outPlug", None, depth)?;
                 Ok(true)
             }
+            // The reference dispatches this action through its base
+            // continuation without reading the config. The authored shape
+            // keeps the header with two null operands and unlinked plugs —
+            // the same no-payload form the earlier positions carry — so the
+            // continuation never needs a position allowlist.
             "STU_9F3FE778"
-                if registration.permits(matches!(
-                    (self.graph(id).index, node.pos),
-                    (0x0ce2, 7) | (0x0019, 38) | (0x0079, 8 | 14)
-                )) =>
+                if registration.shape(
+                    node.state.is_none()
+                        && node.remote < 0
+                        && !node.server_only
+                        && field(&node.fields, "m_5328E4F8").is_null()
+                        && field(&node.fields, "m_value").is_null()
+                        && field(&node.fields, "m_BF5B22B7").is_null()
+                        && field(&node.fields, "m_8BF03679").is_null()
+                        && field(&node.fields, "m_A2287776").as_u64() == Some(0)
+                        && field(&node.fields, "m_AED90719").as_u64() == Some(0)
+                        && is_unlinked_plug(&node.fields, "m_inPlug", "STUStatescriptInputPlug")
+                        && is_unlinked_plug(&node.fields, "m_outPlug", "STUStatescriptOutputPlug"),
+                ) =>
             {
-                self.follow(id, node, "m_outPlug", None, depth)?;
+                self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
             "STU_C43F9944"
@@ -778,10 +795,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 Ok(true)
             }
             "STU_6FEE499E"
-                if registration.permits((self.graph(id).index, node.pos) == (0x01f0, 31))
-                    && field(&node.fields, "m_93CDFD2F").as_u64() == Some(1) =>
+                if registration.shape(
+                    field(&node.fields, "m_93CDFD2F").as_u64() == Some(1)
+                        && node.field("m_4BE66EFF").is_none(),
+                ) =>
             {
-                // Pinned Python Roll fallback; the native service remains unverified.
+                // The captured reference has no model for this action class.
+                // The roll fallback the pinned lane relies on is the action's
+                // shape, not a placement: the impulse-mode field set with no
+                // bound secondary payload continues through m_outPlug; the
+                // native impulse itself remains unverified (open lane).
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -798,6 +821,16 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     );
                     return Ok(false);
                 }
+                self.follow(id, node, "m_outPlug", caller, depth)?;
+                Ok(true)
+            }
+            "STUStatescriptActionEffect" => {
+                // The captured 104319 reference runs this presentation-only
+                // action as a continuation no-op; the server executes no
+                // effect here. The handful of presentation graphs that also
+                // replicate frame-action variables are unrelated locations,
+                // and their projection rows already flow through the frame
+                // action variable table.
                 self.follow(id, node, "m_outPlug", caller, depth)?;
                 Ok(true)
             }
@@ -1240,6 +1273,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         } else {
             parent_owned_graph_duration(node)
         };
+        let position_duration = crate::script_init::shapes::timed_position_duration(node);
         let mut wave_bonus = false;
         let kind = match node.class.as_str() {
             // These client presentation states use the base state lifecycle on the server.
@@ -1470,6 +1504,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             {
                 StateKind::Plain
             }
+            "STU_1F5ED928" if registration.shape(position_duration.is_some()) => StateKind::Plain,
             "STUStatescriptStateBooleanSwitch" => StateKind::BooleanSwitch(false),
             "STU_B591EBFE" => StateKind::DelayedSwitch {
                 current: false,
@@ -1492,6 +1527,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             "STU_4C96470A" => StateKind::PlacementSelector {
                 confirmed: false,
                 sampled: false,
+            },
+            "STU_4BBC5D09" => StateKind::StaticTrace {
+                origin: [0.0; 3],
+                direction: [0.0; 3],
+                speed: 0.0,
+                length: 0.0,
+                distance: 0.0,
+                category: 0,
+                anchor: None,
+                raw_hit: None,
+                face: None,
+                promoted: false,
+                standing: None,
             },
             "STUStatescriptStateMoveTo" => StateKind::MoveTo { movement: None },
             "STU_194D744E"
@@ -1730,7 +1778,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             "STU_38EE1100" => persistent_message(self.graph(id).index, node)
                 .map_or(StateKind::SendMessage, StateKind::PersistentSend),
-            "STUStatescriptStateCosmeticEntity" => StateKind::CosmeticEntity,
+            // The hook line's presentation attachment state (remote mirror;
+            // the effect/hardpoint operands ride the ring): same no-server-
+            // presentation behaviour as a plain cosmetic entity state, and
+            // it carries no m_1DEF59FA operand, so begin links nothing.
+            "STUStatescriptStateCosmeticEntity" | "STU_9932D728" => StateKind::CosmeticEntity,
             "STUStatescriptStateChaseVar" => StateKind::ChaseVar,
             "STU_77E13026"
                 if registration.permits((self.graph(id).index, node.pos) == (0x180a, 42)) =>
@@ -1797,6 +1849,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ if registration.allows_runtime_fallback() && node.declares_runtime_plain_state() => {
                 StateKind::Plain
             }
+            _ if !self.machine.strict => {
+                // runtime.py `state_type`: outside a strict component every
+                // unmodeled class gets the plain base lifecycle. The state
+                // stays wire-plain because the codec table carries no
+                // record for such a class.
+                StateKind::Plain
+            }
             _ => {
                 self.report_diagnostic(
                     self.site(id, node),
@@ -1825,7 +1884,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ..State::dormant(kind)
             },
         );
-        if let Some(duration) = timed_graph_duration {
+        if let Some(duration) = timed_graph_duration.or(position_duration) {
             self.arm_parent_owned_duration(key, node, duration)?;
         }
         match kind {
@@ -1837,6 +1896,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             StateKind::Shockwave { .. } => self.begin_shockwave(key, node)?,
             StateKind::PlacementSelector { .. } => self.begin_placement_selector(key, node)?,
             StateKind::MoveTo { .. } => self.begin_move_to(key, node)?,
+            StateKind::StaticTrace { .. } => self.begin_static_trace(key, node)?,
             StateKind::ShieldRecharge => self.begin_shield_recharge(key, node)?,
             StateKind::NamedShieldDecay => {
                 if self.update_named_shield_decay(key, node, 0)? {
@@ -2841,6 +2901,29 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         )?;
         self.exit_subgraph(key.instance, node, "m_F9D59C3A", 1)?;
         self.post(key.instance, Event::Finish(key.raw))
+    }
+
+    /// Deliver one owner move result to the state that authored the request.
+    /// Standard state teardown clears the request and runs the authored plugs.
+    pub(in crate::script_init) fn deliver_move_result(
+        &mut self,
+        key: MoveToKey,
+        outcome: MoveOutcome,
+    ) -> Result<(), InitFault> {
+        let state_key = StateKey {
+            instance: key.instance,
+            raw: key.raw,
+        };
+        if self.machine.owner_dead
+            || !self
+                .state(state_key)
+                .is_some_and(|state| state.accepts_move_result(key))
+        {
+            return Ok(());
+        }
+        // The public reference host maps successful travel to FINISH and
+        // obstructed travel to ABORT (match.py, body_command).
+        self.end(state_key, outcome == MoveOutcome::Arrived, 0)
     }
 
     pub(in crate::script_init) fn begin_static_target(

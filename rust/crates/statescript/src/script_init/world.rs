@@ -501,6 +501,17 @@ pub struct BeamContact {
 
 /// External authored queries for this initialization. The caller owns mode,
 /// ruleset, and entity data and can decline a query without guessing its value.
+/// The mover dimensions the hook promotion measures a lip against, taken
+/// from the owner body's own character-mover settings (standing capsule,
+/// step-down band, walkable slope cosine).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HookPullGeometry {
+    pub radius: f64,
+    pub segment: f64,
+    pub step_down: f64,
+    pub slope_cos: f64,
+}
+
 pub trait World {
     fn edit_velocity(&mut self, _site: Site, _frame: u32, _value: Value, _cap: bool) -> bool {
         false
@@ -879,6 +890,12 @@ pub trait World {
         None
     }
 
+    /// View pitch in degrees for GetViewPitch operands (the hook-line and
+    /// wheel-aim accessors). None means the pose does not expose a pitch.
+    fn pitch(&self, _entity: u32) -> Option<f64> {
+        None
+    }
+
     /// Authored operands may use the room's actor sample instead of a profile-specific lookup.
     fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.position(entity)
@@ -933,6 +950,32 @@ pub trait World {
         _direction: [f64; 3],
         _max_distance: f64,
     ) -> Option<Option<script_expr::SpatialRayHit>> {
+        None
+    }
+
+    /// A static cast using the owner's own collision category.
+    fn profiled_static_ray(
+        &self,
+        _site: Site,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _max_distance: f64,
+        _category: u16,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
+        None
+    }
+
+    /// The mover geometry a hook launch measures a ledge lip against: the
+    /// owner's own capsule sizes, step band and walkable slope (T-0013 uses
+    /// only these, never a hero table or a new constant). Worlds with no
+    /// character mover answer None and the trace keeps the direct pull.
+    fn hook_pull_geometry(&self, _site: Site) -> Option<HookPullGeometry> {
+        None
+    }
+
+    /// The owner body's mover collision category (the team's proxy bit), as
+    /// the movement pipeline carries it. None when the body has no mover.
+    fn owner_collision_category(&self, _site: Site) -> Option<u16> {
         None
     }
 

@@ -289,6 +289,130 @@ pub(super) fn shared_ability_press_window_contract() {
 }
 
 #[test]
+fn stacked_ability_admission_follows_the_condition_and_cooldown_variables() {
+    // A renumbered copy of the shape the prepared hook kit admits with: an
+    // ability stacked on the entity ability stack (pushed to the top by the
+    // press), an instance-scoped start condition fed by the graph's own
+    // state, an entity cooldown variable, and no hold button and no early-
+    // press window (the stop latch). The positive fixture admits and starts;
+    // the second, renumbered fixture arms the cooldown before the press and
+    // must drop the press at the gate - admission is data, not a default.
+    // Measured mechanism (follow-up): the state begin arms the timer from
+    // the written base (60 s in the second fixture), so the press dies at
+    // the cooldown gate, not the latch; the countdown lifecycle gets its
+    // own scenario in
+    // `ability_cooldown_links_at_activation_and_rearms_on_written_value`.
+    struct Case {
+        graph: u32,
+        stack_var: u32,
+        condition_var: u32,
+        cooldown_var: u32,
+        started_var: u32,
+        cooldown_armed: bool,
+    }
+    let cases = [
+        Case {
+            graph: 42,
+            stack_var: 800,
+            condition_var: 801,
+            cooldown_var: 802,
+            started_var: 803,
+            cooldown_armed: false,
+        },
+        Case {
+            graph: 43,
+            stack_var: 810,
+            condition_var: 811,
+            cooldown_var: 812,
+            started_var: 813,
+            cooldown_armed: true,
+        },
+    ];
+    for case in cases {
+        let mut model = graph(
+            case.graph,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_beginPlug")],&[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateAbility",
+                    Some(0),
+                    json!({
+                        // Logical button 35 is command bit 0x008 in the
+                        // dispatch table; the ability stacks on the entity
+                        // variable with the authored priority key shape.
+                        "m_A5F1A77B":35,
+                        "m_2BBEEAB8":1,
+                        "m_out_StackVar":var(case.stack_var,true),
+                        "m_5E561E77":{"$":"STU_8A491388","m_priority":"0x0C40000000000001","m_EE729DCB":0},
+                        "m_150F0D92":var(case.condition_var,false),
+                        "m_F495731F":var(case.condition_var,false),
+                        "m_out_CooldownVar":var(case.cooldown_var,true),
+                        "m_EF3C5C73":[{"m_out_Var":var(case.started_var,true),"m_value":true}],
+                    }),
+                ),
+            ],
+            json!([1]),
+            json!([0]),
+        );
+        model["fields"]["m_680A2CB2"] = json!([0]);
+        let mut variables = Variables::from([
+            (case.stack_var, Value::Bool(false)),
+            (case.condition_var, Value::Bool(false)),
+            (case.cooldown_var, Value::Bool(false)),
+            (case.started_var, Value::Bool(false)),
+        ]);
+        if case.cooldown_armed {
+            variables.insert(case.cooldown_var, Value::Float(60.0));
+        }
+        let mut component = Component::start(
+            Arc::new(store(vec![model])),
+            case.graph,
+            variables,
+            vec![Root::new(1, case.graph)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        // The graph's own state feeds the instance-scoped condition (the
+        // hook's SetVar -> switch -> stack chain reduced to its admission
+        // face): the component writes it through the lvalue path.
+        component
+            .set_instance_variable(1, case.condition_var, Value::Bool(true), &mut EmptyWorld)
+            .unwrap();
+        for frame in [1u32, 2] {
+            component
+                .advance_command(
+                    Command {
+                        frame,
+                        buttons: if frame == 1 { 0x008 } else { 0 },
+                        ..Default::default()
+                    },
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+        }
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        let started = snapshot.variables[&case.started_var] == Value::Bool(true);
+        assert_eq!(
+            started, !case.cooldown_armed,
+            "cooldown-armed press must be refused, fresh press must start"
+        );
+    }
+}
+
+#[test]
 fn control_block_interrupts_authored_channels_releases_buttons_and_recovers() {
     let mut fixture = graph(
         42,
@@ -2264,4 +2388,467 @@ fn own_entity_member_keeps_known_unset_values_and_reactive_variable_reads() {
             StateKind::BooleanSwitch(expected),
         );
     }
+}
+
+#[test]
+fn ground_press_after_scope_exit_cannot_rewrite_an_owned_button_cooldown() {
+    // Shuffle raw state order as well as graph, node, entity variable and root IDs.
+    for (
+        graph_id,
+        root,
+        [enter, scope, owned, owned_write, peer, peer_write, exit],
+        [scope_raw, owned_raw, peer_raw],
+        [source, cooldown, peer_value],
+        abort,
+    ) in [
+        (
+            421,
+            1,
+            [0, 1, 2, 3, 4, 5, 6],
+            [0, 1, 2],
+            [81, 82, 83],
+            0x0240_0000_0000_8234_u64,
+        ),
+        (
+            733,
+            9,
+            [12, 8, 15, 3, 10, 7, 5],
+            [2, 0, 1],
+            [901, 305, 711],
+            0x0240_0000_0000_8321,
+        ),
+    ] {
+        let listener = |pos, raw, write| {
+            node(
+                pos,
+                "STUStatescriptStateLogicalButton",
+                Some(raw),
+                json!({
+                    "m_logicalButton":{"$":"STUConfigVarLogicalButton","m_logicalButton":11},
+                    "m_onGoingDownPlug":plug(&[(write,"m_inPlug")],&[]),
+                }),
+            )
+        };
+        let write = |pos, output| {
+            node(
+                pos,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({"m_out_Var":var(output,true), "m_value":var(source,true)}),
+            )
+        };
+        let mut movement = node(
+            scope,
+            "AuthoredMovementScope",
+            Some(scope_raw),
+            json!({"factor":0.5, "m_subgraphPlug":plug(&[(owned,"m_beginPlug")],&[owned_raw])}),
+        );
+        movement["state_behavior"] = json!("movement_scale");
+        movement["server_only"] = json!(true);
+        let mut states = [0; 3];
+        for (raw, pos) in [(scope_raw, scope), (owned_raw, owned), (peer_raw, peer)] {
+            states[usize::from(raw)] = pos;
+        }
+        let mut fixture = graph(
+            graph_id,
+            vec![
+                node(
+                    enter,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(scope,"m_beginPlug"),(peer,"m_beginPlug")],&[])}),
+                ),
+                movement,
+                listener(owned, owned_raw, owned_write),
+                write(owned_write, cooldown),
+                listener(peer, peer_raw, peer_write),
+                write(peer_write, peer_value),
+                node(
+                    exit,
+                    "STUStatescriptEntryGameMessage",
+                    None,
+                    json!({
+                        "m_gameMessage":{"m_gameMessage":format!("0x{abort:016X}")},
+                        "m_outPlug":plug(&[(scope,ABORT_PLUG)],&[]),
+                    }),
+                ),
+            ],
+            json!(states),
+            json!([enter, exit]),
+        );
+        fixture["items"] = json!(16);
+        fixture["fields"]["m_680A2CB2"] = json!([owned_raw, peer_raw]);
+        let mut component = Component::start(
+            Arc::new(store(vec![fixture])),
+            71,
+            Variables::from([(source, Value::Float(5.0))]),
+            vec![Root::new(root, graph_id)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let jump = |component: &mut Component, frame, held| {
+            component
+                .advance_command(
+                    Command {
+                        frame,
+                        buttons: if held { 0x040 } else { 0 },
+                        ..Command::default()
+                    },
+                    &mut EmptyWorld,
+                )
+                .unwrap();
+        };
+        let snapshot = component.snapshot().unwrap();
+        assert!(!snapshot.variables.contains_key(&cooldown));
+        for raw in [scope_raw, owned_raw, peer_raw] {
+            assert!(snapshot.instances[&root].states[&raw].active);
+        }
+        assert_eq!(
+            component
+                .movement_modifiers(&mut EmptyWorld)
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        jump(&mut component, 1, true);
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.variables[&cooldown], Value::Float(5.0));
+        assert_eq!(snapshot.variables[&peer_value], Value::Float(5.0));
+        for raw in [owned_raw, peer_raw] {
+            assert_eq!(
+                snapshot.instances[&root].states[&raw].kind,
+                StateKind::LogicalButton { down: true }
+            );
+        }
+        // A repeated press branch would now write a different value.
+        component
+            .set_entity_variable(source, Value::Float(8.0), &mut EmptyWorld)
+            .unwrap();
+        jump(&mut component, 2, true);
+        let snapshot = component.snapshot().unwrap();
+        assert_eq!(snapshot.variables[&cooldown], Value::Float(5.0));
+        assert_eq!(snapshot.variables[&peer_value], Value::Float(5.0));
+
+        assert_eq!(
+            component
+                .queue_message(root, abort, Variables::new())
+                .unwrap(),
+            1
+        );
+        component.run_now(&mut EmptyWorld).unwrap();
+        let states = &component.snapshot().unwrap().instances[&root].states;
+        assert!(!states[&scope_raw].active);
+        assert!(!states[&owned_raw].active);
+        assert_eq!(
+            states[&owned_raw].kind,
+            StateKind::LogicalButton { down: false }
+        );
+        assert!(states[&peer_raw].active);
+        assert_eq!(
+            states[&peer_raw].kind,
+            StateKind::LogicalButton { down: true }
+        );
+        assert!(
+            component
+                .movement_modifiers(&mut EmptyWorld)
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+
+        let exit_ms = component.now_ms();
+        jump(&mut component, 3, false);
+        assert_eq!(
+            component.snapshot().unwrap().instances[&root].states[&peer_raw].kind,
+            StateKind::LogicalButton { down: false }
+        );
+        jump(&mut component, 20, true);
+        assert!(component.now_ms() > exit_ms);
+        let snapshot = component.snapshot().unwrap();
+        let states = &snapshot.instances[&root].states;
+        assert!(!states[&owned_raw].active);
+        assert_eq!(
+            states[&owned_raw].kind,
+            StateKind::LogicalButton { down: false }
+        );
+        assert!(states[&peer_raw].active);
+        assert_eq!(
+            states[&peer_raw].kind,
+            StateKind::LogicalButton { down: true }
+        );
+        assert_eq!(snapshot.variables[&cooldown], Value::Float(5.0));
+        assert_eq!(snapshot.variables[&peer_value], Value::Float(8.0));
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+    }
+}
+
+#[test]
+fn ability_cooldown_links_at_activation_and_rearms_on_written_value() {
+    // A renumbered shape (graph 46, instances 2 and 3, instance-scoped
+    // variables 830-832): an unstacked Ability whose start plug writes a
+    // positive cooldown, and a live peer instance of the same graph. Pins
+    // the reference cooldown lifecycle: the scope begin links the variable
+    // and snapshots the timer from its value (`on_begin`/`restart`,
+    // nodes.py:2565-2568 and 2575-2596), a linked positive write re-arms
+    // through `var_written`, the countdown decays on the clock at the
+    // authored rate, a keep-fail stop in the live scope keeps the link
+    // alive (reference `Ability.stop` releases only the stack link), a
+    // refused press never re-arms, and a re-start after expiry re-arms
+    // through the same live link without a new scope begin.
+    let model = {
+        let mut model = graph(
+            46,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_beginPlug")],&[])}),
+                ),
+                node(
+                    1,
+                    "STUStatescriptStateAbility",
+                    Some(0),
+                    json!({
+                        // Logical button 35 is command bit 0x008 in the
+                        // dispatch table; both instances share the button
+                        // while their cooldown variables stay per-instance.
+                        "m_A5F1A77B":35,
+                        "m_2BBEEAB8":1,
+                        "m_150F0D92":var(831,false),
+                        "m_F495731F":var(831,false),
+                        "m_out_CooldownVar":var(830,false),
+                        "m_4E22B5C4":plug(&[(2,"m_inPlug")],&[]),
+                        "m_EF3C5C73":[{"m_out_Var":var(832,false),"m_value":true}],
+                    }),
+                ),
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({"m_out_Var":var(830,false),"m_value":5.0}),
+                ),
+            ],
+            json!([1]),
+            json!([0]),
+        );
+        model["fields"]["m_680A2CB2"] = json!([0]);
+        model
+    };
+    let mut world = EmptyWorld;
+    let mut component = Component::start(
+        Arc::new(store(vec![model])),
+        46,
+        Variables::from([
+            (830, Value::Bool(false)),
+            (831, Value::Bool(false)),
+            (832, Value::Bool(false)),
+        ]),
+        vec![Root::new(2, 46), Root::new(3, 46)],
+        0,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    assert!(
+        component.snapshot().unwrap().initialization_complete(),
+        "{:?}",
+        component.snapshot().unwrap().diagnostics
+    );
+    let projected = |component: &Component, instance: u16| {
+        component
+            .snapshot()
+            .unwrap()
+            .resolved_bindings
+            .iter()
+            .find(|((owner, variable), _)| *owner == instance && *variable == 830)
+            .map(|(_, value)| value.clone())
+    };
+    let base = |component: &Component, instance: u16| {
+        component.snapshot().unwrap().instances[&instance]
+            .variables
+            .get(&830)
+            .cloned()
+    };
+    let float = |value: Option<Value>| match value {
+        Some(Value::Float(seconds)) => seconds,
+        other => panic!("expected a projected cooldown, got {other:?}"),
+    };
+    // (1) The scope begin linked the zero timer on both instances.
+    assert_eq!(projected(&component, 2), Some(Value::Float(0.0)));
+    assert_eq!(projected(&component, 3), Some(Value::Float(0.0)));
+    // (2) Only the instance whose authored condition is true starts, and the
+    // start-plug write through the begin-time link re-arms the countdown.
+    component
+        .set_instance_variable(2, 831, Value::Bool(true), &mut world)
+        .unwrap();
+    for (frame, buttons) in [(1u32, 0x008u32), (2, 0)] {
+        component
+            .advance_command(
+                Command {
+                    frame,
+                    buttons,
+                    ..Default::default()
+                },
+                &mut world,
+            )
+            .unwrap();
+    }
+    let armed = float(projected(&component, 2));
+    assert!(
+        (4.90..=5.0).contains(&armed),
+        "the authored write must arm the countdown, got {armed}"
+    );
+    // (3) Live peer control: the peer instance's cell is untouched.
+    assert_eq!(projected(&component, 3), Some(Value::Float(0.0)));
+    assert!(
+        !matches!(base(&component, 3), Some(Value::Float(_))),
+        "the peer's raw cooldown must not receive the authored write"
+    );
+    // (4) Clock decay at the authored rate (no entity modifier: 1 per
+    // second), verified against the component's own clock rather than a
+    // frame-to-wall-time assumption (the headless component advances its
+    // clock through its event cadence, not a fixed 40 Hz mapping).
+    let armed_at = component.now_ms();
+    for frame in 3..=41 {
+        component
+            .advance_command(
+                Command {
+                    frame,
+                    ..Default::default()
+                },
+                &mut world,
+            )
+            .unwrap();
+    }
+    let left = float(projected(&component, 2));
+    let elapsed = (component.now_ms() - armed_at) as f64 / 1000.0;
+    assert!(
+        elapsed > 0.3 && (left - (armed - elapsed)).abs() < 0.02,
+        "the countdown must fall by exactly the elapsed time at rate 1: \
+         armed {armed}, elapsed {elapsed}s, left {left}"
+    );
+    // (5) Stopping through the authored continue condition. The wake that
+    // re-checks a running ability runs on its button dispatch; with the
+    // continue condition false the keep pass stops the ability. Reference
+    // parity detail: `Ability.stop` releases only the STACK link — the
+    // cooldown link from the scope begin stays alive (it is unlinked at
+    // the state's cleanup, not at stop), so the projected value keeps
+    // tracking the (still decaying) payload rather than committing to the
+    // base.
+    component
+        .set_instance_variable(2, 831, Value::Bool(false), &mut world)
+        .unwrap();
+    component
+        .advance_command(
+            Command {
+                frame: 42,
+                buttons: 0x008,
+                ..Default::default()
+            },
+            &mut world,
+        )
+        .unwrap();
+    component
+        .advance_command(
+            Command {
+                frame: 43,
+                ..Default::default()
+            },
+            &mut world,
+        )
+        .unwrap();
+    let stopped = float(projected(&component, 2));
+    assert!(
+        stopped <= left + 0.001 && stopped < 5.0,
+        "stopping keeps the link alive: the projection must still track the \
+         decaying payload, {left} -> {stopped}"
+    );
+    assert_eq!(
+        base(&component, 2),
+        Some(Value::Float(5.0)),
+        "the stop must not write anything to the cooldown variable"
+    );
+    // (6) A fresh press while the countdown is still positive stays refused
+    // at the cooldown gate: the base is not re-written and the projection
+    // only keeps decaying (no jump back toward 5.0).
+    let before_press = stopped;
+    for (frame, buttons) in [(121u32, 0x008u32), (122, 0)] {
+        component
+            .advance_command(
+                Command {
+                    frame,
+                    buttons,
+                    ..Default::default()
+                },
+                &mut world,
+            )
+            .unwrap();
+    }
+    let refused = float(projected(&component, 2));
+    assert!(
+        refused <= before_press + 1e-9,
+        "a refused press must not re-arm: {before_press} -> {refused}"
+    );
+    assert_eq!(
+        base(&component, 2),
+        Some(Value::Float(5.0)),
+        "a refused press must not touch the base"
+    );
+    // (7) After the clock expires the countdown, a press starts the ability
+    // again — and the start-plug write lands through the STILL-LINKED
+    // cooldown slot, so `var_written` re-arms the timer without any new
+    // scope begin (reference: restart runs at begin and on linked writes;
+    // a stop in the live scope never unlinked it). The re-arm (projection
+    // back at ~5.0 after ~8 s of decay) is only observable because the
+    // refused press at (6) left the projection strictly decaying.
+    for frame in 123..=640 {
+        component
+            .advance_command(
+                Command {
+                    frame,
+                    ..Default::default()
+                },
+                &mut world,
+            )
+            .unwrap();
+    }
+    let decayed = float(projected(&component, 2));
+    assert!(
+        decayed <= refused + 1e-9 && (decayed - 0.0).abs() < 0.001,
+        "the un-woken payload must have expired on the clock, saw {decayed}"
+    );
+    component
+        .set_instance_variable(2, 831, Value::Bool(true), &mut world)
+        .unwrap();
+    for (frame, buttons) in [(641u32, 0x008u32), (642, 0)] {
+        component
+            .advance_command(
+                Command {
+                    frame,
+                    buttons,
+                    ..Default::default()
+                },
+                &mut world,
+            )
+            .unwrap();
+    }
+    let rearmed = float(projected(&component, 2));
+    assert!(
+        (4.90..=5.0).contains(&rearmed),
+        "the re-start must re-arm through the live link, got {rearmed}"
+    );
+    assert_eq!(
+        base(&component, 2),
+        Some(Value::Float(5.0)),
+        "the chain write stores through the link as usual"
+    );
 }
