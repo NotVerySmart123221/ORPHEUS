@@ -535,9 +535,13 @@ impl SceneAssets {
         // Client presenters can read the room mode entity's authored variables.
         let variables = authored_mode_variables(&self.graphs, map.mode_guid).unwrap_or_default();
         let mode_ui = mode_presentation(&self.graphs, &variables, encounter)?;
-        let initial_board =
+        let initial_board = crate::game_stats::with_on_fire(
             self.stats
-                .component(&PlayerStats::default(), map.mode_guid, None, None);
+                .component(&PlayerStats::default(), map.mode_guid, None, None),
+            Some(0.0),
+            Some(crate::game_progression::ON_FIRE_THRESHOLD),
+            Some(false),
+        );
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
         simulation.set_free_for_all(map.free_for_all);

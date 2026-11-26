@@ -871,11 +871,46 @@ impl RoomSimulation {
         let origin = geometry
             .map(ImpactGeometry::origin)
             .or_else(|| source.position(&self.world));
-        let contact_set = self
+        let victim_state = self
             .players_by_wire
             .get(&victim.entity)
-            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
-            .and_then(|state| self.body_contact_sets.get(&state.body_template).copied())
+            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity));
+        let victim_center = victim_state.map(|state| {
+            let p = state.mover.pose().position;
+            [p[0], p[1] + state.mover.eye_height() * 0.75, p[2]]
+        });
+        let normal = geometry.and_then(ImpactGeometry::surface_normal);
+        let fallback_dir = match (origin, victim_center) {
+            (Some(orig), Some(vc)) => {
+                let delta = [orig[0] - vc[0], orig[1] - vc[1], orig[2] - vc[2]];
+                let len = crate::static_ray::norm(delta);
+                (len > 1e-6).then(|| delta.map(|v| v / len))
+            }
+            _ => None,
+        };
+        let impact_point = match (victim_center, normal.or(fallback_dir)) {
+            (Some(vc), Some(n)) => Some([
+                vc[0] + n[0] * 0.35,
+                vc[1] + n[1] * 0.25,
+                vc[2] + n[2] * 0.35,
+            ]),
+            (vc, _) => vc,
+        };
+        let contact_set = victim_state
+            .and_then(|state| {
+                self.body_contact_sets
+                    .get(&state.body_template)
+                    .copied()
+                    .filter(|&set| set != 0)
+                    .or_else(|| {
+                        (state.body_template != 0).then(|| {
+                            self.body_contact_sets
+                                .values()
+                                .copied()
+                                .find(|&set| set != 0)
+                        })?
+                    })
+            })
             .unwrap_or(0);
         self.player_cues.push(PlayerRoomCue {
             owner,
@@ -886,7 +921,8 @@ impl RoomSimulation {
                 victim: victim.entity,
                 dealt,
                 origin,
-                normal: geometry.and_then(ImpactGeometry::surface_normal),
+                impact_point,
+                normal,
                 contact_set,
                 critical,
                 armor_or_shield,

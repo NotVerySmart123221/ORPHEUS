@@ -2963,6 +2963,27 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::SummonerBeamRay => self.refresh_summoner_beam_ray(key, node)?,
             StateKind::SummonerBeamDamage => self.register_tick(key, self.machine.now_ms),
+            StateKind::Watch if node.class == "STU_2F4E2E3F" => {
+                let site = self.site(id, node);
+                if self.world.admits_generic_player_runtime(site) && site.graph == 0x0DD8 {
+                    let fwd = self
+                        .world
+                        .forward(site.entity)
+                        .or_else(|| self.world.authored_forward(site.entity))
+                        .unwrap_or([0.0, 0.0, 1.0]);
+                    let hlen = fwd[0].hypot(fwd[2]).max(1e-4);
+                    let _ = self.world.apply_velocity_ops(
+                        site,
+                        self.machine.frame,
+                        &[crate::script_init::VelocityOp::SetVector([
+                            fwd[0] / hlen * 3.5,
+                            11.5,
+                            fwd[2] / hlen * 3.5,
+                        ])],
+                    );
+                    self.follow(id, node, "m_A70DB860", Some(key), depth)?;
+                }
+            }
             StateKind::Plain if node.class == "STU_066B4605" => {
                 // The absent AI relation finishes through the current clock's event queue.
                 self.post(id, Event::Finish(key.raw))?;

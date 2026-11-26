@@ -232,6 +232,7 @@ pub(crate) struct PosedProjectile {
     pub sticky_delay: Option<f64>,
     pub direct_effect: Option<u64>,
     pub blast_effect: Option<u64>,
+    pub presentation: Option<Arc<ObservedShot>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -371,8 +372,10 @@ pub(crate) struct AdmittedFlight {
     pub stun: Option<Stun>,
     pub hit_effect: Option<crate::script_init::Site>,
     pub token: ProjectileToken,
+    pub launch_frame: u32,
     pub flight: ProjectileFlight,
     pub impact_spawn: Option<crate::game_projectiles::ImpactSpawn>,
+    pub presentation: Option<Arc<ObservedShot>>,
 }
 
 pub(crate) struct DeathSourceFacts {
@@ -1364,7 +1367,10 @@ impl RoomSimulation {
                 .get_mut::<BotState>(entity)
                 .expect("live bot handle")
                 .into_inner();
-            if state.enemy.is_some() {
+            if state.enemy.is_some()
+                || (map.mode_guid == crate::game_content::PRACTICE_RANGE_MODE
+                    && state.bot.spawn.team == 0)
+            {
                 continue;
             }
             let seat = first.saturating_add(offset);
@@ -1960,7 +1966,7 @@ impl RoomSimulation {
         if let Some((catalog, mode)) = &self.stats_catalog {
             let updates = self
                 .scoreboard
-                .collect_board_updates(catalog, *mode, tick, 30);
+                .collect_board_updates(catalog, *mode, tick, 6);
             for (_, update) in updates {
                 self.scripted_health.push(update);
             }
@@ -3604,10 +3610,7 @@ impl RoomSimulation {
             .projectiles
             .remove(&connection)
             .map_or_else(Vec::new, |batch| batch.order);
-        for launch in launches {
-            let ecs_id = self.world.spawn(launch).id();
-            order.push(ecs_id);
-        }
+        self.spawn_admitted_launches(launches, &mut order);
         let mut outcomes = Vec::new();
         let mut hits = Vec::new();
         if order.is_empty() {
@@ -3672,6 +3675,7 @@ impl RoomSimulation {
             let mut hit_barrier: Option<(u32, bool, f64)> = None;
             let (
                 token,
+                launch_frame,
                 stun,
                 hit_effect,
                 impact_spawn,
@@ -3732,6 +3736,7 @@ impl RoomSimulation {
                 let piercing_impacts = active.flight.drain_piercing_impacts();
                 (
                     active.token,
+                    active.launch_frame,
                     active.stun,
                     active.hit_effect,
                     active.impact_spawn,
@@ -3781,12 +3786,12 @@ impl RoomSimulation {
                     }
                 } else if self.players_by_wire.contains_key(&impact.entity) {
                     if let Some(hit) =
-                        self.apply_player_impact(owner.entity, context.tick, context, impact)?
+                        self.apply_player_impact(owner.entity, launch_frame, context, impact)?
                     {
                         hits.push(hit);
                     }
                 } else if let Some(hit) =
-                    self.apply_bot_impact(owner.entity, context.tick, context, impact)?
+                    self.apply_bot_impact(owner.entity, launch_frame, context, impact)?
                 {
                     hits.push(hit);
                 }
@@ -3800,12 +3805,16 @@ impl RoomSimulation {
                     );
                 }
             }
+            let mut completed_impact = false;
+            let mut completed_point = None;
             match result {
                 Ok(None) => {
                     continuing.push(entity);
                     continue;
                 }
                 Ok(Some(end)) => {
+                    completed_impact = end.impact;
+                    completed_point = Some(end.point);
                     if end.impact || (end.expired && impact_spawn.is_some()) {
                         if let Some(spawn) = impact_spawn {
                             let yaw = self
@@ -3972,7 +3981,7 @@ impl RoomSimulation {
                             if self.players_by_wire.contains_key(&impact.entity) {
                                 if let Some(hit) = self.apply_player_impact(
                                     owner.entity,
-                                    context.tick,
+                                    launch_frame,
                                     context,
                                     &dot_impact,
                                 )? {
@@ -3980,7 +3989,7 @@ impl RoomSimulation {
                                 }
                             } else if let Some(hit) = self.apply_bot_impact(
                                 owner.entity,
-                                context.tick,
+                                launch_frame,
                                 context,
                                 &dot_impact,
                             )? {
@@ -4012,7 +4021,7 @@ impl RoomSimulation {
                             }
                             if let Some(hit) = self.apply_player_impact(
                                 owner.entity,
-                                context.tick,
+                                launch_frame,
                                 context,
                                 impact,
                             )? {
@@ -4036,7 +4045,7 @@ impl RoomSimulation {
                             continue;
                         }
                         if let Some(hit) =
-                            self.apply_bot_impact(owner.entity, context.tick, context, impact)?
+                            self.apply_bot_impact(owner.entity, launch_frame, context, impact)?
                         {
                             if hit.notices[1].is_some() {
                                 killed_in_tick.push(impact.entity);
@@ -4103,6 +4112,12 @@ impl RoomSimulation {
                     }
                 }
             }
+            self.complete_observed_projectile(
+                entity,
+                context.tick,
+                completed_impact,
+                completed_point,
+            );
             if let Some(wire) = self.server_projectile_wires.remove(&entity) {
                 self.retired_enemies.push(wire);
             }
@@ -4125,6 +4140,7 @@ impl RoomSimulation {
     pub(crate) fn retire_projectiles(&mut self, connection: u32) {
         if let Some(batch) = self.projectiles.remove(&connection) {
             for entity in batch.order {
+                self.complete_observed_projectile(entity, 0, false, None);
                 if let Some(wire) = self.server_projectile_wires.remove(&entity) {
                     self.retired_enemies.push(wire);
                 }
@@ -4135,7 +4151,13 @@ impl RoomSimulation {
     }
 
     pub(crate) fn clear_projectiles(&mut self) {
-        for entity in self.projectiles.drain().flat_map(|(_, batch)| batch.order) {
+        let entities: Vec<_> = self
+            .projectiles
+            .drain()
+            .flat_map(|(_, batch)| batch.order)
+            .collect();
+        for entity in entities {
+            self.complete_observed_projectile(entity, 0, false, None);
             if let Some(wire) = self.server_projectile_wires.remove(&entity) {
                 self.retired_enemies.push(wire);
             }

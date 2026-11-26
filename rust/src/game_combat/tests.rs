@@ -2336,10 +2336,12 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
     .unwrap();
     AdmittedFlight {
         token,
+        launch_frame: 0,
         flight,
         stun: None,
         hit_effect: None,
         impact_spawn: None,
+        presentation: None,
     }
 }
 
@@ -4250,10 +4252,12 @@ fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
             owner,
             vec![AdmittedFlight {
                 token: crate::game_projectiles::ProjectileToken::server_only(1),
+                launch_frame: 4,
                 flight,
                 stun: None,
                 hit_effect: None,
                 impact_spawn: None,
+                presentation: None,
             }],
             ShotContext {
                 team: 1,

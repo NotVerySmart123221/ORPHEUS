@@ -1405,21 +1405,24 @@ impl Bot {
                 from
             }
         };
-        // Clamp combat-motion vertical position against walkable ground so explosive
-        // knockback impulses and landing ticks can never push bots below the floor plane.
+        // Clamp combat-motion vertical position against walkable ground beneath the
+        // actor's feet so explosive knockback impulses never push bots under the floor
+        // without accidentally snapping upward-launched bots onto overhead geometry.
         let floor_probe = ground(
             after[0],
             after[2],
-            after[1].max(from[1]) + 3.5,
+            from[1].min(after[1]) + 0.45,
             after[1].min(from[1]) - 3.5,
         );
         if let Some(floor_y) = floor_probe {
-            if after[1] <= floor_y + 0.02 {
+            if after[1] < floor_y || (velocity[1] <= 0.0 && after[1] <= floor_y + 0.02) {
                 after[1] = floor_y;
                 if velocity[1] < 0.0 {
                     velocity[1] = 0.0;
                 }
-                self.movement_flags &= !IN_AIR;
+                if velocity[1] <= 0.0 {
+                    self.movement_flags &= !IN_AIR;
+                }
             }
         } else if grounded && after[1] < from[1] - 0.15 {
             // If an explosive impulse swept a grounded bot off/under thin geometry where

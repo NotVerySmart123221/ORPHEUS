@@ -644,6 +644,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             z,
         ];
         let mut posed = Vec::with_capacity(shots.len());
+        let mut projected_observer = None;
         let mut pose = |report: ReportedShot| -> Option<()> {
             let shot = report.event;
             let node = self.component.shot_node(&shot)?;
@@ -659,6 +660,39 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             // `m_A872C70E = 1`, while headshotting weapons omit it and default to 2.0x.
             let default_critical = 2.0;
             let graphs_ref = Arc::clone(&self.world.graphs);
+            let deadeye_has_targets = self.world.deadeye_scene.collision.is_some()
+                || !self.world.deadeye_scene.targets.is_empty();
+            let deadeye_targets_non_empty = !self.world.deadeye_scene.targets.is_empty();
+            let locked_target = self.component.snapshot().and_then(|snapshot| {
+                // Cassidy Deadeye (`536` + `5874`) or Soldier: 76 Tactical Visor (`2337`).
+                if let Some(Value::Entity(entity)) = snapshot
+                    .instances
+                    .get(&shot.instance)
+                    .and_then(|inst| inst.variables.get(&536))
+                {
+                    if let Some(Value::Array(visible)) = snapshot.variables.get(&5874) {
+                        if visible.contains(&Value::Entity(*entity)) {
+                            return Some(*entity);
+                        }
+                    }
+                }
+                if let Some(&Value::Entity(entity)) = snapshot.variables.get(&2337) {
+                    if crate::script_expr::valid_entity(entity) && entity != shot.entity {
+                        return Some(entity);
+                    }
+                }
+                None
+            });
+            let locked_aim_dir = locked_target.and_then(|entity| {
+                if deadeye_has_targets {
+                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)
+                } else {
+                    self.world
+                        .spatial_frame
+                        .as_deref()?
+                        .target_aim_direction(origin, entity)
+                }
+            });
             let mut evaluate = |config: &Json| {
                 self.component
                     .evaluate_shot_config(&shot, config, &mut self.world)
@@ -815,9 +849,49 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 } else {
                     None
                 };
+                let skip_owner = local_prediction(node);
+                let can_present_volley = !predicted
+                    && node.is_networked()
+                    && ballistics.definition.is_some()
+                    && ballistics.speed.is_finite()
+                    && ballistics.speed > 0.0
+                    && ballistics.lifetime.is_finite()
+                    && ballistics.lifetime > 0.0
+                    && node.field("m_49CBA3BC").is_none_or(|value| {
+                        value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+                    });
                 if count == 1.0 {
-                    let direction =
-                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
+                    let base_aim = locked_aim_dir.unwrap_or_else(|| aim_direction(&command));
+                    let direction = posed_projectile_direction(node, base_aim, &mut evaluate)?;
+                    let presentation = if can_present_volley {
+                        let def = ballistics.definition?;
+                        let snapshot = projected_observer
+                            .get_or_insert_with(|| {
+                                let snap = self.component.snapshot()?;
+                                SnapshotEncoder::new(&self.world.graphs, &self.codecs)
+                                    .project(snap, crate::script_snapshot_wire::View::Observer)
+                                    .ok()
+                            })
+                            .as_ref()?;
+                        let volley = snapshot.freeze_volley_with_states(
+                            shot,
+                            report.presentation,
+                            &report.presentation_states,
+                        )?;
+                        Some(Arc::new(
+                            crate::game_combat::ObservedShot::new(
+                                volley,
+                                def,
+                                origin,
+                                direction,
+                                shot.frame,
+                                ballistics.lifetime,
+                            )
+                            .with_skip_owner(skip_owner),
+                        ))
+                    } else {
+                        None
+                    };
                     posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
                         stun,
                         shot,
@@ -833,35 +907,68 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                         sticky_delay,
                         direct_effect,
                         blast_effect,
+                        presentation,
                     })));
                 } else {
                     if !node.field("m_5EC1EB38").is_some_and(Json::is_object) {
                         return None;
                     }
+                    let mut directions = Vec::new();
                     for_each_authored_hitscan_direction(
                         node,
                         &report,
                         aim_direction(&command),
                         &mut evaluate,
-                        |direction| {
-                            posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
-                                stun,
-                                shot,
-                                ballistics: ballistics.clone(),
-                                origin,
-                                direction,
-                                gravity,
-                                predicted: false,
-                                target_policy,
-                                piercing,
-                                impact_spawn,
-                                post_bounce_fuse,
-                                sticky_delay,
-                                direct_effect,
-                                blast_effect,
-                            })));
-                        },
+                        |direction| directions.push(direction),
                     );
+                    let presentation = if can_present_volley {
+                        let def = ballistics.definition?;
+                        let snapshot = projected_observer
+                            .get_or_insert_with(|| {
+                                let snap = self.component.snapshot()?;
+                                SnapshotEncoder::new(&self.world.graphs, &self.codecs)
+                                    .project(snap, crate::script_snapshot_wire::View::Observer)
+                                    .ok()
+                            })
+                            .as_ref()?;
+                        let volley = snapshot.freeze_volley_with_states(
+                            shot,
+                            report.presentation,
+                            &report.presentation_states,
+                        )?;
+                        Some(Arc::new(
+                            crate::game_combat::ObservedShot::new(
+                                volley,
+                                def,
+                                origin,
+                                aim_direction(&command),
+                                shot.frame,
+                                ballistics.lifetime,
+                            )
+                            .with_skip_owner(skip_owner),
+                        ))
+                    } else {
+                        None
+                    };
+                    for direction in directions {
+                        posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
+                            stun,
+                            shot,
+                            ballistics: ballistics.clone(),
+                            origin,
+                            direction,
+                            gravity,
+                            predicted: false,
+                            target_policy,
+                            piercing,
+                            impact_spawn,
+                            post_bounce_fuse,
+                            sticky_delay,
+                            direct_effect,
+                            blast_effect,
+                            presentation: presentation.clone(),
+                        })));
+                    }
                 }
                 return Some(());
             }
@@ -898,32 +1005,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     posed.push(PosedShot::Hitscan(shot_box));
                 }
             };
-            let locked_target = self.component.snapshot().and_then(|snapshot| {
-                let Value::Entity(entity) = *snapshot
-                    .instances
-                    .get(&shot.instance)?
-                    .variables
-                    .get(&536)?
-                else {
-                    return None;
-                };
-                let Value::Array(visible) = snapshot.variables.get(&5874)? else {
-                    return None;
-                };
-                visible.contains(&Value::Entity(entity)).then_some(entity)
-            });
-            if let Some(entity) = locked_target {
-                let direction = if self.world.deadeye_scene.collision.is_some()
-                    || !self.world.deadeye_scene.targets.is_empty()
-                {
-                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
-                } else {
-                    self.world
-                        .spatial_frame
-                        .as_deref()?
-                        .target_aim_direction(origin, entity)?
-                };
+            if let Some(direction) = locked_aim_dir {
                 push_hitscan(direction);
+            } else if locked_target.is_some() && deadeye_targets_non_empty {
+                return None;
             } else {
                 for_each_authored_hitscan_direction(
                     node,

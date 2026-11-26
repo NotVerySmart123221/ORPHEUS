@@ -1170,9 +1170,8 @@ impl State {
                             |entity| peer.world.actor_contact_ready(entity),
                         )?;
                         peer.world.finish_projectiles(owner, room_tick, outcomes)?;
+                        simulation.deliver_coalesced_hits(peer.world.owner(), &hits);
                         for hit in hits {
-                            simulation
-                                .deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                             peer.bot_hit(hit);
                         }
                         Ok(())

@@ -318,12 +318,14 @@ impl BodyScript {
             ));
             launches.push(AdmittedFlight {
                 token,
+                launch_frame: projectile.shot.frame,
                 flight,
                 stun: projectile.stun,
                 hit_effect: projectile
                     .stun
                     .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
                 impact_spawn: projectile.impact_spawn,
+                presentation: projectile.presentation,
             });
         } else {
             #[cfg(feature = "inspector")]

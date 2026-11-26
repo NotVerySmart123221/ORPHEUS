@@ -688,6 +688,9 @@ impl World for BodyWorld {
                     .as_deref()
                     .is_some_and(|frame| frame.actor_pose(entity).is_some())
             {
+                if matches!(id, 478 | 8193) {
+                    return Some(Value::Float(250.0));
+                }
                 return Some(Value::Null);
             }
             return None;
@@ -1235,6 +1238,10 @@ impl World for BodyWorld {
         }
         // Generic cross-entity message delivery in live rooms (Whip Shot, Chain Hook,
         // Concussion Mine, Halt, Translocator, Resurrect, Ice Wall, Teleporter, etc.).
+        if (target == GAME_MODE_ENTITY || target == self.controller) && self.spatial_frame.is_some()
+        {
+            return true;
+        }
         if valid_entity(target) {
             if let Some(frame) = self.spatial_frame.as_deref() {
                 let _ = self.script_requests.queue_message(
@@ -1564,15 +1571,26 @@ impl World for BodyWorld {
             self.position[1] + 1.5,
             self.position[2],
         ]);
-        let dir = direction_for_angles(self.movement.yaw, self.movement.pitch);
+        let raw_dir = direction_for_angles(self.movement.yaw, self.movement.pitch);
+        let dir = if raw_dir[1] > -0.08 {
+            let hlen = raw_dir[0].hypot(raw_dir[2]).max(1e-4);
+            [raw_dir[0] / hlen * 0.995, -0.095, raw_dir[2] / hlen * 0.995]
+        } else {
+            raw_dir
+        };
+        let reach = if self.movement.air_ticks == 0 {
+            8.5
+        } else {
+            22.0
+        };
         let vm_frame = self.movement.frame.unwrap_or(0);
-        let probe = match frame.ray_cast(site, vm_frame, origin, dir, 35.0).flatten() {
+        let probe = match frame.ray_cast(site, vm_frame, origin, dir, reach).flatten() {
             Some(hit) => [
                 hit.point[0] + hit.normal[0] * 0.35,
                 hit.point[1] + hit.normal[1] * 0.35,
                 hit.point[2] + hit.normal[2] * 0.35,
             ],
-            None => crate::static_ray::along(origin, dir, 15.0),
+            None => crate::static_ray::along(origin, dir, reach),
         };
         // Snap onto walkable ground directly beneath the aimed probe point.
         let down_origin = [probe[0], probe[1] + 1.5, probe[2]];

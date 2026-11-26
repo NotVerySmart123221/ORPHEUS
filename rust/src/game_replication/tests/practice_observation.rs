@@ -315,10 +315,12 @@ fn exercise_final_blow_effect(projectile: bool) {
                     id,
                     vec![AdmittedFlight {
                         token,
+                        launch_frame: context.tick,
                         flight,
                         stun: None,
                         hit_effect: None,
                         impact_spawn: None,
+                        presentation: None,
                     }],
                     context,
                     |_| true,

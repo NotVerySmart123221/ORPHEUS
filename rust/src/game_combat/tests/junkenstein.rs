@@ -889,6 +889,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
             };
             admitted.push(AdmittedFlight {
                 token,
+                launch_frame: projectile.shot.frame,
                 flight,
                 stun: projectile.stun,
                 hit_effect: Some(crate::script_init::Site {
@@ -898,6 +899,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                     node: Some(7),
                 }),
                 impact_spawn: None,
+                presentation: None,
             });
             launches += 1;
         }

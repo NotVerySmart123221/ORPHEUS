@@ -251,6 +251,18 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("kinematics control state");
                         self.tick_kinematics_control(key, node, mode)?;
                     }
+                    Some(StateKind::MoveTo {
+                        movement: Some((destination, speed)),
+                    }) => {
+                        self.tick_move_to(key, destination, speed)?;
+                    }
+                    Some(StateKind::EntityStatus { mode }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("entity status state");
+                        self.begin_entity_status(key, node, mode)?;
+                    }
                     Some(StateKind::PlacementCast { .. }) => {
                         let node = self
                             .graph(id)

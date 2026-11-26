@@ -223,7 +223,7 @@ impl WorldDelivery {
 
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
-        let is_owner_controller = entity == self.owner;
+        let is_owner_or_mode = entity == self.owner || entity == GAME_MODE_ENTITY;
         let live_bot = self.tracks_current_bot(entity);
         let live_remote = self
             .remote_players
@@ -233,7 +233,7 @@ impl WorldDelivery {
             body.id.entity == entity
                 && self.bodies.get(&entity) == Some(&(body.id.generation, Lifetime::Live))
         });
-        if !is_owner_controller && !live_bot && !live_remote && !live_body {
+        if !is_owner_or_mode && !live_bot && !live_remote && !live_body {
             return;
         }
         self.health_revision = self.health_revision.wrapping_add(1);
@@ -411,7 +411,15 @@ impl WorldDelivery {
             Delivery::ObservedProjectile { id, step } => {
                 self.observed_projectiles.current(id, step)
                     && (step != super::observed_projectiles::ProjectileDelivery::Launch
-                        || self.tracks_current_bot(entity))
+                        || self.tracks_current_bot(entity)
+                        || self
+                            .remote_players
+                            .get(&entity)
+                            .is_some_and(|&(_, life)| life == BotLifetime::Live)
+                        || self
+                            .body_script
+                            .as_ref()
+                            .is_some_and(|s| s.id.entity == entity && self.owner_body_ready(s.id)))
             }
             Delivery::Script {
                 last, close: true, ..
@@ -762,7 +770,11 @@ impl WorldDelivery {
                     {
                         return None;
                     }
-                    Delivery::Health { .. } if !self.identity_ready(record.update.entity) => {
+                    Delivery::Health { .. }
+                        if record.update.entity != self.owner
+                            && record.update.entity != GAME_MODE_ENTITY
+                            && !self.identity_ready(record.update.entity) =>
+                    {
                         return None;
                     }
                     Delivery::CreateBody(id) if Some(id) == body => created = true,
@@ -1316,8 +1328,8 @@ impl WorldDelivery {
                 .map_err(invalid)?;
             if bot {
                 snapshot.stage_practice_nameplates((!bot_dead).then_some(base), can_introduce);
-                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
+            self.observed_projectiles.retain_volleys(&mut snapshot);
             let delta = encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
                 .map_err(invalid)?;
@@ -1331,8 +1343,8 @@ impl WorldDelivery {
                 .map_err(invalid)?;
             if bot {
                 snapshot.stage_practice_nameplates(None, false);
-                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
+            self.observed_projectiles.retain_volleys(&mut snapshot);
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
         if let Some(chunk) = chunk {

@@ -729,15 +729,19 @@ impl Room {
                 if (!leave && peer.world.combat_body_active()) || settled_shots {
                     let (bots, queries) = world.scene.bot_simulation();
                     bots.activate_combat();
+                    let mut settled_hits = Vec::new();
                     for (shot, policy) in shots {
                         if let Some(hit) =
                             bots.hitscan_with_policy(&queries, shot, policy, context, |entity| {
                                 peer.world.actor_contact_ready(entity)
                             })?
                         {
-                            bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
-                            peer.bot_hit(hit);
+                            settled_hits.push(hit);
                         }
+                    }
+                    bots.deliver_coalesced_hits(peer.world.owner(), &settled_hits);
+                    for hit in settled_hits {
+                        peer.bot_hit(hit);
                     }
                 }
                 // A batch may have yielded before a body selection so these

@@ -523,20 +523,31 @@ fn assert_native_received_damage(
     let normal = ray.map(|(_, normal)| normal);
     let simulation = room.world.as_ref().unwrap().scene.simulation();
     let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
-    assert_eq!(
-        peer.pending_combat_notices().copied().collect::<Vec<_>>(),
-        [CombatNotice::DamageReceived {
-            source: source.entity,
-            victim: victim.entity,
-            dealt: damage as f32,
-            origin,
-            normal,
-            contact_set: 0,
+    let notices: Vec<_> = peer.pending_combat_notices().copied().collect();
+    let [
+        CombatNotice::DamageReceived {
+            source: actual_source,
+            victim: actual_victim,
+            dealt: actual_dealt,
+            origin: actual_origin,
+            impact_point,
+            normal: actual_normal,
+            contact_set: actual_contact_set,
             critical: false,
             armor_or_shield: false,
             special_vfx: false,
-        }]
-    );
+        },
+    ] = notices.as_slice()
+    else {
+        panic!("unexpected pending damage notices: {notices:?}");
+    };
+    assert_eq!(*actual_source, source.entity);
+    assert_eq!(*actual_victim, victim.entity);
+    assert_eq!(*actual_dealt, damage as f32);
+    assert_eq!(*actual_origin, origin);
+    let expected_impact = impact_point.expect("victim impact point");
+    assert_eq!(*actual_normal, normal);
+    assert_eq!(*actual_contact_set, 0);
     peer.flush_combat(schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
         .unwrap();
     assert!(!peer.egress.has_queued_reliable());
@@ -565,7 +576,7 @@ fn assert_native_received_damage(
                 assert_eq!(event.message.fields[&0x78], Value::Signed(1));
                 for (offset, xyz) in [
                     (0x84, normal.unwrap_or_default()),
-                    (0x90, [0.0; 3]),
+                    (0x90, expected_impact),
                     (0x9c, origin.unwrap_or_default()),
                 ] {
                     assert_eq!(

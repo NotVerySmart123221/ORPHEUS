@@ -314,7 +314,17 @@ impl ProjectedSnapshot {
                     instance.graph == event.graph && instance.parent == volley.parent
                 })
                 .is_some_and(|instance| {
-                    instance.states.get(&event.raw_state) == Some(&volley.state)
+                    let state_matches = if self.view == View::Owner {
+                        instance.states.get(&event.raw_state).is_some_and(|s| {
+                            s.active == volley.state.active
+                                && s.volley.map(|v| v.identity)
+                                    == volley.state.volley.map(|v| v.identity)
+                                && s.payload.get("volleys") == volley.state.payload.get("volleys")
+                        })
+                    } else {
+                        instance.states.get(&event.raw_state) == Some(&volley.state)
+                    };
+                    state_matches
                         && volley
                             .extra_states
                             .iter()

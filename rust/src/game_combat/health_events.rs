@@ -266,7 +266,54 @@ impl RoomSimulation {
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
     pub(super) fn flush_health_events(&mut self) {
-        while let Some(change) = self.health_events.pending.pop_front() {
+        while let Some(mut change) = self.health_events.pending.pop_front() {
+            // Coalesce multi-pellet weapon impacts sharing the same `(source, target, damage_frame)`
+            // so shotguns deliver one consolidated `HostEvent::HealthApplied` + hit cue per volley.
+            if change.delta < 0.0
+                && change.critical_hit.is_some()
+                && change.damage_frame.is_some()
+                && change.source.is_some_and(|s| s != change.target)
+            {
+                let mut rest = VecDeque::with_capacity(self.health_events.pending.len());
+                while let Some(next) = self.health_events.pending.pop_front() {
+                    if next.source == change.source
+                        && next.target == change.target
+                        && next.delta < 0.0
+                        && next.critical_hit.is_some()
+                        && next.damage_frame == change.damage_frame
+                    {
+                        change.delta += next.delta;
+                        change.killed |= next.killed;
+                        change.critical_hit = Some(
+                            change.critical_hit.unwrap_or(false)
+                                || next.critical_hit.unwrap_or(false),
+                        );
+                        if next.killed && next.target_facts.is_some() {
+                            change.target_facts = next.target_facts;
+                        }
+                        if let Some(more_losses) = next.named_pool_losses {
+                            let mut combined: Vec<NamedPoolLoss> = change
+                                .named_pool_losses
+                                .as_deref()
+                                .map_or_else(Vec::new, <[NamedPoolLoss]>::to_vec);
+                            for loss in more_losses.iter() {
+                                if let Some(prev) = combined
+                                    .iter_mut()
+                                    .find(|l| l.identifier == loss.identifier)
+                                {
+                                    prev.amount += loss.amount;
+                                } else {
+                                    combined.push(loss.clone());
+                                }
+                            }
+                            change.named_pool_losses = Some(Arc::from(combined));
+                        }
+                    } else {
+                        rest.push_back(next);
+                    }
+                }
+                self.health_events.pending = rest;
+            }
             if let Some((event, receivers)) = change.resolve(self) {
                 let HostEvent::HealthApplied { source, .. } = event;
                 // Resolve keeps verified source attribution even for a self-change,
@@ -338,9 +385,21 @@ impl RoomSimulation {
         // A full or halted VM only drops its own notification.
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
             if state.alive() {
+                let HostEvent::HealthApplied { target, killed, .. } = event;
+                let allow_hit_feedback = match (context.critical_hit, context.damage_frame) {
+                    (Some(crit), Some(frame))
+                        if context
+                            .source_body
+                            .is_some_and(|source| source.generation == entity.to_bits()) =>
+                    {
+                        state.should_emit_hit_feedback(target, frame, crit, killed)
+                    }
+                    _ => true,
+                };
                 if let Some(runtime) = &mut state.runtime {
                     if let Some(variant) = self.health_events.authored_hit_variant.filter(|_| {
-                        context.critical_hit.is_some()
+                        allow_hit_feedback
+                            && context.critical_hit.is_some()
                             && context
                                 .source_body
                                 .is_some_and(|source| source.generation == entity.to_bits())

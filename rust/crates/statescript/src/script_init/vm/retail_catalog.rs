@@ -418,6 +418,7 @@ const FIELD_DRIVEN_ACTIONS: &[&str] = &[
     "STU_6ED4837F",
     "STU_6F58B02E",
     "STU_6FCB5BE9",
+    "STU_6FEE499E",
     "STU_769EDF95",
     "STU_78DD6BC6",
     "STU_78FBD28B",

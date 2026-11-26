@@ -105,6 +105,7 @@ impl ProjectileView {
     fn retire(
         &mut self,
         through: u32,
+        real_through: u32,
         all: bool,
         mut queue: impl FnMut(EntityUpdate, ProjectileDelivery),
     ) {
@@ -116,7 +117,14 @@ impl ProjectileView {
                     frame,
                     impact,
                     point,
-                } => (all || frame <= through, impact.then_some((frame, point))),
+                } => {
+                    let horizon = if impact && point.is_some() {
+                        through.max(real_through)
+                    } else {
+                        through
+                    };
+                    (all || frame <= horizon, impact.then_some((frame, point)))
+                }
             };
             if due {
                 *flight = Flight::Retiring;
@@ -294,7 +302,15 @@ impl ObservedProjectiles {
 impl WorldDelivery {
     pub(crate) fn observe_projectiles(&mut self, events: &[ObservedProjectileEvent]) {
         if self.world_started() {
+            let local_body = self.body.map(|b| b.id.entity);
             for event in events {
+                if let ObservedProjectileEvent::Launched { presentation, .. } = event {
+                    if presentation.skip_owner
+                        && local_body == Some(presentation.volley.event.entity)
+                    {
+                        continue;
+                    }
+                }
                 self.observed_projectiles.apply(event);
             }
         }
@@ -306,6 +322,17 @@ impl WorldDelivery {
         }
         let mut records = Vec::new();
         let mut clear = Vec::new();
+        let owner_ready_body = self
+            .body_script
+            .as_ref()
+            .filter(|script| self.owner_body_ready(script.id))
+            .map(|script| script.id.entity);
+        let owner_base = self.body_script.as_ref().and_then(|script| {
+            script
+                .stream
+                .base()
+                .map(|(_, base)| (script.id.entity, base))
+        });
         let tracker = &mut self.observed_projectiles;
         for (&id, view) in &mut tracker.views {
             let mut queue = |update, step| {
@@ -315,12 +342,18 @@ impl WorldDelivery {
                 });
             };
             let source = view.source();
-            let live = self.bots.get(&source) == Some(&super::BotLifetime::Live);
+            let live = self.bots.get(&source) == Some(&super::BotLifetime::Live)
+                || self
+                    .remote_players
+                    .get(&source)
+                    .is_some_and(|&(_, life)| life == super::BotLifetime::Live)
+                || owner_ready_body == Some(source);
             let base = self
                 .scene_views
                 .get(&source)
                 .and_then(|stream| stream.base())
-                .map(|(_, base)| base);
+                .map(|(_, base)| base)
+                .or_else(|| owner_base.and_then(|(ent, base)| (ent == source).then_some(base)));
             let completed = view.completed_at();
             let deadline = completed
                 .unwrap_or_else(|| view.shot.launched.saturating_add(view.shot.lifetime_ticks))
@@ -390,7 +423,8 @@ impl WorldDelivery {
                             .launched
                             .saturating_add(tick.saturating_sub(sent_at))
                             .saturating_add(lookahead);
-                        view.retire(through, false, &mut queue);
+                        let real_through = tick.saturating_add(lookahead);
+                        view.retire(through, real_through, false, &mut queue);
                     }
                     false
                 }
@@ -402,7 +436,7 @@ impl WorldDelivery {
                 }
             };
             if retire {
-                view.retire(tick, true, &mut queue);
+                view.retire(tick, tick, true, &mut queue);
             }
         }
         for id in clear {
@@ -634,6 +668,7 @@ mod tests {
                 direction: [0.0, 0.0, 1.0],
                 launched: launch,
                 lifetime_ticks: 30,
+                skip_owner: false,
             }),
             count: input.count,
         }]);
@@ -874,6 +909,7 @@ mod tests {
                     direction: [0.0, 0.0, 1.0],
                     launched: 100,
                     lifetime_ticks: 10,
+                    skip_owner: false,
                 }),
                 count: 1,
             },

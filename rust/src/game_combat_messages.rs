@@ -48,6 +48,7 @@ pub enum CombatNotice {
         victim: u32,
         dealt: f32,
         origin: Option<Vec3>,
+        impact_point: Option<Vec3>,
         normal: Option<Vec3>,
         contact_set: u16,
         critical: bool,
@@ -237,6 +238,7 @@ impl CombatNotice {
                 victim,
                 dealt,
                 origin,
+                impact_point,
                 normal,
                 contact_set,
                 critical,
@@ -259,7 +261,7 @@ impl CombatNotice {
                         (0x80, entity(victim)),
                         // The contact effect turns the outward normal inward.
                         (0x84, vector(normal)),
-                        (0x90, vector(None)),
+                        (0x90, vector(impact_point)),
                         // The direction indicator subtracts the view position.
                         (0x9c, vector(origin)),
                         (

@@ -689,6 +689,7 @@ impl StockBotScript {
                 let params = Variables::from([
                     (0x13, Value::Float(f64::from(dealt as f32))),
                     (0x3d, Value::Array(Vec::new())),
+                    (0x65, Value::Bool(false)),
                 ]);
                 if self.component.queue_entity_message_from(
                     source.killer,

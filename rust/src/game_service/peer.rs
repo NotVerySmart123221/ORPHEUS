@@ -215,7 +215,9 @@ impl Peer {
                 .recent_hit_notices
                 .iter_mut()
                 .rev()
-                .find(|entry| entry.0 == body && entry.1 == target && entry.2 == shot_frame)
+                .find(|entry| {
+                    entry.0 == body && entry.1 == target && entry.2.abs_diff(shot_frame) <= 2
+                })
             {
                 let upgrades_audio = (critical && !recent.3) || (killed && !recent.4);
                 recent.3 |= critical;

@@ -2482,6 +2482,7 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             sticky_delay: None,
             direct_effect: None,
             blast_effect: None,
+            presentation: None,
         },
         launches,
     );
@@ -2577,6 +2578,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 sticky_delay: None,
                 direct_effect: None,
                 blast_effect: None,
+                presentation: None,
             },
             launches,
         );
@@ -3426,15 +3428,18 @@ fn fixture_projectile_flight(
         sticky_delay: None,
         direct_effect: None,
         blast_effect: None,
+        presentation: None,
     };
     let flight =
         ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();
     AdmittedFlight {
         token,
+        launch_frame: posed.shot.frame,
         flight,
         stun: None,
         hit_effect: None,
         impact_spawn: None,
+        presentation: None,
     }
 }
 

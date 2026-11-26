@@ -84,6 +84,7 @@ pub(crate) struct PlayerBodyState {
     pub(crate) last_buttons: u32,
     pub(crate) pending_pressed_buttons: u32,
     pub(crate) pending_released_buttons: u32,
+    pub(super) recent_hit_feedback: std::collections::VecDeque<(u32, u32, bool, bool)>,
 }
 
 impl PlayerBodyState {
@@ -122,7 +123,34 @@ impl PlayerBodyState {
             last_buttons: 0,
             pending_pressed_buttons: 0,
             pending_released_buttons: 0,
+            recent_hit_feedback: std::collections::VecDeque::new(),
         }
+    }
+
+    pub(super) fn should_emit_hit_feedback(
+        &mut self,
+        target: u32,
+        frame: u32,
+        critical: bool,
+        killed: bool,
+    ) -> bool {
+        if let Some(entry) = self
+            .recent_hit_feedback
+            .iter_mut()
+            .rev()
+            .find(|e| e.0 == target && e.1.abs_diff(frame) <= 2)
+        {
+            let upgrades = (critical && !entry.2) || (killed && !entry.3);
+            entry.2 |= critical;
+            entry.3 |= killed;
+            return upgrades;
+        }
+        if self.recent_hit_feedback.len() >= 32 {
+            self.recent_hit_feedback.pop_front();
+        }
+        self.recent_hit_feedback
+            .push_back((target, frame, critical, killed));
+        true
     }
 
     pub(crate) fn with_body_template(mut self, body_template: u64) -> Self {
@@ -674,6 +702,34 @@ impl RoomSimulation {
                     id.entity
                 );
             }
+        }
+    }
+
+    pub(crate) fn deliver_coalesced_hits(&mut self, owner: u32, hits: &[BotHit]) {
+        let mut merged: Vec<AppliedDamage> = Vec::new();
+        for hit in hits {
+            if let Some(existing) = merged.iter_mut().find(|d| {
+                d.source == hit.damage.source
+                    && d.target_facts.target == hit.damage.target_facts.target
+            }) {
+                existing.amount += hit.damage.amount;
+                for loss in &hit.damage.named_pool_losses {
+                    if let Some(prev) = existing
+                        .named_pool_losses
+                        .iter_mut()
+                        .find(|l| l.identifier == loss.identifier)
+                    {
+                        prev.amount += loss.amount;
+                    } else {
+                        existing.named_pool_losses.push(loss.clone());
+                    }
+                }
+            } else {
+                merged.push(hit.damage.clone());
+            }
+        }
+        for damage in merged {
+            self.deliver_applied_damage(owner, damage);
         }
     }
 
