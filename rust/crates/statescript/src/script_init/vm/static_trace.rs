@@ -661,8 +661,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // aim sailed over this edge — measure it, do not widen for it
         }
         let anchor = add(origin, scaled(direction, crossing));
-        if let Some(sight) = self.ray(site, origin, direction, crossing + 0.05, category)
-            && gap(sight.point, anchor) > 0.05
+        if self
+            .ray(site, origin, direction, crossing + 0.05, category)
+            .is_some_and(|sight| gap(sight.point, anchor) > 0.05)
         {
             return Err("sight-blocked"); // unrelated geometry between eye and edge
         }
@@ -784,8 +785,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let over = [centre[0], centre[1] + radius, centre[2]];
         let roof_plane =
             |point: Vec3| has_face && dot(face, add(point, scaled(on_face, -1.0))).abs() > 1e-3;
-        if let Some(roof) = self.ray(site, over, [0.0, 1.0, 0.0], radius + segment, category)
-            && roof_plane(roof.point)
+        if self
+            .ray(site, over, [0.0, 1.0, 0.0], radius + segment, category)
+            .is_some_and(|roof| roof_plane(roof.point))
         {
             return false; // a real roof within the lift
         }
