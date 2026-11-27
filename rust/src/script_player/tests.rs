@@ -279,7 +279,7 @@ fn owner_reports_absent_host_contexts_only_for_valid_own_body() {
 }
 
 #[test]
-fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
+fn cassidy_fan_rules_follow_junkenstein_and_practice_range_defaults() {
     let (factory, spawn) = fixture_body_factory();
     let mut runtime = factory.start(spawn).unwrap();
     let world = &mut runtime.world;
@@ -292,7 +292,8 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
     world.hero = CASSIDY;
     world.mode = PRACTICE_RANGE_MODE;
-    assert_eq!(world.ruleset(0x290c), None);
+    assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
+    assert_eq!(world.ruleset(0x290b), None);
 }
 
 #[test]
