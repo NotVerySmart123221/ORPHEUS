@@ -5,7 +5,7 @@ use crate::{
     contact_world::ContactWorld,
     game_clock::FIRST_TICK,
     game_content::GameMap,
-    game_heroes::SOLDIER,
+    game_heroes::{CASSIDY, SOLDIER},
     game_instance::RETAIL_QUANTA,
     game_parameters::{CLIENT_GAME_MESSAGE, PICK_HERO},
     jam_codec::{Fields, Value},
@@ -27,6 +27,7 @@ mod npc_chunk_delivery;
 pub(crate) mod owner_effects;
 mod owner_fault_shields;
 mod owner_model;
+mod owner_reselection;
 mod owner_swept_motion;
 mod owner_synchronous_fault;
 mod owner_walk;
@@ -128,6 +129,7 @@ fn bot_health_replaces_stale_packets_and_respawn_keeps_creation_order() {
     world.replace_bot(BotReplacement {
         retired: old,
         created: create(new),
+        waits_for_presentation: false,
     });
     assert!(!world.identity_ready(old));
     let ready = world.ready();
@@ -421,7 +423,8 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     assert!(live_base.has_graph(0x0c18));
     assert!(!live_base.has_graph(0x0d24));
 
-    // Once mode_ready() flips true, live bot receives 0x0D24 via observer delta.
+    // Once mode_ready() flips true, a live bot can stage the introduction.
+    // Death before transmission supersedes that pending projection.
     let mode_chunk = world.mode.full(&crate::bits::BitWriter::new()).unwrap();
     assert!(world.mode.arrived(mode_chunk.last));
     assert!(world.mode_ready());
@@ -436,10 +439,24 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
         )
         .unwrap();
     let live_delta_record = world.ready()[0].tracked();
-    world.sent(&eligible(&world));
-    world.acknowledge(outcome(live_delta_record, true), Duration::ZERO);
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: &live,
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        world
+            .ready()
+            .iter()
+            .any(|record| Arc::ptr_eq(&live_delta_record, &record.tracked())),
+        expected("unsent_introduction_remains_queued_after_death")
+    );
     let (_, live_after) = world.scene_views[&live_entity].base().unwrap();
-    assert!(live_after.has_graph(0x0d24));
+    assert!(!live_after.has_graph(0x0d24));
 
     // Mode was ready before this bot's first script frame. Its parent still
     // needs an ACK before the nameplate can use that baseline.
@@ -503,6 +520,28 @@ fn bot_practice_nameplates_wait_for_mode_and_body_acknowledgments() {
     assert_eq!(
         caught_up.entity_variables().contains_key(&unrelated),
         expected("following_delta_has_concurrent_entity_variable")
+    );
+
+    world
+        .present_scene_script_with_dead(
+            SceneProjection {
+                snapshot: &later_live,
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            },
+            true,
+        )
+        .unwrap();
+    let retirement = world.ready()[0].tracked();
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(Arc::clone(&retirement), false), Duration::ZERO);
+    assert!(Arc::ptr_eq(&retirement, &world.ready()[0].tracked()));
+    world.sent(&eligible(&world));
+    world.acknowledge(outcome(retirement, true), Duration::ZERO);
+    let (_, corpse) = world.scene_views[&later_live_entity].base().unwrap();
+    assert!(corpse.has_graph(0x0c18));
+    assert_eq!(
+        corpse.has_graph(0x0d24),
+        expected("acknowledged_nameplate_survives_death_delta")
     );
 
     // An already-dead bot without a prior 0x0D24 never gets one even after mode_ready().
@@ -1213,7 +1252,7 @@ struct SyntheticOwner {
     snapshot_override: Option<Snapshot>,
     graphs: Arc<GraphStore>,
     codecs: CodecTable,
-    modifiers: BTreeMap<ModifierKey, Modifier>,
+    modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     failed: Arc<AtomicBool>,
     health_update: Arc<Mutex<Option<WorldComponent>>>,
     vitals: Option<crate::vitals::Vitals>,
@@ -1235,6 +1274,34 @@ impl OwnerBodyRuntime for SyntheticOwner {
         // This probe runtime carries no state table; a lifecycle begin is
         // a loud error rather than a silent no-op.
         Err(crate::script_init::InitFault::InvalidRoot(_instance))
+    }
+
+    fn receive_applied_damage(&mut self, _: crate::game_combat::AppliedDamage) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn receive_host_event(
+        &mut self,
+        _: crate::script_init::HostEvent,
+        _: crate::script_init::HostHealthContext,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+
+    fn receive_authored_hit_feedback(
+        &mut self,
+        _: crate::script_init::HostEvent,
+        _: &crate::script_init::HostHealthContext,
+        _: f32,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
+    }
+
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        _: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        Ok(0)
     }
 
     fn authored_facing(&self) -> Option<[i32; 2]> {
@@ -1262,8 +1329,15 @@ impl OwnerBodyRuntime for SyntheticOwner {
         Ok(1)
     }
 
-    fn queue_local_message(&mut self, message: RoomMessage) -> Result<usize, InitFault> {
-        self.receive_room_message(self.component.snapshot().unwrap().entity, message)
+    fn queue_wheel_selection(
+        &mut self,
+        action: ClientWheelAction,
+        _command_frame: Option<u32>,
+    ) -> Result<usize, InitFault> {
+        self.receive_room_message(
+            self.component.snapshot().unwrap().entity,
+            action.into_local_message(),
+        )
     }
 
     fn wheel_actions_available(&self) -> bool {
@@ -1342,7 +1416,7 @@ impl OwnerBodyRuntime for SyntheticOwner {
     }
 
     fn movement_modifiers(&self) -> Option<&BTreeMap<ModifierKey, Modifier>> {
-        Some(&self.modifiers)
+        self.modifiers.as_ref()
     }
 
     fn take_shots(&mut self, command: Option<Command>, _mover: &Mover) -> Vec<PosedShot> {
@@ -1396,7 +1470,7 @@ fn synthetic_owner_with_vitals(
         snapshot_override: None,
         graphs,
         codecs: CodecTable::from_json(r#"{"classes":{}}"#).unwrap(),
-        modifiers: BTreeMap::new(),
+        modifiers: Some(BTreeMap::new()),
         failed,
         health_update: Arc::default(),
         vitals,
@@ -1514,6 +1588,29 @@ fn activate_script(
     hero: u64,
     failed: Arc<AtomicBool>,
 ) {
+    let runtime = synthetic_owner(id.entity, world.input.processed.unwrap_or(100), failed);
+    activate_synthetic_runtime(world, simulation, id, hero, runtime);
+}
+
+fn activate_script_without_movement_projection(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    id: BodyId,
+    hero: u64,
+    failed: Arc<AtomicBool>,
+) {
+    let mut runtime = synthetic_owner(id.entity, world.input.processed.unwrap_or(100), failed);
+    runtime.modifiers = None;
+    activate_synthetic_runtime(world, simulation, id, hero, runtime);
+}
+
+fn activate_synthetic_runtime(
+    world: &mut WorldDelivery,
+    simulation: &mut RoomSimulation,
+    id: BodyId,
+    hero: u64,
+    runtime: SyntheticOwner,
+) {
     let body = Body { hero, ..body(id) };
     world.body = Some(body);
     world.bound = None;
@@ -1522,7 +1619,6 @@ fn activate_script(
         .insert(id.entity, (id.generation, Lifetime::Live));
     world.created.remove(&id.entity);
     let frame = world.input.processed.unwrap_or(100);
-    let runtime = synthetic_owner(id.entity, frame, failed);
     world.body_script =
         Some(BodyScript::new(body, frame, world.input.processed, &runtime).unwrap());
     let state = PlayerBodyState::new(
@@ -1687,7 +1783,7 @@ fn queued_hitscan_settles_before_a_hero_or_skin_replacement() {
             assert_eq!(world.command_ack(frame), frame);
             assert_eq!(world.active_body_id(), Some(shot_body));
             let shots = world.take_hitscan(scene.simulation_mut());
-            let [shot] = shots.as_slice() else {
+            let [(shot, _)] = shots.as_slice() else {
                 panic!("expected exactly one pending shot from the old player body");
             };
             assert_eq!((shot.source, shot.shot_frame), (shot_body.entity, frame));
@@ -1706,7 +1802,7 @@ fn queued_hitscan_settles_before_a_hero_or_skin_replacement() {
                 )
                 .unwrap()
                 .unwrap();
-            assert_eq!(hit.health.entity, target.entity);
+            assert_eq!(hit.damage.target_facts.target, target.entity);
 
             assert_eq!(
                 world
@@ -1894,7 +1990,7 @@ fn successful_hitscan_survives_owner_vm_fault_before_body_replacement() {
                 .unwrap();
             assert!((1..=budget).contains(&used));
             assert!(!leave);
-            for shot in world.take_hitscan(scene.simulation_mut()) {
+            for (shot, _) in world.take_hitscan(scene.simulation_mut()) {
                 assert_eq!(world.active_body_id(), Some(shooter));
                 assert_eq!((shot.source, shot.shot_frame), (shooter.entity, shot_frame));
                 let (simulation, queries) = scene.bot_simulation();
@@ -1902,7 +1998,7 @@ fn successful_hitscan_survives_owner_vm_fault_before_body_replacement() {
                     .hitscan(&queries, shot, context, |entity| entity == target.entity)
                     .unwrap()
                     .unwrap();
-                assert_eq!(hit.health.entity, target.entity);
+                assert_eq!(hit.damage.target_facts.target, target.entity);
                 settled += 1;
             }
         }
@@ -2389,6 +2485,15 @@ fn admitted_owner_projectile_preserves_gravity_and_expiry_blast() {
             origin: [0.0, 1.55, 0.0],
             direction: lifted_direction([0.0, 0.0, 1.0], 0.05).unwrap(),
             gravity: Some(20.0),
+            predicted: true,
+            target_policy: Default::default(),
+            piercing: false,
+            impact_spawn: None,
+            post_bounce_fuse: None,
+            sticky_delay: None,
+            direct_effect: None,
+            blast_effect: None,
+            presentation: None,
         },
         launches,
     );
@@ -2452,6 +2557,7 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
             PosedProjectile {
                 stun: None,
                 gravity: None,
+                predicted: true,
                 shot: ShotEvent {
                     entity: id.entity,
                     instance: 1,
@@ -2476,6 +2582,14 @@ fn room_flight_outcomes_release_only_the_current_owner_alias() {
                 },
                 origin: [0.0; 3],
                 direction: [1.0, 0.0, 0.0],
+                target_policy: Default::default(),
+                piercing: false,
+                impact_spawn: None,
+                post_bounce_fuse: None,
+                sticky_delay: None,
+                direct_effect: None,
+                blast_effect: None,
+                presentation: None,
             },
             launches,
         );
@@ -2642,7 +2756,7 @@ fn body_script_retries_frozen_initial_frames_and_ignores_old_generation_reports(
     let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     let id = avatar(1, 1);
     world.started = Some(100);
-    activate_script(&mut world, &mut simulation, id, 7, Arc::default());
+    activate_script_without_movement_projection(&mut world, &mut simulation, id, 7, Arc::default());
     world.push(record(id.entity, Delivery::CreateBody(id)));
     let mut egress = GameEgress::default();
     assert_eq!(
@@ -2800,7 +2914,13 @@ fn command_ack_survives_replacing_a_body_without_a_correction_history() {
     let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
     let mut egress = GameEgress::default();
     world.started = Some(tick);
-    activate_script(&mut world, &mut simulation, avatar(1, 1), 7, Arc::default());
+    activate_script_without_movement_projection(
+        &mut world,
+        &mut simulation,
+        avatar(1, 1),
+        7,
+        Arc::default(),
+    );
     world.input.processed = Some(processed);
     let (previous, _) = transmit(&mut world, Some(&mut simulation), &mut egress, tick, 0);
     assert_eq!(read_ack(&previous), processed);
@@ -2858,7 +2978,7 @@ fn command_ack_survives_replacing_a_body_without_a_correction_history() {
 
 #[test]
 fn owner_correction_respects_create_budget_and_failed_transport() {
-    for hero in [SOLDIER, CASSIDY] {
+    for hero in [SOLDIER, CASSIDY, 0x02e0_0000_0000_0002] {
         let mut world = WorldDelivery::new(OWNER);
         let mut simulation = RoomSimulation::new(Vec::new()).unwrap();
         let id = avatar(1, 1);
@@ -3281,6 +3401,7 @@ fn fixture_projectile_flight(
     let posed = PosedProjectile {
         stun: None,
         gravity: None,
+        predicted: true,
         shot: ShotEvent {
             entity: owner.entity,
             instance: 1,
@@ -3311,14 +3432,25 @@ fn fixture_projectile_flight(
         },
         origin: [0.0, 1.0, 0.0],
         direction: [1.0, 0.0, 0.0],
+        target_policy: Default::default(),
+        piercing: false,
+        impact_spawn: None,
+        post_bounce_fuse: None,
+        sticky_delay: None,
+        direct_effect: None,
+        blast_effect: None,
+        presentation: None,
     };
     let flight =
         ProjectileFlight::new(posed.ballistics, posed.origin, posed.direction, None).unwrap();
     AdmittedFlight {
         token,
+        launch_frame: posed.shot.frame,
         flight,
         stun: None,
         hit_effect: None,
+        impact_spawn: None,
+        presentation: None,
     }
 }
 
@@ -3475,7 +3607,9 @@ fn owner_and_observer_share_one_authoritative_room_body() {
     assert_eq!(observer_movements.len(), 1);
     assert_eq!(observer_movements[0].movement, Some(moved_pose));
 
-    observer_world.queue_health(hit.health);
+    for update in simulation.take_scripted_health() {
+        observer_world.queue_health(update);
+    }
     assert!(observer_world.health_pending(id.entity));
     let observer_update_sent = observer_world
         .send_frame(
@@ -3739,7 +3873,7 @@ fn death_and_respawn_preserve_friendly_passthrough_and_hostile_blocking() {
     // Projectile along the same ray also passes friendly + dead hostile and kills back hostile.
     let flight = fixture_projectile_flight(shooter_id, context.tick, 1000.0, Some(90.0));
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, shooter_id, vec![flight], context)
+        .advance_projectiles(&queries, 7, shooter_id, vec![flight], context, |_| true)
         .unwrap();
     assert_eq!(outcomes.len(), 1);
     assert_eq!(hits.len(), 1);
@@ -4117,7 +4251,7 @@ fn body_replacement_rejects_stale_generation_mutations() {
     };
     let stale_flight = fixture_projectile_flight(id1, context.tick, 20.0, None);
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 9, id1, vec![stale_flight], context)
+        .advance_projectiles(&queries, 9, id1, vec![stale_flight], context, |_| true)
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
 
@@ -4245,6 +4379,7 @@ fn present_bot_controllers_sequences_creation_possession_and_respawn() {
     world.replace_bot(BotReplacement {
         retired: BOT_ENTITY,
         created: replacements[0].created.clone(),
+        waits_for_presentation: false,
     });
     // Possession waits until the respawned bot's create is acknowledged.
     world.present_bot_controllers(&scene).unwrap();

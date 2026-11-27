@@ -6,8 +6,8 @@ use orpheus_wire::commands::Command;
 use serde_json::{Value as Json, json};
 
 use crate::{
-    junkenstein_messages::DefenderMessage,
-    junkenstein_voice::{IntroCue, intro_cue, victory_cue},
+    pve_encounter::messages::DefenderMessage,
+    pve_encounter::voice::{IntroCue, intro_cue, victory_cue},
     script_expr::{self, EvalError, Scope},
     script_graph::GraphStore,
     script_init::{
@@ -158,7 +158,7 @@ mod tests {
                 {
                     return None;
                 }
-                crate::junkenstein_host::ordinary_hostility(
+                crate::pve_encounter::host::ordinary_hostility(
                     self.case["source_flags"].as_u64().unwrap_or(0x800001),
                     self.case["target_flags"].as_u64().unwrap_or(0x1000001),
                 )
@@ -193,7 +193,7 @@ mod tests {
         for (case, expected) in cases.iter().zip(results) {
             assert_eq!(case["name"], expected["name"]);
             if case["kind"] == "corpse" {
-                let actual = crate::junkenstein_host::common_corpse_due(
+                let actual = crate::pve_encounter::host::common_corpse_due(
                     guid(&case["hero"]),
                     case["death_frame"]
                         .as_u64()
@@ -499,7 +499,10 @@ mod tests {
             assert_eq!(world.0.len(), 1);
             let request = &world.0[0];
             assert_eq!(request.source, GAME_MODE_ENTITY);
-            assert_eq!(request.message, crate::junkenstein_messages::VICTORY_VIEW);
+            assert_eq!(
+                request.message,
+                crate::pve_encounter::messages::VICTORY_VIEW
+            );
             let params: serde_json::Map<String, Json> = request
                 .parameters
                 .iter()

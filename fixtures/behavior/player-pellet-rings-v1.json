@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "case_id": "player-pellet-rings-v1",
+  "target_build": 104319,
+  "evidence": "synthetic player volley with the authored ring fields",
+  "cone_degrees": 6.0,
+  "rings": [[0.0, 1], [0.5, 2], [1.0, 3]],
+  "pellets": 6,
+  "damage_per_pellet": 7.0
+}

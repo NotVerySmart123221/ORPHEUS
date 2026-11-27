@@ -54,6 +54,33 @@ const INPUTS: [(u32, u8); 17] = [
     (0x040, 115),
 ];
 
+const DIRECTION_INPUTS: [(u8, u8); 4] = [
+    (0x01, 7),  // FORWARD
+    (0x02, 8),  // BACK
+    (0x04, 9),  // LEFT
+    (0x08, 10), // RIGHT
+];
+
+/// Pack signed forward/right throttles into 4 directional held-button bits.
+pub fn direction_bits(forward: i8, right: i8) -> u8 {
+    u8::from(forward > 0)
+        | (u8::from(forward < 0) << 1)
+        | (u8::from(right < 0) << 2)
+        | (u8::from(right > 0) << 3)
+}
+
+/// Logical edges for WASD/directional throttle inputs (buttons 7..=10).
+pub fn direction_edges(previous: u8, current: u8) -> impl Iterator<Item = ButtonEdge> {
+    DIRECTION_INPUTS
+        .into_iter()
+        .filter_map(move |(mask, button)| {
+            ((previous ^ current) & mask != 0).then_some(ButtonEdge {
+                button,
+                pressed: current & mask != 0,
+            })
+        })
+}
+
 /// Input record mask that can hold this logical button.
 pub fn held_button_mask(button: u8) -> Option<u32> {
     INPUTS
@@ -107,8 +134,14 @@ pub(crate) struct QueueFull {
 /// Each instance consumes events by timestamp. Within a timestamp, the
 /// caller selects a preferred group and preserves FIFO order within each group.
 #[derive(Clone)]
+struct Scheduled<E> {
+    event: E,
+    command_frame: Option<u32>,
+}
+
+#[derive(Clone)]
 pub(crate) struct Timeline<E> {
-    instances: BTreeMap<u16, BTreeMap<u64, VecDeque<E>>>,
+    instances: BTreeMap<u16, BTreeMap<u64, VecDeque<Scheduled<E>>>>,
     pending: usize,
     limit: usize,
 }
@@ -131,13 +164,26 @@ impl<E> Timeline<E> {
     }
 
     pub fn push(&mut self, instance: u16, due_ms: u64, event: E) -> Result<(), QueueFull> {
+        self.push_with_command_frame(instance, due_ms, event, None)
+    }
+
+    pub fn push_with_command_frame(
+        &mut self,
+        instance: u16,
+        due_ms: u64,
+        event: E,
+        command_frame: Option<u32>,
+    ) -> Result<(), QueueFull> {
         self.reserve(1)?;
         self.instances
             .entry(instance)
             .or_default()
             .entry(due_ms)
             .or_default()
-            .push_back(event);
+            .push_back(Scheduled {
+                event,
+                command_frame,
+            });
         self.pending += 1;
         Ok(())
     }
@@ -149,19 +195,33 @@ impl<E> Timeline<E> {
             .min()
     }
 
+    #[cfg(test)]
     pub fn pop_due(
         &mut self,
         instance: u16,
         now_ms: u64,
         preferred: impl FnMut(&E) -> bool,
     ) -> Option<E> {
+        self.pop_due_with_command_frame(instance, now_ms, preferred)
+            .map(|(event, _)| event)
+    }
+
+    pub fn pop_due_with_command_frame(
+        &mut self,
+        instance: u16,
+        now_ms: u64,
+        mut preferred: impl FnMut(&E) -> bool,
+    ) -> Option<(E, Option<u32>)> {
         let events = self.instances.get_mut(&instance)?;
         let mut next = events.first_entry()?;
         if *next.key() > now_ms {
             return None;
         }
         let queue = next.get_mut();
-        let index = queue.iter().position(preferred).unwrap_or(0);
+        let index = queue
+            .iter()
+            .position(|item| preferred(&item.event))
+            .unwrap_or(0);
         let event = queue.remove(index).expect("populated timestamp");
         if next.get().is_empty() {
             next.remove();
@@ -170,14 +230,14 @@ impl<E> Timeline<E> {
             self.instances.remove(&instance);
         }
         self.pending -= 1;
-        Some(event)
+        Some((event.event, event.command_frame))
     }
 
     pub fn retain(&mut self, instance: u16, mut keep: impl FnMut(u64, &E) -> bool) {
         if let Some(events) = self.instances.get_mut(&instance) {
             events.retain(|&due_ms, queued| {
                 let before = queued.len();
-                queued.retain(|event| keep(due_ms, event));
+                queued.retain(|event| keep(due_ms, &event.event));
                 self.pending -= before - queued.len();
                 !queued.is_empty()
             });
@@ -198,7 +258,7 @@ impl<E> Timeline<E> {
             .get(&instance)
             .into_iter()
             .flatten()
-            .flat_map(|(&due_ms, events)| events.iter().map(move |event| (due_ms, event)))
+            .flat_map(|(&due_ms, events)| events.iter().map(move |event| (due_ms, &event.event)))
     }
 }
 

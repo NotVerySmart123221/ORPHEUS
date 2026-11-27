@@ -46,7 +46,7 @@ mod tests {
     #[test]
     fn shared_junkenstein_validation_contract() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../fixtures/behavior/junkenstein-validation-v1.json"
+            "../../../fixtures/behavior/junkenstein-validation-v1.json"
         ))
         .unwrap();
         let temporary = tempfile::tempdir().unwrap();

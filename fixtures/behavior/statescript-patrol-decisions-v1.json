@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-patrol-decisions.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Existing server patrol policy migrated into the shared StateScript VM."
+  },
+  "input": {
+    "route_count": 4,
+    "waypoints": [3, 0, 1]
+  },
+  "expected": {
+    "spawn_wait_seconds": 3.0,
+    "release_wait_seconds": 1.2,
+    "next_waypoints": [0, 1, 2]
+  }
+}

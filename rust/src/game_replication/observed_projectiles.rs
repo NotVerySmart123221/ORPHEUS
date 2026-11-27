@@ -32,8 +32,19 @@ pub(super) enum ProjectileDelivery {
 enum Phase {
     AwaitingSource,
     Creating,
-    Launching,
-    Visible { since: Option<u32> },
+    Launching { sent_at: Option<u32> },
+    Visible { sent_at: u32 },
+    Retiring,
+}
+
+#[derive(Clone, Copy)]
+enum Flight {
+    Active,
+    Finished {
+        frame: u32,
+        impact: bool,
+        point: Option<[f32; 3]>,
+    },
     Retiring,
 }
 
@@ -42,7 +53,7 @@ struct ProjectileView {
     entities: Vec<u32>,
     pending: HashSet<u32>,
     phase: Phase,
-    finished: Option<u32>,
+    flights: Vec<Flight>,
     cancelled: bool,
 }
 
@@ -54,10 +65,10 @@ impl ProjectileView {
     fn track_record(&self, step: ProjectileDelivery) -> bool {
         match (self.phase, step) {
             (Phase::Creating, ProjectileDelivery::Create(entity))
-            | (Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
+            | (Phase::Visible { .. } | Phase::Retiring, ProjectileDelivery::Destroy(entity)) => {
                 self.pending.contains(&entity)
             }
-            (Phase::Launching, ProjectileDelivery::Launch) => true,
+            (Phase::Launching { .. }, ProjectileDelivery::Launch) => true,
             _ => false,
         }
     }
@@ -80,6 +91,65 @@ impl ProjectileView {
             ch2: Some(payload),
             ..EntityUpdate::default()
         })
+    }
+
+    fn completed_at(&self) -> Option<u32> {
+        self.flights
+            .iter()
+            .try_fold(0, |last, flight| match *flight {
+                Flight::Finished { frame, .. } => Some(last.max(frame)),
+                _ => None,
+            })
+    }
+
+    fn retire(
+        &mut self,
+        through: u32,
+        real_through: u32,
+        all: bool,
+        mut queue: impl FnMut(EntityUpdate, ProjectileDelivery),
+    ) {
+        for (&entity, flight) in self.entities.iter().zip(&mut self.flights) {
+            let (due, impact_info) = match *flight {
+                Flight::Retiring => (false, None),
+                Flight::Active => (all, None),
+                Flight::Finished {
+                    frame,
+                    impact,
+                    point,
+                } => {
+                    let boundary_pad =
+                        u32::from(point.is_none() && real_through % super::SEND_EVERY == 0);
+                    (
+                        all || frame <= through.saturating_add(boundary_pad),
+                        impact.then_some((frame, point)),
+                    )
+                }
+            };
+            if due {
+                *flight = Flight::Retiring;
+                self.pending.insert(entity);
+                queue(
+                    EntityUpdate {
+                        entity,
+                        operation: Some(Operation::Destroy),
+                        ch2: impact_info.and_then(|(frame, point)| match point {
+                            Some(pos) => projectile_wire::release_at(frame, pos, 1).ok(),
+                            None => projectile_wire::release(frame.saturating_add(4096), 1).ok(),
+                        }),
+                        ..Default::default()
+                    },
+                    ProjectileDelivery::Destroy(entity),
+                );
+            }
+        }
+        if self
+            .flights
+            .iter()
+            .all(|flight| matches!(flight, Flight::Retiring))
+        {
+            self.phase = Phase::Retiring;
+        }
     }
 }
 
@@ -114,7 +184,22 @@ impl ObservedProjectiles {
             ProjectileDelivery::Create(entity) | ProjectileDelivery::Destroy(entity) => {
                 view.pending.remove(&entity);
             }
-            ProjectileDelivery::Launch => view.phase = Phase::Visible { since: None },
+            ProjectileDelivery::Launch => {
+                if let Phase::Launching {
+                    sent_at: Some(sent_at),
+                } = view.phase
+                {
+                    view.phase = Phase::Visible { sent_at };
+                }
+            }
+        }
+    }
+
+    pub(super) fn launch_sent(&mut self, id: u64, tick: u32) {
+        if let Some(view) = self.views.get_mut(&id) {
+            if let Phase::Launching { sent_at } = &mut view.phase {
+                *sent_at = Some(tick);
+            }
         }
     }
 
@@ -125,7 +210,8 @@ impl ObservedProjectiles {
                 presentation,
                 count,
             } => {
-                if usize::from(*count) > MAX_ENTITIES.saturating_sub(self.reserved.len())
+                if *count == 0
+                    || usize::from(*count) > MAX_ENTITIES.saturating_sub(self.reserved.len())
                     || self.views.contains_key(id)
                 {
                     return;
@@ -149,17 +235,42 @@ impl ObservedProjectiles {
                         entities,
                         pending: HashSet::new(),
                         phase: Phase::AwaitingSource,
-                        finished: None,
+                        flights: vec![Flight::Active; usize::from(*count)],
                         cancelled: false,
                     },
                 );
             }
-            ObservedProjectileEvent::Completed { id, frame } => {
-                if let Some(view) = self.views.get_mut(id) {
-                    view.finished.get_or_insert(*frame);
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal,
+                frame,
+                impact,
+                point,
+            } => {
+                if let Some(flight @ Flight::Active) = self
+                    .views
+                    .get_mut(id)
+                    .and_then(|view| view.flights.get_mut(*ordinal))
+                {
+                    *flight = Flight::Finished {
+                        frame: *frame,
+                        impact: *impact,
+                        point: *point,
+                    };
                 }
             }
         }
+    }
+
+    pub(super) fn has_active_volleys_for(&self, source: u32) -> bool {
+        self.views.values().any(|view| {
+            view.source() == source
+                && !view.cancelled
+                && matches!(
+                    view.phase,
+                    Phase::AwaitingSource | Phase::Creating | Phase::Launching { .. }
+                )
+        })
     }
 
     pub(super) fn retain_volleys(&self, snapshot: &mut ProjectedSnapshot) {
@@ -171,7 +282,7 @@ impl ObservedProjectiles {
                 && !view.cancelled
                 && matches!(
                     view.phase,
-                    Phase::AwaitingSource | Phase::Creating | Phase::Launching
+                    Phase::AwaitingSource | Phase::Creating | Phase::Launching { .. }
                 )
         }) {
             let volley = &view.shot.volley;
@@ -191,7 +302,15 @@ impl ObservedProjectiles {
 impl WorldDelivery {
     pub(crate) fn observe_projectiles(&mut self, events: &[ObservedProjectileEvent]) {
         if self.world_started() {
+            let local_body = self.body.map(|b| b.id.entity);
             for event in events {
+                if let ObservedProjectileEvent::Launched { presentation, .. } = event {
+                    if presentation.skip_owner
+                        && local_body == Some(presentation.volley.event.entity)
+                    {
+                        continue;
+                    }
+                }
                 self.observed_projectiles.apply(event);
             }
         }
@@ -203,6 +322,17 @@ impl WorldDelivery {
         }
         let mut records = Vec::new();
         let mut clear = Vec::new();
+        let owner_ready_body = self
+            .body_script
+            .as_ref()
+            .filter(|script| self.owner_body_ready(script.id))
+            .map(|script| script.id.entity);
+        let owner_base = self.body_script.as_ref().and_then(|script| {
+            script
+                .stream
+                .base()
+                .map(|(_, base)| (script.id.entity, base))
+        });
         let tracker = &mut self.observed_projectiles;
         for (&id, view) in &mut tracker.views {
             let mut queue = |update, step| {
@@ -212,14 +342,20 @@ impl WorldDelivery {
                 });
             };
             let source = view.source();
-            let live = self.bots.get(&source) == Some(&super::BotLifetime::Live);
+            let live = self.bots.get(&source) == Some(&super::BotLifetime::Live)
+                || self
+                    .remote_players
+                    .get(&source)
+                    .is_some_and(|&(_, life)| life == super::BotLifetime::Live)
+                || owner_ready_body == Some(source);
             let base = self
                 .scene_views
                 .get(&source)
                 .and_then(|stream| stream.base())
-                .map(|(_, base)| base);
-            let deadline = view
-                .finished
+                .map(|(_, base)| base)
+                .or_else(|| owner_base.and_then(|(ent, base)| (ent == source).then_some(base)));
+            let completed = view.completed_at();
+            let deadline = completed
                 .unwrap_or_else(|| view.shot.launched.saturating_add(view.shot.lifetime_ticks))
                 .saturating_add(DELIVERY_GRACE);
             let expired = tick >= deadline;
@@ -253,20 +389,37 @@ impl WorldDelivery {
                                 "remote projectile launch exceeds the datagram budget",
                             )?;
                             queue(update, ProjectileDelivery::Launch);
-                            view.phase = Phase::Launching;
+                            view.phase = Phase::Launching { sent_at: None };
                         }
                         false
                     }
                 }
-                Phase::Launching => !live || expired,
-                Phase::Visible { since } => {
-                    let since = since.unwrap_or(tick);
-                    view.phase = Phase::Visible { since: Some(since) };
-                    !live
-                        || view.finished.is_some_and(|finished| {
-                            let elapsed = finished.saturating_sub(view.shot.launched).max(1);
-                            tick.saturating_sub(since) >= elapsed
-                        })
+                Phase::Launching { sent_at } => {
+                    // A short flight can finish before transport reports a lost
+                    // launch. Keep the shot and its entities retryable until the
+                    // delivery deadline while its source can still receive it.
+                    expired
+                        || (!live
+                            && (sent_at.is_none()
+                                || sent_at.zip(completed).is_some_and(|(sent_at, end)| {
+                                    tick >= sent_at
+                                        .saturating_add(end.saturating_sub(view.shot.launched))
+                                })))
+                }
+                Phase::Visible { sent_at } => {
+                    // The client can start tracing the projectile on receipt,
+                    // before this room processes the packet acknowledgement.
+                    // Align retirement to SEND_EVERY boundaries so a projectile
+                    // that impacts before the next flush stops instead of
+                    // visually passing through an ally target.
+                    if tick > sent_at {
+                        let through = view
+                            .shot
+                            .launched
+                            .saturating_add(tick.saturating_sub(sent_at));
+                        view.retire(through, tick, false, &mut queue);
+                    }
+                    false
                 }
                 Phase::Retiring => {
                     if view.pending.is_empty() {
@@ -276,18 +429,7 @@ impl WorldDelivery {
                 }
             };
             if retire {
-                view.phase = Phase::Retiring;
-                view.pending.extend(view.entities.iter().copied());
-                for &entity in &view.entities {
-                    queue(
-                        EntityUpdate {
-                            entity,
-                            operation: Some(Operation::Destroy),
-                            ..Default::default()
-                        },
-                        ProjectileDelivery::Destroy(entity),
-                    );
-                }
+                view.retire(tick, tick, true, &mut queue);
             }
         }
         for id in clear {
@@ -317,7 +459,7 @@ mod tests {
         script_init::ShotEvent,
         script_snapshot_wire::{ProjectedInstance, ProjectedState, View, VolleyActivation},
         script_stream::{BodyStream, DeltaKind},
-        script_wire::Value,
+        script_wire::{Binding, Value},
     };
     use serde::Deserialize;
     use std::time::Duration;
@@ -331,6 +473,7 @@ mod tests {
         activation: u16,
         launch: u32,
         flight_ticks: u32,
+        early_contact_ticks: u32,
         count: u16,
         presentation_variable: u32,
         presentation_value: bool,
@@ -347,6 +490,7 @@ mod tests {
                 input.instance,
                 ProjectedInstance {
                     graph: input.graph,
+                    start_ms,
                     parent: None,
                     variables: Default::default(),
                     states: BTreeMap::from([(
@@ -397,12 +541,48 @@ mod tests {
         );
     }
 
+    fn send_launch(world: &mut WorldDelivery, tick: u32, sequence: u32) -> Arc<Record> {
+        let ready = world.ready();
+        assert_eq!(ready.len(), 1);
+        let record = ready[0].tracked();
+        let sent = world
+            .send_frame(
+                tick,
+                Vec::new(),
+                false,
+                None,
+                &mut super::super::GameEgress::default(),
+                |_| Ok::<_, ()>(sequence),
+            )
+            .unwrap();
+        assert_eq!(sent.records, [super::super::RecordSource::Queued(0)]);
+        record
+    }
+
     #[test]
     fn remote_projectiles_wait_for_creates_and_the_exact_volley_then_retry_launch() {
+        check_remote_projectile_delivery(true, false);
+    }
+
+    #[test]
+    fn completed_remote_volley_retries_late_loss_until_the_delivery_deadline() {
+        check_remote_projectile_delivery(false, false);
+    }
+
+    #[test]
+    fn transmitted_remote_flights_outlive_their_retired_shooter() {
+        for ack_launch in [false, true] {
+            check_remote_projectile_delivery(ack_launch, true);
+        }
+    }
+
+    fn check_remote_projectile_delivery(ack_launch: bool, retire_source: bool) {
         #[derive(Deserialize)]
         struct Fixture {
             case_id: String,
             input: Input,
+            shooter_retirement_ticks_after_transmission: u32,
+            loss_report_ticks_after_visual_end: u32,
         }
         let fixture: Fixture = serde_json::from_str(include_str!(
             "../../../fixtures/behavior/observed-projectile-delivery-v1.json"
@@ -425,7 +605,7 @@ mod tests {
             ordinal: 0,
         };
         let mut original = project(&input, input.activation);
-        let newer = project(&input, input.activation + 1);
+        let mut newer = project(&input, input.activation + 1);
         let variable = Variable {
             scope: Scope::Instance,
             id: input.presentation_variable,
@@ -443,6 +623,30 @@ mod tests {
             .variables
             .values
             .insert(variable.id, firing);
+        let binding = Binding {
+            instance: input.instance,
+            state: input.state,
+            state_bits: 4,
+            slot: 0,
+            priority: 0,
+            above: true,
+        };
+        let attach_binding = |snapshot: &mut ProjectedSnapshot| {
+            let variables = &mut snapshot
+                .instances
+                .get_mut(&input.instance)
+                .unwrap()
+                .variables;
+            variables
+                .values
+                .entry(variable.id)
+                .or_insert(Value::Bool(false));
+            variables.bindings.insert(variable.id, vec![binding]);
+        };
+        let mut bound = original.clone();
+        attach_binding(&mut bound);
+        assert!(!bound.has_volley(&volley));
+        attach_binding(&mut newer);
         let mut world = WorldDelivery::new(103);
         world.started = Some(100);
         world
@@ -457,6 +661,7 @@ mod tests {
                 direction: [0.0, 0.0, 1.0],
                 launched: launch,
                 lifetime_ticks: 30,
+                skip_owner: false,
             }),
             count: input.count,
         }]);
@@ -519,44 +724,110 @@ mod tests {
                 .advanced
         );
         world.advance_observed_projectiles(launch + 5).unwrap();
-        let launched = outgoing(&mut world);
-        assert_eq!(launched.len(), 1);
-        assert_eq!(launched[0].update.entity, input.source);
-        let bits = launched[0].update.ch2.as_ref().unwrap();
+        let launched = send_launch(&mut world, launch + 5, 1);
+        assert_eq!(launched.update.entity, input.source);
+        let bits = launched.update.ch2.as_ref().unwrap();
         let mut reader = BitReader::new(bits.as_bytes());
         assert!(reader.bit().unwrap());
         assert!(reader.bit().unwrap());
         assert_eq!(reader.var_b().unwrap(), launch);
-        acknowledge(&mut world, launched.clone(), false);
-        let replay = outgoing(&mut world);
-        assert_eq!(replay[0].update, launched[0].update);
+        acknowledge(&mut world, vec![Arc::clone(&launched)], false);
+        let retry_tick = launch + 6;
+        let replay = send_launch(&mut world, retry_tick, 2);
+        assert_eq!(replay.update, launched.update);
 
-        world.observe_projectiles(&[ObservedProjectileEvent::Completed {
-            id,
-            frame: finished,
-        }]);
+        world.observe_projectiles(&[
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal: 1,
+                frame: launch + input.early_contact_ticks,
+                impact: true,
+                point: None,
+            },
+            ObservedProjectileEvent::Completed {
+                id,
+                ordinal: 0,
+                frame: finished,
+                impact: false,
+                point: None,
+            },
+        ]);
         world.advance_observed_projectiles(finished).unwrap();
         assert!(outgoing(&mut world).is_empty());
-        acknowledge(&mut world, replay, true);
+        if ack_launch {
+            acknowledge(&mut world, vec![Arc::clone(&replay)], true);
+        }
+        if retire_source {
+            world.bots.remove(&input.source);
+            if !ack_launch {
+                acknowledge(&mut world, vec![Arc::clone(&replay)], false);
+            }
+            let retirement_tick = retry_tick + fixture.shooter_retirement_ticks_after_transmission;
+            assert!(retirement_tick < retry_tick + input.early_contact_ticks);
+            world.advance_observed_projectiles(retirement_tick).unwrap();
+            assert!(outgoing(&mut world).is_empty());
+        }
+        if !ack_launch {
+            let visual_end = retry_tick + input.flight_ticks;
+            let (retire, last_launch) = if retire_source {
+                (visual_end, replay)
+            } else {
+                let report_tick = visual_end + fixture.loss_report_ticks_after_visual_end;
+                world.advance_observed_projectiles(report_tick).unwrap();
+                assert!(outgoing(&mut world).is_empty());
+                acknowledge(&mut world, vec![Arc::clone(&replay)], false);
+                let late_retry = send_launch(&mut world, report_tick, 3);
+                assert_eq!(late_retry.update, replay.update);
+                (finished + DELIVERY_GRACE, late_retry)
+            };
+            world.advance_observed_projectiles(retire - 1).unwrap();
+            assert!(outgoing(&mut world).is_empty());
+            world.advance_observed_projectiles(retire).unwrap();
+            acknowledge(&mut world, vec![last_launch], false);
+            let destroys = outgoing(&mut world);
+            assert_eq!(destroys.len(), entities.len());
+            for (destroy, entity) in destroys.iter().zip(entities) {
+                assert_eq!(destroy.update.entity, entity);
+                assert!(matches!(destroy.update.operation, Some(Operation::Destroy)));
+            }
+            acknowledge(&mut world, destroys, true);
+            world.advance_observed_projectiles(retire + 1).unwrap();
+            assert!(world.observed_projectiles.views.is_empty());
+            assert!(world.observed_projectiles.reserved.is_empty());
+            return;
+        }
         let mut settled = newer.clone();
         world.observed_projectiles.retain_volleys(&mut settled);
         assert_eq!(settled, newer);
         let arrival = finished + 1;
+        let retire = retry_tick + input.flight_ticks;
         world.advance_observed_projectiles(arrival).unwrap();
-        world
-            .advance_observed_projectiles(arrival + input.flight_ticks - 1)
-            .unwrap();
         assert!(outgoing(&mut world).is_empty());
         world
-            .advance_observed_projectiles(arrival + input.flight_ticks)
+            .advance_observed_projectiles(retry_tick + input.early_contact_ticks)
             .unwrap();
+        let early = outgoing(&mut world);
+        assert_eq!(early.len(), 1);
+        assert_eq!(early[0].update.entity, entities[1]);
+        assert!(matches!(
+            early[0].update.operation,
+            Some(Operation::Destroy)
+        ));
+        acknowledge(&mut world, early, false);
+        let early_retry = outgoing(&mut world);
+        assert_eq!(early_retry.len(), 1);
+        assert_eq!(early_retry[0].update.entity, entities[1]);
+        acknowledge(&mut world, early_retry, true);
+        world.advance_observed_projectiles(retire - 1).unwrap();
+        assert!(outgoing(&mut world).is_empty());
+        world.advance_observed_projectiles(retire).unwrap();
         let destroys = outgoing(&mut world);
         assert_eq!(
             destroys
                 .iter()
                 .map(|record| record.update.entity)
                 .collect::<Vec<_>>(),
-            entities
+            [entities[0]]
         );
         assert!(
             destroys
@@ -564,10 +835,100 @@ mod tests {
                 .all(|record| matches!(record.update.operation, Some(Operation::Destroy)))
         );
         acknowledge(&mut world, destroys, true);
-        world
-            .advance_observed_projectiles(arrival + input.flight_ticks + 1)
-            .unwrap();
+        world.advance_observed_projectiles(retire + 1).unwrap();
         assert!(world.observed_projectiles.views.is_empty());
         assert!(world.observed_projectiles.reserved.is_empty());
+    }
+
+    #[test]
+    fn visible_flight_retires_at_send_every_boundary_before_overshoot() {
+        let input = Input {
+            source: 0xc000_0001,
+            graph: 0x0ba3,
+            instance: 1,
+            state: 28,
+            activation: 1,
+            launch: 100,
+            flight_ticks: 10,
+            early_contact_ticks: 1,
+            count: 1,
+            presentation_variable: 233,
+            presentation_value: true,
+        };
+        let mut snap = project(&input, 1);
+        let event = ShotEvent {
+            entity: input.source,
+            instance: input.instance,
+            raw_state: input.state,
+            graph: input.graph,
+            frame: input.launch,
+            time_ms: u64::from(input.launch) * crate::script_runtime::FRAME_MS,
+            activation: input.activation,
+            activation_ms: u64::from(input.launch) * crate::script_runtime::FRAME_MS,
+            ordinal: 0,
+        };
+        let var = Variable {
+            scope: Scope::Instance,
+            id: input.presentation_variable,
+        };
+        let volley = snap
+            .freeze_volley(event, vec![(var, Value::Bool(true))])
+            .unwrap();
+        snap.instances
+            .get_mut(&input.instance)
+            .unwrap()
+            .variables
+            .values
+            .insert(var.id, Value::Bool(true));
+
+        let mut world = WorldDelivery::new(103);
+        world.started = Some(100);
+        world
+            .bots
+            .insert(input.source, super::super::BotLifetime::Live);
+        let mut source = BodyStream::new(input.source);
+        source.create_arrived();
+        let chunk = source.full(&BitWriter::new(), snap).unwrap();
+        assert!(source.arrived(chunk.last).advanced);
+        world.scene_views.insert(input.source, source);
+
+        world.observe_projectiles(&[
+            ObservedProjectileEvent::Launched {
+                id: 7,
+                presentation: Arc::new(ObservedShot {
+                    volley,
+                    definition: 0x0400_0000_0000_00ab,
+                    origin: [0.0; 3],
+                    direction: [0.0, 0.0, 1.0],
+                    launched: 100,
+                    lifetime_ticks: 10,
+                    skip_owner: false,
+                }),
+                count: 1,
+            },
+            // Completes at tick 102 (1 tick before SEND_EVERY=3 tick 102? Wait: 102 % 3 == 0,
+            // or completes at 103 when sent_at=101 and 102 % 3 == 0).
+            ObservedProjectileEvent::Completed {
+                id: 7,
+                ordinal: 0,
+                frame: 102,
+                impact: true,
+                point: None,
+            },
+        ]);
+        world.advance_observed_projectiles(100).unwrap();
+        let creates = outgoing(&mut world);
+        acknowledge(&mut world, creates, true);
+        world.advance_observed_projectiles(101).unwrap();
+        let launch_rec = send_launch(&mut world, 101, 1);
+        acknowledge(&mut world, vec![launch_rec], true);
+        // At tick 102 (102 % SEND_EVERY == 0), sent_at == 101, launched + 1 + 2 = 103 >= 102 -> retires!
+        world.advance_observed_projectiles(102).unwrap();
+        let destroys = outgoing(&mut world);
+        assert_eq!(destroys.len(), 1);
+        assert!(matches!(
+            destroys[0].update.operation,
+            Some(Operation::Destroy)
+        ));
     }
 }

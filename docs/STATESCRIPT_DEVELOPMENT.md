@@ -91,8 +91,12 @@ slot binding. The body's ordinary logical-button dispatcher receives the
 input. The headless probes check press, release, and projectile flight admission.
 Flight uses the room's existing hostile-target and collision queries.
 A controlled room fixture verifies damage to a live bot and a player
-while a same-team target remains unharmed. Client presentation remains
-a separate acceptance check.
+while a same-team target remains unharmed. A prepared-room replay also
+finds an opposed firing lane from the actual map spawns and places a
+player 1.5 metres behind its front bot. With the front bot alive, that bot
+takes the hit. If the front bot dies after the shot launches, the player
+behind it takes the hit. The replay checks observer projectile completion
+on the same simulation tick as each impact.
 The earlier spawn-reset and button lifecycle are documented in the
 [Python bot host](https://github.com/leafall903/ORPHEUS/blob/299b44111fc3e3dddcc5a691859b7a6c3ac661a6/src/ow174/game/script/bot.py).
 
@@ -104,20 +108,27 @@ be off when the server captures the frame. Its activation identity
 remains available for the observer's projectile launch record.
 
 For authored predicted projectiles, observer delivery retains the exact
-volley activation until the launch is acknowledged. It creates the
+volley activation while the launch can be retried. It creates the
 visible projectile entities after the source baseline is acknowledged,
 then sends the channel 2 launch after both those creates and the
 matching volley projection are acknowledged. Interrupted delivery
 retries the same record and entity IDs. The room's flight completion
-drives retirement, allowing the acknowledged launch time to elapse on
-the observer. The source, flight definition, and shot timing come from
-the authored volley and shared simulation.
+drives retirement. Acknowledged volleys retire projectiles individually
+at the launch send frame plus each server flight duration. While the
+launch acknowledgement is outstanding, the observer keeps the referenced
+entities available for retries until every flight in the volley is due
+for retirement. At that point it queues their destroys and discards
+further launch retries. The source, flight definition, and shot timing
+come from the authored volley and shared simulation.
 
 A single-shot activation can start and end within one VM tick. The
 shot report captures active remote data-flow inputs sourced from the
 volley's own child states before their links are removed. Observer
 delivery retains those values with the corresponding volley until the
-launch is acknowledged or expires. The VM still clears its own stack
+launch is acknowledged or expires. The retained snapshot sends the captured
+values as literals and drops competing live bindings for those variables.
+The ordinary projection sends the live bindings again after retirement.
+The VM still clears its own stack
 claims at the authored time. The prepared firing probe verifies the
 stock firing input on both teams. Rendered attacks remain an
 original-client acceptance check.
@@ -146,8 +157,11 @@ a matching pair returns false. Keep the extracted catalog in the private
 runtime bundle. The [wheel input contract](../fixtures/behavior/wheel-selection-ingress-v1.json)
 uses synthetic input and generation changes. The build-specific wire layout
 and category fields are documented in the [Python reference](https://github.com/leafall903/ORPHEUS/blob/499b9871b1ff9bf3d86715b7648626b18b154f0d/docs/COMMUNICATION_WHEEL.txt).
-Live owner wheel input stays disabled pending validation of the native sight
-profiles and the remaining wheel receivers. The `TrackTargets` view shape
+The live owner accepts context-free wheel selections from a living,
+acknowledged body when the selected asset has authored category data.
+It passes the selection and confirmation flag straight to the body's
+authored handlers. The contextual target marker still requires native
+validation. The `TrackTargets` view shape
 passes its origin, offset, radius, aperture, limit, filter masks, ranking and
 sight profile to the room. A frozen room with no other living player bodies
 returns an empty result. Bots may obstruct sight when the supplied profile
@@ -176,13 +190,23 @@ integer-keyed parameter map. A networked `STU_7106C356` uses the authored
 `m_BF5B22B7` scope rows to capture its effective variables. The owner
 and observer streams send the captured values with the short action.
 An unacknowledged action keeps its initial stamp and values when a later
-selection arrives. Full baselines omit prior callouts. The client retains
+selection arrives. A networked `STUStatescriptActionEffect` with a literal
+effect and an authored owner selector uses the same short-action stream.
+The client graph supplies the effect asset and evaluates its authored
+DataFlow bindings using the synchronized variables. The prepared 104319
+shared combat graph declares remote slots and synchronized parameters for
+its hit effects. Original-client playback of these actions remains to be
+verified. Full baselines omit prior callouts. The client retains
 its existing text rendering and audience checks. `STU_1ECB66A0` looks up
 the complete communication action GUID in the optional `asset_textures`
 catalog. A missing key in a supplied catalog returns a zero texture
 reference. If the catalog is absent, the VM reports the lookup as
-unavailable. Action `STU_71FE9852`, live wheel input and original-client
-presentation verification remain open.
+unavailable. The 104319 PC registration list has 1,735 entries.
+`STU_631D36C3` (typeinfo `2DF7B50`), `STU_71FE9852` (`2DE36F8`)
+and `STU_94771561` (`2DF3C18`) first match the same parent Action
+`2DD5430` at record 165, with constructor `1B72650`. The shared path
+follows the authored output plug without reading cosmetic fields.
+Sight profiles for occupied rooms and original-client presentation remain open.
 The pair and opcode behavior follows the [pinned Python reference for pairs](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/play.py#L81-L93)
 and [expression maps](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/expr.py#L832-L835).
 The synchronized variable capture follows the [pinned Python frame-action reference](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/script/driver.py#L781-L811).
@@ -197,6 +221,24 @@ catalog. It takes the same version and build and maps full action GUIDs
 to full texture GUIDs under `assets`. The public fixture uses synthetic
 keys. The native resource shape and offline checks are described in the
 [pinned wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L537-L543).
+
+### Emote preload lifetime
+
+The prepared wheel replay observes a separate cosmetic preload graph.
+Interrupting the emote releases its aim lock and retires the emote, while
+the preload remains active. The next selection replaces it through the
+authored PlayScript policy and the replay verifies that only one preload
+remains.
+
+The earlier [wheel research](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/docs/COMMUNICATION_WHEEL.txt#L261-L265)
+associated the preload with the exit action by comparing two numeric
+values. The build 104319 schema declares the exit operand of
+`STU_3D419B63` as a reference to `STUVoiceCategory`. Handler `CB9C70`
+sends it and each resolved entity to the voice service. The other value,
+`m_7E0BC920`, belongs to the nested editor `STUGraph` and tracks above
+the numeric editor item IDs. Treating it as a runtime voice category
+would match unrelated graphs. The native preload release condition
+after interruption is still open.
 
 ## Supply actor voice criteria
 
@@ -1117,12 +1159,129 @@ it. Healing and VM-local changes without a sampled room frame leave
 it unavailable. Cue resources are supplied by authored content.
 [Synthetic timed elimination contract](../fixtures/behavior/script-timed-elimination-cues-v1.json)
 
+The 104319 map-script archive's shared graph `0215` sets its
+multi-elimination interval to two seconds. An eligible message increments
+the count, selects the cue, and starts a restartable wait. The wait clears
+the count when it finishes. On the expiry frame, the VM processes the
+message actions before the wait finishes and discards the pending reentry.
+The room announcer mirrors that order: eliminations on the deadline can
+announce from the old count, then the next frame starts a fresh streak.
+At runtime load, the combat voice catalog finds the authored counter switch
+by its configured count and stimulus pairs. It follows the target filter's
+action links to that switch and reads the excluded target tags. With a
+bound exclusion list, the target must have a known absence of every
+excluded tag before it can advance the streak. The ordinary elimination
+feedback path can still run for excluded bodies. Packs without a matching
+graph retain the catalog's affiliation check. The other authored filter
+fields and announcer-suppression conditions still need room bindings.
+
+The cue gate in `0215` follows the count increment and wait rearm. One
+input is set while the `069C` message provider is present. The 104319 archive
+lists providers for Junkenstein's Revenge, King's Row Archives, and
+Rialto Archives. The Practice Range lists the shared receiver and has no
+matching publisher in its map index. The other input checks membership
+in selection `21925`; its room interpretation remains unresolved.
+
 The 104319 hit-marker message updates the shooter's HUD. The damage
 feedback path uses the struck body's combat event for victim effects
 and audio. Keep speaker and recipient selection tied to the settled
 source or victim for each cue. A severe victim cue does not establish
-the shooter's native headshot sound. That sound still needs a verified
-104319 playback trigger.
+the shooter's native headshot sound.
+
+Set `ORPHEUS_PLAYTEST_HIT_VARIANT` to a finite, nonnegative number when
+running an Inspector build to exercise authored hit effects. The room
+routes confirmed source impacts to the active graph whose damage entry
+declares the five native presentation parameters. The graph receives the
+settled amount, target, hit tags, critical flag and the configured value
+of parameter 0724. Use 1 to exercise the ordinary and critical default
+variants. The retail source of 0724 and original-client playback and
+audience acceptance remain open.
+
+Set `ORPHEUS_PLAYTEST_ELIMINATION=1` to exercise the shared final-blow
+effect after the room settles an enemy elimination. The active receiver
+selects its authored effect using the defeated body's facts. The test
+captures hitscan and projectile final blows through owner egress. Assist
+credit and the additional elimination audio layers still need verification.
+
+For a received-damage client comparison, set
+`ORPHEUS_PLAYTEST_RECEIVED_DAMAGE=1` on an Inspector server using the prepared
+104319 runtime. Only positive, nonlethal loss from a distinct room actor queues
+the local damage event. The victim's active body and the source generation must
+still match when delivered. The client copies the position at offset
+`0x9c` to its combat event and subtracts its view origin before projecting
+the result onto the view axes. The server supplies the settled weapon
+source point for this field and falls back to the attacking body's position
+for settled damage without weapon geometry. The native contact effect consumes the
+negated surface normal from offset `0x84`, falling back to the
+direction from source to impact when the normal is absent. Direct weapon
+contacts supply the outward hurt-volume normal. The hit-position field
+and flags retain neutral values. The prepared schema replay checks both
+geometry fields on the struck player's connection. The directional
+indicator and pose reaction remain separate validation tasks.
+
+The existing playtest settlement trace includes the geometry available at the
+point of damage. Direct hits record the start of the ray or contacting
+projectile segment, the target surface contact point and normal, and
+the incoming direction. An expanded projectile sweep keeps the
+projectile centre separately for its own completion. Splash records the
+blast origin and leaves the surface normal unset. Damage without weapon
+geometry leaves the surface normal and contact position unset. The prepared Practice Range firing
+lane confirms that a live front bot prevents player damage feedback.
+When the bot dies while the shot is in flight, the shot reaches the
+player and their notice carries the NPC origin and outward normal.
+
+The hit-position decoder uses three basis vectors and a translation
+from the local entity's transform path when that transform is available.
+It passes the position through when the transform cannot be resolved.
+The headless room has the world contact point. The exact local transform
+and its sampling frame need to be established before filling that field.
+
+The 104319 victim event also has a compact contact-set operand (`@0xca`). The
+client expands it to a `.049` asset and carries it into its contact effect
+request. The shared contact-set graph (`67`) declares `0x0D800000000002A3`
+schema entries per body (`STUConfigVarContactSet.m_contactSet`, e.g. `0x01200000000005EE`
+or `0x01200000000000D5`), which the server now propagates to `25000` `@0xca`.
+Shared presenter graph `64` also reads `0x0240000000000012` (`0x724 = 1.0` default ->
+`0x030000000000183B` crit / `0x0300000000000206` normal) and `0x0240000000000093`
+(`0x03000000000000EE` final blow). This is a contact-set selector. The local `STUContactSet` schema
+maps contact type and material to authored responses, and actor and
+projectile components use contact sets for different purposes. A body's
+default set alone does not identify the material or the contact response
+for an incoming hit. The local contact sets refer to both `.04A` and
+`.00D` responses. Sampled `.04A` rows use different audio events for
+different material IDs, so a material-specific sound does not establish
+the particle used for the hit. Actor `STUModelLook` records also have
+material-effect selectors and variants. Their connection to weapon-hit
+particles remains unverified. The map-script archive lists
+`m_hitReactions` on `STU_F3104738` with AI damage ranges, tags and
+priorities. Its listings classify those nodes as plain State on the
+examined path, so their authored rows alone do not establish a runtime
+binding for the player's flinch.
+
+For the authored `STU_23A00A53` state, the VM reads the literal
+`m_contactSet`, verifies a networked self source with a synchronized
+instance target variable, and republishes the contact state when that
+variable changes. The owner and NPC hosts validate their own source and
+available target entities. The original graph retains the resource and
+its presentation operands. This covers the confirmed literal/default
+mode shape; expression-driven selection, other modes, and generic
+weapon-hit material selection remain open. The [Python contact projection](https://github.com/leafall903/ORPHEUS/blob/cedec602c41ee14f158ea9fdd9f16d60e4f51f3d/src/ow174/game/junkenstein_scene.py)
+provided the earlier NPC synchronization reference.
+
+Current hit feedback is scoped to settled weapon impacts with a hit
+classification. A generic scripted health change has no hit classification,
+so it can still send victim feedback on a positive nonlethal loss without
+queuing a shooter hit effect. The victim path can queue once per eligible
+health settlement. Authored concentric pellet volleys now use the same
+pattern parser for player hitscan and NPC weapons. Each ray goes through the
+shared combat query and settlement, while the VM still owns the single shot
+event and its ammunition. Uniform-cone hitscan uses the authored pellet
+count and a per-pellet seed offset. An explicit launch vector
+(`m_E2FD6F04`) still requires its own direction semantics. The 104319 Tracer
+startup probe stops before firing with four initialization diagnostics
+(`0024:63`, `0024:9`, `0034:51`, `001A:5`), so its two-ray volley is
+covered by a separate synthetic weapon graph. Feedback cadence for pellet
+impacts and recurring damage remains open.
 
 Weapon notifications carry the target's captured filter flags, target
 tags, and script variables. A room-settled health change from a distinct

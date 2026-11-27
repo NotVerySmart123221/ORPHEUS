@@ -340,6 +340,88 @@ fn stock_bot_weapon_placement_uses_map_graphs_and_body_slot_bindings() {
 }
 
 #[test]
+#[ignore = "requires a prepared 104319 Practice Range pack with friendly bot graphs"]
+fn prepared_friendly_bot_nameplate_uses_settled_damage_and_healing() {
+    use crate::{
+        game_combat::{HealingPulse, health::HealthEffect},
+        game_content::GameMap,
+        scene_assets::SceneAssets,
+    };
+    use std::time::Duration;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/npc-nameplate-staged-admission-v1.json"
+    ))
+    .unwrap();
+    let values = &fixture["allied_health"];
+    let damage = values["bot_damage"].as_f64().unwrap();
+    let scripted = values["script_heal"].as_f64().unwrap();
+    let field = values["field_heal"].as_f64().unwrap();
+    let path = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(path).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let (room, queries) = scene.bot_simulation();
+    let (wire, team, position, maximum, attacker) = {
+        let bots: Vec<_> = room.bodies().unwrap().collect();
+        let ally = bots.iter().find(|bot| bot.spawn.team == 0).unwrap();
+        let enemy = bots
+            .iter()
+            .find(|bot| bot.spawn.team != ally.spawn.team)
+            .unwrap();
+        (
+            ally.entity,
+            ally.spawn.team,
+            ally.position,
+            ally.spawn.health,
+            enemy.entity,
+        )
+    };
+    let source = Death {
+        time: 0.0,
+        frame: crate::game_clock::FIRST_TICK,
+        killer: attacker,
+    };
+    let check = |room: &mut RoomSimulation, expected| {
+        let state = room.state_mut(wire).unwrap().unwrap();
+        assert_eq!(state.vitals.total(), expected);
+        let script = state.stock_script.as_ref().unwrap();
+        assert_eq!(script.world.vitals.total(), expected);
+        let snapshot = script.projection().unwrap().snapshot;
+        assert!(
+            snapshot
+                .instances
+                .values()
+                .any(|instance| instance.graph == 0x0d24)
+        );
+        assert_eq!(
+            snapshot.variables.get(&HUD_HEALTH),
+            Some(&Value::Float(expected))
+        );
+    };
+    room.settle_health(wire, HealthEffect::Damage(damage), source, Duration::ZERO)
+        .unwrap();
+    check(room, maximum - damage);
+    room.settle_health(wire, HealthEffect::Heal(scripted), source, Duration::ZERO)
+        .unwrap();
+    check(room, maximum - damage + scripted);
+    room.take_scripted_health();
+    room.heal_allies(
+        &queries,
+        team,
+        None,
+        None,
+        &[HealingPulse {
+            centre: position,
+            amount: field,
+        }],
+    )
+    .unwrap();
+    let updates = room.take_scripted_health();
+    assert!(updates.iter().any(|update| update.entity == wire));
+    check(room, maximum - damage + scripted + field);
+}
+
+#[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
 fn prepared_bot_respawn_projects_its_authored_animation_in_the_first_frame() {
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
@@ -479,6 +561,7 @@ fn prepared_stock_death_delivers_critical_and_normal_kills_with_the_pulse() {
                     critical,
                     loadout: Some(loadout),
                     impulse: None,
+                    geometry: None,
                 },
             )
             .unwrap()
@@ -646,6 +729,40 @@ fn check_stock_bot_firing(catalog: &StockBotCatalog, bot: &Bot) {
                 assert!(stream.arrived(full.last).advanced);
                 assert!(projected.retain_volley(&presentation.volley));
                 assert_eq!(firing_value(&projected), Some(Value::Bool(true)));
+                assert_eq!(
+                    projected.variables.values.get(&233),
+                    Some(&Value::Bool(true))
+                );
+                assert!(
+                    projected
+                        .instance_variables(instance)
+                        .and_then(|vars| vars.get(&6973))
+                        .is_some(),
+                    "alternating muzzle variable 6973 should be preserved in volley presentation"
+                );
+                assert!(
+                    projected
+                        .instance_variables(instance)
+                        .is_none_or(|vars| vars.is_empty()
+                            || projected.instances[&instance].variables.bindings.is_empty()),
+                    "View::Observer volley retention must preserve bindings.is_empty()"
+                );
+                assert_eq!(
+                    projected.variables.values.get(&1226),
+                    Some(&Value::Asset(0x0280_0000_0000_007f)),
+                    "0BA8:8 RESET_MESSAGE must set combat AnimCategory shared_var[1226] on initial spawn for team {}",
+                    bot.spawn.team
+                );
+                assert!(
+                    projected.instances[&instance]
+                        .states
+                        .values()
+                        .filter(|state| state.active)
+                        .count()
+                        >= 2,
+                    "volley retention should preserve active remote subgraph Stack states for team {}",
+                    bot.spawn.team
+                );
                 assert!(projected.has_volley(&presentation.volley));
                 let delta = projection
                     .encoder
@@ -767,7 +884,7 @@ fn prepared_stock_firing_bot_walks_back_after_displacement() {
 #[ignore = "requires a prepared 104319 Practice Range pack with authored bot return"]
 fn prepared_stock_firing_bot_returns_after_room_knockback() {
     use crate::{
-        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_clock::{FIRST_TICK, SEND_EVERY, TICK_PERIOD},
         game_content::GameMap,
         patrol_script::PatrolScript,
         scene_assets::SceneAssets,
@@ -796,6 +913,7 @@ fn prepared_stock_firing_bot_returns_after_room_knockback() {
     let distance = |position: [f64; 3]| (position[0] - home[0]).hypot(position[2] - home[2]);
     let mut maximum: f64 = 0.0;
     let mut walked = false;
+    let mut published_return_stride = false;
     for step in 1..=430 {
         let tick = FIRST_TICK + step;
         if step == 120 {
@@ -815,12 +933,29 @@ fn prepared_stock_firing_bot_returns_after_room_knockback() {
         let script = state.stock_script.as_ref().unwrap();
         maximum = maximum.max(distance(state.bot.position));
         walked |= script.walk_request().is_some();
+        if script.walk_request().is_some() && !state.bot.has_combat_motion() {
+            let pose = state.bot.movement(tick);
+            let toward_home = [0, 2]
+                .into_iter()
+                .map(|axis| pose.velocity[axis] * (home[axis] - pose.position[axis]))
+                .sum::<f64>()
+                > 0.0;
+            published_return_stride |= toward_home
+                && pose.throttles != [0; 2]
+                && tick % SEND_EVERY == 0
+                && state.bot.record_due(tick, SEND_EVERY);
+        }
         if maximum > 0.6
             && walked
             && distance(state.bot.position) < 0.4
             && script.walk_request().is_none()
         {
             assert!(!state.bot.has_combat_motion());
+            assert!(
+                published_return_stride,
+                "no observer locomotion during return"
+            );
+            assert_eq!(state.bot.movement(tick).throttles, [0; 2]);
             return;
         }
     }
@@ -853,7 +988,7 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
     let data = runtime.join("data");
     let graphs = Arc::new(GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap());
     let codecs = Arc::new(CodecTable::load(data.join("statescript_codecs_174.json")).unwrap());
-    let fixture = |target_team: u8| {
+    let fixture = |front_team: u8, rear_team: u8| {
         BotCatalog::from_json(
             &json!({
                 "heroes": {
@@ -865,8 +1000,8 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
                 "maps": {"0x03": {"hints": {}, "spawners": [
                     {"hero":"0x02E000000000016B","team":1,"position":[0,0,0],
                      "rotation":[0,0,0,1],"graphs":["0x0580000000000B92"]},
-                    {"hero":"0x02","team":1,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
-                    {"hero":"0x02","team":target_team,"position":[0,0,4],
+                    {"hero":"0x02","team":front_team,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
+                    {"hero":"0x02","team":rear_team,"position":[0,0,4],
                      "rotation":[0,0,0,1],"graphs":[]}
                 ]}}
             })
@@ -878,9 +1013,9 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
     let ground = fixture_ground();
     let movers = MoverCatalog::default();
     let queries = BotQueries::new(false, &movers, &ground, None);
-    for hit_player in [false, true] {
-        let bots = fixture(u8::from(hit_player));
-        let ally = bots[1].entity;
+    for (has_player, front_team) in [(false, 1), (true, 1), (true, 0)] {
+        let bots = fixture(front_team, u8::from(has_player));
+        let front = bots[1].entity;
         let npc_target = bots[2].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
         room.enable_stock_bot_scripts(
@@ -889,7 +1024,7 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
             crate::game_content::PRACTICE_RANGE_MODE,
         );
         let start = crate::game_clock::FIRST_TICK;
-        let player = if hit_player {
+        let player = if has_player {
             let (factory, mut spawn) = fixture_body_factory();
             spawn.frame = start;
             spawn.pose.position = [0.0, 0.0, 4.0];
@@ -928,18 +1063,29 @@ fn prepared_stock_bot_projectiles_damage_live_room_bodies() {
         for tick in start + 1..=start + 800 {
             let elapsed = Duration::from_millis(u64::from(tick - start) * FRAME_MS);
             room.finish_tick(&queries, tick, elapsed).unwrap();
-            hit = match player {
-                Some((id, initial)) => {
+            hit = match (front_team, player) {
+                (0, _) => room.body_healths().unwrap()[&front] < 100.0,
+                (_, Some((id, initial))) => {
                     room.player_body(id).unwrap().vitals().unwrap().total() < initial
                 }
-                None => room.body_healths().unwrap()[&npc_target] < 100.0,
+                (_, None) => room.body_healths().unwrap()[&npc_target] < 100.0,
             };
             if hit {
                 break;
             }
         }
-        assert!(hit, "no damage for hit_player={hit_player}");
-        assert_eq!(room.body_healths().unwrap()[&ally], 100.0);
+        assert!(
+            hit,
+            "no damage with has_player={has_player}, front_team={front_team}"
+        );
+        if front_team == 1 {
+            assert_eq!(room.body_healths().unwrap()[&front], 100.0);
+        } else if let Some((id, initial)) = player {
+            assert_eq!(
+                room.player_body(id).unwrap().vitals().unwrap().total(),
+                initial
+            );
+        }
     }
 }
 

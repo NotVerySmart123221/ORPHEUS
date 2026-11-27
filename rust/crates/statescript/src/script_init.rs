@@ -19,6 +19,9 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
+const HIT_PRESENTATION_MESSAGE: u64 = 0x0240_0000_0000_0012;
+const ELIMINATION_PRESENTATION_MESSAGE: u64 = 0x0240_0000_0000_0093;
+
 pub const MAX_INIT_WORK: usize = 100_000;
 const MAX_PLUG_DEPTH: usize = 64;
 const MAX_EVENTS_PER_UPDATE: usize = 1000;
@@ -52,6 +55,42 @@ const MOVEMENT_BOOLEAN_OUTPUTS: [&str; 12] = [
     "m_45EB431F",
     "m_BF152E27",
 ];
+
+fn has_presentation_entry(
+    graph: &crate::script_graph::Graph,
+    message: u64,
+    parameters: &[u32],
+    server_only: bool,
+) -> bool {
+    use crate::script_graph::{EntryTopic, message_parameter_id};
+
+    let mut entries = graph.entry_handlers(EntryTopic::Message(message));
+    let Some(entry) = entries.next() else {
+        return false;
+    };
+    entry.server_only == server_only
+        && !entry.client_only
+        && entries.next().is_none()
+        && entry
+            .field("m_params")
+            .and_then(Json::as_array)
+            .is_some_and(|fields| {
+                fields.len() == parameters.len()
+                    && parameters.iter().all(|key| {
+                        fields
+                            .iter()
+                            .any(|field| message_parameter_id(field) == *key)
+                    })
+            })
+}
+
+fn presentation_target_available(target: &HealthTargetFacts) -> bool {
+    target.tags.has_known_base()
+        && !matches!(
+            target.script_state,
+            crate::script_entity_state::EntityScriptState::Unavailable
+        )
+}
 
 #[derive(Clone, Debug)]
 pub struct Root {
@@ -174,7 +213,8 @@ pub fn player_roots(body: &Body, graphs: &GraphStore) -> Result<Vec<Root>, InitF
 
 #[doc(hidden)]
 pub const OWNER_HEALTH: u32 = 253;
-const HUD_HEALTH: u32 = 1732;
+#[doc(hidden)]
+pub const HUD_HEALTH: u32 = 1732;
 #[doc(hidden)]
 pub const HUD_MAX_HEALTH: u32 = 1737;
 
@@ -211,14 +251,15 @@ pub use types::{
     Issue, MoveOutcome, MoveToKey, NodeObservations, PendingTimer, RandomCheckpoint, ReportedShot,
     ShotEvent, Snapshot, SpawnSearch, SpawnSearchKey, StackBinding, State, StateKind,
 };
+pub use types::{SprayAttachment, SprayPlacement};
 pub use world::{
-    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, ContactTarget,
-    ContactVolume, CreationKind, EmptyWorld, EntityCreation, HealthTargetFacts, HitTags,
-    HookPullGeometry, HostEvent, HostHealthContext, LandingSelection, MovementSample,
-    NamedPoolLoss, PlayScript, Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker,
-    RoomEntityStatus, RoomMessage, ScriptedMotion, Site, SweptDisplacement, TargetTagEffect,
-    TargetTagEffects, TargetTagSnapshot, ViewSightProfile, ViewTargetQuery, World,
-    named_pool_records,
+    AiBehaviorRequest, AiControlOverride, AiFacing, AiWeaponOverride, BeamContact, CombatModEntry,
+    ContactTarget, ContactVolume, CreationKind, DeflectState, EmptyWorld, EntityCreation,
+    GenericBeamContact, GroundWave, HealthTargetFacts, HitTags, HookPullGeometry, HostEvent,
+    HostHealthContext, LandingSelection, MovementSample, NamedPoolLoss, PetSpawn, PlayScript,
+    Relocation, RoomBodyIdentity, RoomCue, RoomCueSpeaker, RoomEntityStatus, RoomMessage,
+    ScriptedMotion, Site, SweptDisplacement, TargetTagEffect, TargetTagEffects, TargetTagSnapshot,
+    VelocityAxis, VelocityOp, ViewSightProfile, ViewTargetQuery, World, named_pool_records,
 };
 
 use machine::{Event, Machine, Startup, StateKey, VarKey};
@@ -342,6 +383,26 @@ impl Component {
             frame,
             world,
             (max_work, true, true),
+        )
+    }
+
+    pub fn start_with_public_schema_policy(
+        graphs: Arc<GraphStore>,
+        entity: u32,
+        entity_variables: Variables,
+        roots: Vec<Root>,
+        frame: u32,
+        world: &mut impl World,
+        (max_work, strict): (usize, bool),
+    ) -> Result<Self, InitFault> {
+        Self::start_with_options(
+            graphs,
+            entity,
+            entity_variables,
+            roots,
+            frame,
+            world,
+            (max_work, true, strict),
         )
     }
 
@@ -548,6 +609,7 @@ impl Component {
             },
             reads: Vec::new(),
             foreign_reads: Vec::new(),
+            cycle_candidate: None,
             parameters: None,
             health_target_facts: None,
             observed_sample: None,
@@ -569,6 +631,17 @@ impl Component {
             self.machine
                 .allows_stack(VarKey::Entity(id), priority, None)
         })
+    }
+
+    /// Publish authoritative totals after the host settles a health-pool change.
+    pub fn sync_body_health(&mut self, world: &mut impl World) -> Result<(), InitFault> {
+        let site = Site {
+            entity: self.machine.snapshot.entity,
+            instance: 0,
+            graph: 0,
+            node: None,
+        };
+        self.run(world, |vm| vm.publish_health_totals(site))
     }
 
     pub fn set_entity_variable(
@@ -665,6 +738,116 @@ impl Component {
                 ..HostHealthContext::default()
             },
         )
+    }
+
+    /// Route a confirmed impact to the active native hit-presentation entry.
+    pub fn queue_authored_hit_feedback(
+        &mut self,
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault> {
+        let HostEvent::HealthApplied {
+            source,
+            target,
+            delta,
+            hit_tags,
+            ..
+        } = event;
+        let Some((tags, critical, target_facts)) = hit_tags
+            .zip(context.critical_hit)
+            .zip(context.target_facts.as_ref())
+            .map(|((tags, critical), facts)| (tags, critical, facts))
+        else {
+            return Ok(0);
+        };
+        let owner = self.machine.snapshot.entity;
+        let damage = -(delta as f32);
+        if source != Some(owner)
+            || target == owner
+            || target_facts.target != target
+            || !presentation_target_available(target_facts)
+            || !damage.is_finite()
+            || damage <= 0.0
+            || !variant.is_finite()
+            || variant < 0.0
+        {
+            return Ok(0);
+        }
+
+        let Some(instance) = self.combat_presentation_instance(false) else {
+            return Ok(0);
+        };
+        self.queue_settled_damage_message(
+            instance,
+            HIT_PRESENTATION_MESSAGE,
+            Variables::from([
+                (0x13, Value::Float(f64::from(damage))),
+                (0x15, Value::Entity(target)),
+                (
+                    0x3d,
+                    Value::Array(tags.as_slice().iter().copied().map(Value::Asset).collect()),
+                ),
+                (0x95, Value::Bool(critical)),
+                (0x724, Value::Float(f64::from(variant))),
+            ]),
+            Arc::clone(target_facts),
+        )
+    }
+
+    /// Route credited elimination presentation to the active shared combat receiver.
+    pub fn queue_authored_elimination_feedback(
+        &mut self,
+        target: Arc<HealthTargetFacts>,
+        final_blow: bool,
+    ) -> Result<usize, InitFault> {
+        if target.target == self.machine.snapshot.entity || !presentation_target_available(&target)
+        {
+            return Ok(0);
+        }
+        let Some(instance) = self.combat_presentation_instance(true) else {
+            return Ok(0);
+        };
+        self.queue_settled_damage_message(
+            instance,
+            ELIMINATION_PRESENTATION_MESSAGE,
+            Variables::from([
+                (0x15, Value::Entity(target.target)),
+                (0x91, Value::Bool(final_blow)),
+            ]),
+            target,
+        )
+    }
+
+    fn combat_presentation_instance(&self, require_elimination: bool) -> Option<u16> {
+        let mut receivers = self
+            .machine
+            .snapshot
+            .instances
+            .iter()
+            .filter_map(|(&id, instance)| {
+                if instance.is_server_only() {
+                    return None;
+                }
+                let graph = self.graphs.graph(instance.graph)?;
+                // Other elimination consumers bind different data or drive gameplay.
+                // Identify the shared presenter by the contracts on the same graph.
+                (has_presentation_entry(
+                    graph,
+                    HIT_PRESENTATION_MESSAGE,
+                    &[0x13, 0x15, 0x3d, 0x95, 0x724],
+                    true,
+                ) && (!require_elimination
+                    || has_presentation_entry(
+                        graph,
+                        ELIMINATION_PRESENTATION_MESSAGE,
+                        &[0x15, 0x91],
+                        false,
+                    )))
+                .then_some(id)
+            });
+        let instance = receivers.next()?;
+        receivers.next().is_none().then_some(instance)
     }
 
     pub fn queue_frame_message(
@@ -974,6 +1157,28 @@ impl Component {
         }
     }
 
+    /// Queue an authenticated client report for an instance on this body.
+    pub fn queue_local_instance_message(
+        &mut self,
+        instance: u16,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !message.is_valid() {
+            return Ok(0);
+        }
+        self.machine.queue_entries_from(
+            &self.graphs,
+            Some(instance),
+            Some(self.machine.snapshot.entity),
+            message.id,
+            message.parameters,
+            self.machine.now_ms,
+        )
+    }
+
     pub fn queue_entity_message(
         &mut self,
         message: u64,
@@ -1011,6 +1216,24 @@ impl Component {
             parameters,
             self.machine.now_ms,
         )
+    }
+
+    /// Deliver a local input message using the view of its originating command.
+    pub fn queue_command_message(
+        &mut self,
+        message: RoomMessage,
+        command_frame: Option<u32>,
+        earliest_frame: u32,
+    ) -> Result<usize, InitFault> {
+        if self.halted {
+            return Err(InitFault::Halted);
+        }
+        if !message.is_valid() {
+            return Ok(0);
+        }
+        let due_ms = self.machine.now_ms.max(frame_start(earliest_frame));
+        self.machine
+            .queue_command_entries(&self.graphs, message, command_frame, due_ms)
     }
 
     pub fn queue_entity_frame_message(
@@ -1179,6 +1402,44 @@ impl Component {
 
     pub fn command_buttons(&self) -> u32 {
         self.machine.command_buttons
+    }
+
+    pub fn set_cooldown_scale(&mut self, scale: f64) {
+        if scale.is_finite() && scale > 0.0 {
+            self.machine.cooldown_scale = scale.clamp(0.05, 10.0);
+        }
+    }
+
+    /// Immediately completes all active ability cooldown timers on this entity.
+    pub fn reset_all_cooldowns(&mut self, world: &mut impl World) -> Result<usize, InitFault> {
+        let mut reset = 0usize;
+        self.run(world, |vm| {
+            let keys: Vec<StateKey> = vm
+                .machine
+                .snapshot
+                .instances
+                .iter()
+                .flat_map(|(&instance, inst)| {
+                    inst.states.iter().filter_map(move |(&raw, state)| {
+                        (state.active && state.ability_cooldown.is_some())
+                            .then_some(StateKey { instance, raw })
+                    })
+                })
+                .collect();
+            let now_ms = vm.machine.now_ms;
+            for key in keys {
+                if let Some(state) = vm.state_mut(key) {
+                    if let Some(cd) = &mut state.ability_cooldown {
+                        cd.current = 0.0;
+                        cd.last_ms = now_ms;
+                    }
+                }
+                vm.finish_cooldown(key)?;
+                reset += 1;
+            }
+            vm.run()
+        })?;
+        Ok(reset)
     }
 
     fn advance(

@@ -17,6 +17,9 @@ impl PlayerBodyRuntime {
                 .iter()
                 .flat_map(|(&id, instance)| {
                     instance.states.iter().filter_map(move |(&raw, state)| {
+                        if !matches!(state.kind, crate::script_init::StateKind::MoveTo { .. }) {
+                            return None;
+                        }
                         let (destination, speed) = state.move_request()?;
                         Some((
                             MoveToKey {

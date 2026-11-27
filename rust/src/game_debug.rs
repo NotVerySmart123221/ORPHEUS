@@ -158,7 +158,20 @@ pub(crate) struct DebugRay {
     pub target: Option<u32>,
     pub critical: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<DebugRaySurface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<DebugScriptRay>,
+}
+
+#[cfg(any(test, feature = "inspector"))]
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct DebugRaySurface {
+    pub geometry: &'static str,
+    pub mask: u16,
+    pub surface_flags: u16,
+    pub normal: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_source: Option<crate::collision_scene::StaticRaySource>,
 }
 
 #[cfg(any(test, feature = "inspector"))]
@@ -629,6 +642,7 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::ProjectedSelfSend => ("ProjectedSelfSend", None),
         StateKind::PersistentSend(_) => ("PersistentSend", None),
         StateKind::CosmeticEntity => ("CosmeticEntity", None),
+        StateKind::SprayPlacement(_) => ("SprayPlacement", None),
         StateKind::ChaseVar => ("ChaseVar", None),
         StateKind::Watch => ("Watch", None),
         StateKind::Observe { .. } => ("Observe", None),
@@ -642,5 +656,37 @@ fn state_kind_summary(kind: StateKind) -> (&'static str, Option<u8>) {
         StateKind::StaticTrace { .. } => ("StaticTrace", None),
         StateKind::MoveTo { .. } => ("MoveTo", None),
         StateKind::WeaponVolley { .. } => ("WeaponVolley", None),
+        StateKind::GroundRay => ("GroundRay", None),
+        StateKind::GenericTrackedTargets => ("GenericTrackedTargets", None),
+        StateKind::GenericModifyHealth { .. } => ("GenericModifyHealth", None),
+        StateKind::Pet { .. } => ("Pet", None),
+        StateKind::CombatModFilter { .. } => ("CombatModFilter", None),
+        StateKind::DeflectProjectiles { .. } => ("DeflectProjectiles", None),
+        StateKind::GenericContactSweep => ("GenericContactSweep", None),
+        StateKind::TargetAura { .. } => ("TargetAura", None),
+        StateKind::TargetSubScript { .. } => ("TargetSubScript", None),
+        StateKind::ConstantAccel => ("ConstantAccel", None),
+        StateKind::WallClimb => ("WallClimb", None),
+        StateKind::Grapple => ("Grapple", None),
+        StateKind::FilterArray => ("FilterArray", None),
+        StateKind::RecallHistory => ("RecallHistory", None),
+        StateKind::RecallRewind => ("RecallRewind", None),
+        StateKind::BallRoll { .. } => ("BallRoll", None),
+        StateKind::SpatialQuery => ("SpatialQuery", None),
+        StateKind::PhysicsExplosion => ("PhysicsExplosion", None),
+        StateKind::HitTracker { .. } => ("HitTracker", None),
+        StateKind::RayCast => ("RayCast", None),
+        StateKind::EntityAttach { .. } => ("EntityAttach", None),
+        StateKind::ModifierControl { .. } => ("ModifierControl", None),
+        StateKind::KinematicsControl { .. } => ("KinematicsControl", None),
+        StateKind::PlacementCast { .. } => ("PlacementCast", None),
+        StateKind::TeleportEffect => ("TeleportEffect", None),
+        StateKind::ProximityTrigger { .. } => ("ProximityTrigger", None),
+        StateKind::EntityStatus { .. } => ("EntityStatus", None),
+        StateKind::UxPresenter => ("UxPresenter", None),
+        StateKind::SyncVars => ("SyncVars", None),
+        StateKind::HeroOverride => ("HeroOverride", None),
+        StateKind::AiTactic => ("AiTactic", None),
+        StateKind::FieldDrivenState => ("FieldDrivenState", None),
     }
 }

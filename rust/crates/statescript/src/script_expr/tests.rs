@@ -6,7 +6,190 @@ use serde_json::json;
 use crate::script_graph::GraphStore;
 
 mod degree_trigonometry;
+mod direction_limits;
 mod entity_ray_cast;
+
+#[test]
+fn charge_cone_atan2_uses_y_then_x_and_returns_degrees() {
+    for (y, x, expected) in [(0.0, 1.0, 0.0), (1.0, 0.0, 90.0), (-1.0, 0.0, -90.0)] {
+        let config = expression(json!([6, 0, 6, 1, 49, 0]), &[], &[y, x], &[]);
+        assert_eq!(
+            evaluate(&config, &mut Vars::default()).unwrap(),
+            Value::Float(expected)
+        );
+    }
+}
+
+#[test]
+fn barrier_health_scale_uses_the_actor_ruleset() {
+    struct Rules {
+        key: u32,
+        value: Value,
+    }
+    impl Context for Rules {
+        fn ruleset(&mut self, id: u32) -> Value {
+            assert_eq!(id, self.key);
+            self.value.clone()
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../../../fixtures/behavior/statescript-barrier-health-scale-v1.json"
+    ))
+    .unwrap();
+    let key = fixture["input"]["rule"]
+        .as_u64()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let config = json!({"$": "STU_295F1CDE", "m_EE729DCB": 0});
+    let values = fixture["input"]["values"].as_array().unwrap();
+    let expected = fixture["expected"].as_array().unwrap();
+    assert_eq!(values.len(), expected.len());
+    for (value, expected) in values.iter().zip(expected) {
+        let value = match value {
+            Json::Null => Value::Null,
+            Json::Number(value) => value
+                .as_i64()
+                .map_or_else(|| Value::Float(value.as_f64().unwrap()), Value::Integer),
+            Json::Bool(value) => Value::Bool(*value),
+            _ => panic!("unexpected ruleset test value"),
+        };
+        let result = evaluate(&config, &mut Rules { key, value });
+        if let Some(expected) = expected.as_f64() {
+            assert_eq!(result, Ok(Value::Float(expected)));
+        } else {
+            assert_eq!(
+                result,
+                Err(EvalError::MalformedConfig(
+                    "invalid barrier health multiplier"
+                ))
+            );
+        }
+    }
+}
+
+#[test]
+fn wheel_selection_resolves_authored_slot_and_equipped_spray() {
+    struct Equipped {
+        slot: usize,
+        spray: u64,
+    }
+
+    impl Context for Equipped {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0101)
+        }
+
+        fn equipped_cosmetic(
+            &mut self,
+            entity: u32,
+            slot: usize,
+            cosmetic: EquippedCosmetic,
+        ) -> Option<u64> {
+            assert_eq!(cosmetic, EquippedCosmetic::Spray);
+            (entity == 0xa000_0101).then_some(if slot == self.slot { self.spray } else { 0 })
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-selection-ingress-v1.json"
+    )))
+    .unwrap();
+    let cases = &fixture["slot_cases"];
+    let spray = &cases["spray"];
+    let parse_asset =
+        |value: &Json| orpheus_runtime::format::parse_guid(value.as_str().unwrap()).unwrap();
+    let mut host = Equipped {
+        slot: usize::try_from(spray["slot"].as_u64().unwrap()).unwrap(),
+        spray: parse_asset(&spray["equipped"]),
+    };
+    let selection = |class: &str, guid: &Json| {
+        json!({
+            "$":class,
+            "m_548E5344":{"$":"STU_B70476F3","m_548E5344":guid,"m_resourceKey":null}
+        })
+    };
+    for (kind, class) in [("emote", "STU_3E7F59D8"), ("voice", "STU_955C40AE")] {
+        let case = &cases[kind];
+        assert_eq!(
+            evaluate(&selection(class, &case["action"]), &mut host),
+            Ok(Value::Integer(case["index"].as_i64().unwrap()))
+        );
+    }
+    for case in spray["cases"].as_array().unwrap() {
+        let equipped = json!({
+            "$":"STU_17B517B9","m_entity":{"$":"STU_B5A0CAF0"},
+            "m_slot":selection("STU_2E708EC1", &case["action"]),"m_resourceKey":null
+        });
+        assert_eq!(
+            evaluate(&equipped, &mut host),
+            Ok(Value::Asset(parse_asset(&case["expected"])))
+        );
+    }
+}
+
+#[test]
+fn emote_lookups_read_the_selected_body_slot() {
+    struct Equipped {
+        alias: u64,
+        blend_tree: u64,
+    }
+    impl Context for Equipped {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0101)
+        }
+
+        fn equipped_cosmetic(
+            &mut self,
+            entity: u32,
+            slot: usize,
+            cosmetic: EquippedCosmetic,
+        ) -> Option<u64> {
+            if entity != 0xa000_0101 {
+                return None;
+            }
+            Some(match (cosmetic, slot) {
+                (EquippedCosmetic::EmoteAlias, 1) => self.alias,
+                (EquippedCosmetic::EmoteBlendTree, 1) => self.blend_tree,
+                _ => 0,
+            })
+        }
+    }
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-emote-presentation-v1.json"
+    )))
+    .unwrap();
+    let asset = |key| {
+        orpheus_runtime::format::parse_guid(fixture["rust_asset_lookup"][key].as_str().unwrap())
+            .unwrap()
+    };
+    let mut context = Equipped {
+        alias: asset("alias"),
+        blend_tree: asset("blend_tree"),
+    };
+    let owner = json!({"$":"STU_B5A0CAF0"});
+    let slot = json!({"$":"STU_3E7F59D8","m_548E5344":{
+        "$":"STU_B70476F3","m_548E5344":fixture["input"]["chosen_action"]
+    }});
+    let alias =
+        json!({"$":"STU_250DEABD","m_target":{"$":"STU_33980609","m_entity":owner},"m_slot":slot});
+    let no_animation = json!({"$":"STUConfigVarAnimation","m_animation":null,"m_resourceKey":null});
+    assert_eq!(evaluate(&no_animation, &mut context), Ok(Value::Asset(0)));
+    let mut blend = json!({"$":"STU_DF7C7C63","m_resourceKey":null,"m_entity":owner,"m_slot":slot});
+    assert_eq!(
+        evaluate(&alias, &mut context),
+        Ok(Value::Asset(context.alias))
+    );
+    assert_eq!(
+        evaluate(&blend, &mut context),
+        Ok(Value::Asset(context.blend_tree))
+    );
+    blend["m_slot"] = json!({"$":"STUConfigVarInt","m_value":-1});
+    assert_eq!(evaluate(&blend, &mut context), Ok(Value::Asset(0)));
+}
 
 struct CatalogContext(GraphStore);
 
@@ -2338,6 +2521,50 @@ fn native_pitched_direction_reads_known_entity_pose_without_a_placement_gate() {
 }
 
 #[test]
+fn target_tag_array_and_capsule_radius_m_entity_fallback_evaluate_cleanly() {
+    struct DoomfistHost;
+    impl Context for DoomfistHost {
+        fn owner(&mut self) -> Value {
+            Value::Entity(0xa000_0001)
+        }
+        fn variable(&mut self, variable: Variable) -> Value {
+            match variable.id {
+                10 => Value::Array(vec![Value::Entity(0xa000_0002), Value::Entity(0xa000_0003)]),
+                11 => Value::Array(Vec::new()),
+                _ => Value::Null,
+            }
+        }
+        fn has_target_tag(&mut self, entity: u32, tag: u64) -> Option<bool> {
+            Some(entity == 0xa000_0003 && tag == 0x0d60_0000_0000_003a)
+        }
+    }
+
+    let mut host = DoomfistHost;
+    let radius_cfg = json!({
+        "$": "STU_F7FD94F9",
+        "m_A83C2C26": null,
+        "m_entity": { "$": "STU_B5A0CAF0", "m_EE729DCB": 0 }
+    });
+    assert_eq!(evaluate(&radius_cfg, &mut host), Ok(Value::Float(0.55)));
+
+    let tag_hit = json!({
+        "$": "STU_25ECB55F",
+        "m_entity": { "$": "STUConfigVarDynamic", "m_60DB8F99": 0, "m_identifier": 10 },
+        "m_88B0050A": "0x0D6000000000003A",
+        "m_EE729DCB": 0
+    });
+    assert_eq!(evaluate(&tag_hit, &mut host), Ok(Value::Bool(true)));
+
+    let tag_empty = json!({
+        "$": "STU_25ECB55F",
+        "m_entity": { "$": "STUConfigVarDynamic", "m_60DB8F99": 0, "m_identifier": 11 },
+        "m_88B0050A": "0x0D6000000000003A",
+        "m_EE729DCB": 0
+    });
+    assert_eq!(evaluate(&tag_empty, &mut host), Ok(Value::Bool(false)));
+}
+
+#[test]
 fn native_eye_position_resolves_the_selected_body_and_requires_a_finite_anchor() {
     struct Host {
         owner: u32,
@@ -4252,4 +4479,68 @@ fn the_normal_policy_nulls_the_tag_query_but_keeps_a_resolved_answer() {
             );
         }
     }
+}
+
+#[test]
+fn track_b2_config_vars_evaluate_generically() {
+    struct Host;
+    impl Context for Host {
+        fn static_target(&mut self, tag: u64) -> Option<u32> {
+            (tag == 0x0D60_0000_0000_02AD).then_some(77)
+        }
+        fn variable(&mut self, variable: Variable) -> Value {
+            if variable.id == 61 {
+                Value::Integer(42)
+            } else {
+                Value::Null
+            }
+        }
+    }
+    let mut host = Host;
+    assert_eq!(
+        evaluate(
+            &json!({"$": "STUConfigVarAnimAlias", "m_animAlias": "0x0C800000000000A9"}),
+            &mut host
+        ),
+        Ok(Value::Asset(0x0C80_0000_0000_00A9))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({"$": "STUConfigVarDataFlow", "m_5A6D4FBD": "0x04800000000005E2"}),
+            &mut host
+        ),
+        Ok(Value::Asset(0x0480_0000_0000_05E2))
+    );
+    assert_eq!(
+        evaluate(&json!({"$": "STU_BD2D717B", "m_B257A3A4": 1}), &mut host),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(
+        evaluate(&json!({"$": "STU_BD2D717B", "m_B257A3A4": 0}), &mut host),
+        Ok(Value::Bool(false))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({
+                "$": "STU_8529C204",
+                "m_out_Var": {"$": "STUConfigVarDynamic", "m_identifier": 61},
+                "m_value": {"$": "STUConfigVarInt", "m_value": 9}
+            }),
+            &mut host
+        ),
+        Ok(Value::Integer(9))
+    );
+    assert_eq!(
+        evaluate(
+            &json!({
+                "$": "STU_EB216A0B",
+                "m_filter": null,
+                "m_8B2A4DF3": null,
+                "m_9C7BD8B8": null,
+                "m_B486603E": {"$": "STU_357DABBB", "m_7D7C86A1": "0x0D600000000002AD"}
+            }),
+            &mut host
+        ),
+        Ok(Value::Entity(77))
+    );
 }

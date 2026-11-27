@@ -762,6 +762,159 @@ fn settled_health_facts_stay_with_the_original_target_generation() {
 }
 
 #[test]
+fn multikill_window_is_unchanged_by_an_older_elimination() {
+    use crate::{combat_voice::CombatVoiceCatalog, game_combat_messages::CombatNotice};
+    use serde_json::{Value as Json, json};
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/script-timed-elimination-cues-v1.json"
+    ))
+    .unwrap();
+    let stamp = |key: &str| {
+        contract["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["name"] == key)
+            .unwrap()["frame"]
+            .as_u64()
+            .unwrap() as u32
+    };
+    let window = contract["window_frames"].as_u64().unwrap();
+    let catalog = CombatVoiceCatalog::from_json(
+        &json!({
+            "multikill_window_ticks": window,
+            "multikills": {
+                "2": {"stimulus":"0x1","lines":["0x12d"]},
+                "3": {"stimulus":"0x2","lines":["0x12e"]},
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let body = spawn_player(&mut room, 1);
+    let killer = body.entity;
+    room.set_combat_voice(Arc::new(catalog));
+    let effective = stamp("expired window");
+    let older = stamp("older damage arriving late");
+    let after = stamp("second opponent after reset");
+
+    room.record_enemy_elimination(killer, 61, 1, effective);
+    room.record_enemy_elimination(killer, 62, 1, older);
+    assert!(room.take_player_cues().is_empty());
+
+    room.record_enemy_elimination(killer, 63, 1, after);
+    room.record_enemy_elimination(killer, 64, 1, after);
+    let cues = room.take_player_cues();
+    let lines: Vec<_> = cues
+        .iter()
+        .map(|cue| match cue.notice {
+            CombatNotice::Voice { line, .. } => line,
+            _ => panic!("expected announcer voice"),
+        })
+        .collect();
+    assert_eq!(lines, [301, 302]);
+
+    // Both kills on the deadline announce against the old count. The next
+    // frame starts a fresh streak even after those two announcements.
+    room.record_enemy_elimination(killer, 65, 1, after + 1);
+    assert!(room.take_player_cues().is_empty());
+    room.record_enemy_elimination(killer, 66, 1, after + 2);
+    let cues = room.take_player_cues();
+    assert!(
+        matches!(&cues[..], [cue] if matches!(cue.notice, CombatNotice::Voice { line: 301, .. }))
+    );
+
+    assert!(room.retire_player_body(body));
+    let reuse = &contract["body_reuse"];
+    let replacement = spawn_player(&mut room, reuse["generation"].as_u64().unwrap());
+    assert_eq!(replacement.entity, killer);
+    room.record_enemy_elimination(killer, 65, 1, reuse["first_kill"].as_u64().unwrap() as u32);
+    assert!(room.take_player_cues().is_empty());
+    room.record_enemy_elimination(killer, 66, 1, reuse["second_kill"].as_u64().unwrap() as u32);
+    let cues = room.take_player_cues();
+    assert!(
+        matches!(&cues[..], [cue] if matches!(cue.notice, CombatNotice::Voice { line: 301, .. }) && cue.listener == replacement)
+    );
+}
+
+#[test]
+#[ignore = "requires the prepared 104319 graph and combat voice tables"]
+fn prepared_multikill_filter_excludes_tagged_bodies_before_counting() {
+    use crate::{
+        combat_voice::CombatVoiceCatalog, game_bots::BotCatalog,
+        game_combat_messages::CombatNotice, script_graph::GraphStore,
+    };
+    use std::{path::PathBuf, time::Duration};
+
+    let data = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).join("data");
+    let graphs = GraphStore::load(data.join("game_graphs_174.json.gz")).unwrap();
+    let mut voice = CombatVoiceCatalog::load(data.join("combat_voice_174.json")).unwrap();
+    voice.bind_multikill_exclusions(&graphs);
+    assert!(voice.has_multikill_exclusions());
+    let (stimulus, line) = voice.multikill_cue(2, 2).unwrap();
+    let bots = BotCatalog::from_json(
+        r#"{
+        "heroes": {
+            "0x01": {"name": "Eligible", "body": "0x0400000000001403", "health": 100},
+            "0x02": {"name": "Excluded", "body": "0x04000000000014A9", "health": 100}
+        },
+        "maps": {"0x03": {"hints": {}, "spawners": [
+            {"hero":"0x01","team":1,"position":[0,0,2],"rotation":[0,0,0,1],"graphs":[]},
+            {"hero":"0x02","team":1,"position":[0,0,4],"rotation":[0,0,0,1],"graphs":[]},
+            {"hero":"0x01","team":1,"position":[0,0,6],"rotation":[0,0,0,1],"graphs":[]}
+        ]}}
+    }"#,
+    )
+    .unwrap()
+    .make(3, |_| Default::default());
+    let targets: Vec<_> = bots.iter().map(|bot| bot.entity).collect();
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.load_bot_target_tags(&graphs);
+    room.set_combat_voice(Arc::new(voice));
+    let killer = spawn_player(&mut room, 1).entity;
+    for (index, target) in targets.into_iter().enumerate() {
+        let frame = crate::game_clock::FIRST_TICK + index as u32 + 1;
+        let now = Duration::from_millis(u64::from(frame) * crate::script_runtime::FRAME_MS);
+        assert!(
+            room.apply_health(
+                target,
+                HealthEffect::Damage(1000.0),
+                Death {
+                    killer,
+                    frame,
+                    time: now.as_secs_f64(),
+                },
+                now,
+                None
+            )
+            .unwrap()
+            .unwrap()
+            .killed
+        );
+        let announcements: Vec<_> = room
+            .take_player_cues()
+            .into_iter()
+            .filter_map(|cue| match cue.notice {
+                CombatNotice::Voice {
+                    anchor: crate::world::GAME_MODE_ENTITY,
+                    stimulus,
+                    line,
+                    ..
+                } => Some((stimulus, line)),
+                _ => None,
+            })
+            .collect();
+        if index == 2 {
+            assert_eq!(announcements, [(stimulus, line)]);
+        } else {
+            assert!(announcements.is_empty());
+        }
+    }
+}
+
+#[test]
 fn lethal_health_change_notifies_source_with_settled_status_after_target_retirement() {
     use std::{io, sync::Mutex};
 
@@ -782,6 +935,8 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     struct HealthListener {
         runtime: Box<dyn OwnerBodyRuntime>,
         notification: Arc<Mutex<Option<Notification>>>,
+        hit_feedback: Arc<Mutex<Option<(HostEvent, f32)>>>,
+        elimination_feedback: Arc<Mutex<Option<Arc<HealthTargetFacts>>>>,
     }
 
     impl OwnerBodyRuntime for HealthListener {
@@ -795,6 +950,21 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
             Err(crate::script_init::InitFault::InvalidRoot(_instance))
         }
 
+        fn receive_applied_damage(
+            &mut self,
+            _: crate::game_combat::AppliedDamage,
+        ) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn receive_room_message(
+            &mut self,
+            _: u32,
+            _: crate::script_init::RoomMessage,
+        ) -> Result<usize, InitFault> {
+            Ok(0)
+        }
+
         fn receive_host_event(
             &mut self,
             event: HostEvent,
@@ -805,6 +975,37 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                     .lock()
                     .unwrap()
                     .replace((event, context.target_facts))
+                    .is_none()
+            );
+            Ok(1)
+        }
+
+        fn receive_authored_hit_feedback(
+            &mut self,
+            event: HostEvent,
+            context: &HostHealthContext,
+            variant: f32,
+        ) -> Result<usize, InitFault> {
+            assert!(context.critical_hit.is_some());
+            assert!(
+                self.hit_feedback
+                    .lock()
+                    .unwrap()
+                    .replace((event, variant))
+                    .is_none()
+            );
+            Ok(1)
+        }
+
+        fn receive_authored_elimination_feedback(
+            &mut self,
+            target: Arc<HealthTargetFacts>,
+        ) -> Result<usize, InitFault> {
+            assert!(
+                self.elimination_feedback
+                    .lock()
+                    .unwrap()
+                    .replace(target)
                     .is_none()
             );
             Ok(1)
@@ -838,22 +1039,26 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
     let Contract { input, expected } = contract();
     let ground = Arc::new(fixture_ground());
     let movers = MoverCatalog::default();
-    for (room_mode, expected_status, weapon_impact) in [
-        (Some(false), Some((Some(1), false)), true),
-        (Some(true), Some((None, false)), true),
-        (None, None, true),
-        (Some(false), Some((Some(1), false)), false),
+    for (room_mode, expected_status, weapon_impact, hit_variant) in [
+        (Some(false), Some((Some(1), false)), true, Some(1.0)),
+        (Some(true), Some((None, false)), true, Some(2.0)),
+        (None, None, true, None),
+        (Some(false), Some((Some(1), false)), false, Some(1.0)),
     ] {
         let bots = fixture_bots();
         let target = bots[0].entity;
         let mut room = RoomSimulation::new(bots).unwrap();
         let source = spawn_player(&mut room, 1);
         let notification = Arc::new(Mutex::new(None));
+        let hit_feedback = Arc::new(Mutex::new(None));
+        let elimination_feedback = Arc::new(Mutex::new(None));
         let state = room.player_body_mut(source).unwrap();
         let runtime = state.runtime.take().unwrap();
         state.runtime = Some(Box::new(HealthListener {
             runtime,
             notification: Arc::clone(&notification),
+            hit_feedback: Arc::clone(&hit_feedback),
+            elimination_feedback: Arc::clone(&elimination_feedback),
         }));
         if let Some(free_for_all) = room_mode {
             room.enable_spatial_queries(
@@ -862,8 +1067,16 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                 RoomSpatialNeeds::EntityFacts,
             );
         }
+        if room_mode.is_some() {
+            room.enable_authored_elimination_feedback();
+        }
         room.activate_combat();
-        room.enable_host_health_events();
+        assert!(room.authored_elimination_target(target).is_none());
+        if let Some(variant) = hit_variant {
+            room.enable_authored_hit_feedback(variant);
+        } else {
+            room.enable_host_health_events();
+        }
         room.prepare_spatial_frame(FIXTURE_CONTEXT.tick).unwrap();
 
         if weapon_impact {
@@ -892,6 +1105,17 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
             );
         }
         assert!(notification.lock().unwrap().is_none());
+        let elimination = elimination_feedback.lock().unwrap().take();
+        assert_eq!(elimination.is_some(), room_mode.is_some());
+        if let Some(facts) = elimination {
+            assert_eq!(facts.target, target);
+            assert_eq!(
+                facts.filter_flags,
+                Some(expected.replacement.target_facts.filter_flags)
+            );
+            let status = facts.room_status.unwrap();
+            assert_eq!((status.team, status.alive), expected_status.unwrap());
+        }
 
         let queries = BotQueries::new(room_mode.unwrap_or(false), &movers, &ground, None);
         let replacements = room
@@ -926,6 +1150,12 @@ fn lethal_health_change_notifies_source_with_settled_status_after_target_retirem
                 killed: true,
                 hit_tags: weapon_impact.then_some(HitTags::EMPTY),
             }
+        );
+        assert_eq!(
+            hit_feedback.lock().unwrap().take(),
+            hit_variant
+                .filter(|_| weapon_impact)
+                .map(|variant| (event, variant)),
         );
         let facts = facts.unwrap();
         assert_eq!(facts.target, target);

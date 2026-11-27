@@ -18,9 +18,9 @@ use super::super::{
         UnavailableSample, VarKey,
     },
     shapes::{
-        array_field, branch_path, case_path, configured, field, is_unlinked_plug,
-        parent_owned_graph_duration, pool_number, raw_indices, registered_state, same, source_key,
-        stored,
+        array_field, branch_path, captured_aim_lock_shape, case_path, configured, field,
+        is_unlinked_plug, parent_owned_graph_duration, pool_number, raw_indices, registered_state,
+        same, source_key, stored,
     },
     types::{InitFault, Issue, StateKind},
     world::{Site, World},
@@ -103,6 +103,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("Summoner beam ray");
                         self.refresh_summoner_beam_ray(key, node)?;
                     }
+                    Some(StateKind::GroundRay) => {
+                        let node = self.graph(id).state(usize::from(raw)).expect("ground ray");
+                        self.refresh_ground_ray(key, node)?;
+                    }
                     Some(StateKind::SummonerBeamDamage) => {
                         self.tick_summoner_beam_damage(key, elapsed_ms)?
                     }
@@ -148,6 +152,131 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .expect("modify health state");
                         self.world.modify_health(self.site(id, node), elapsed_ms);
                     }
+                    Some(StateKind::GenericModifyHealth { continuous: true }) => {
+                        // Retail continuous beams (Winston Tesla, Zarya, Symmetra, Moira)
+                        // settle at 20 Hz (~48 ms) rather than flooding 62.5 Hz hit notices.
+                        if elapsed_ms < 48 {
+                            if let Some(last) = self
+                                .machine
+                                .ticking
+                                .get_mut(&id)
+                                .and_then(|states| states.get_mut(&raw))
+                            {
+                                *last = now.saturating_sub(elapsed_ms);
+                            }
+                            continue;
+                        }
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic modify health state");
+                        self.apply_generic_modify_health(key, node, Some(elapsed_ms))?;
+                    }
+                    Some(StateKind::GenericContactSweep) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic contact sweep state");
+                        self.refresh_generic_contact_sweep(key, node)?;
+                    }
+                    Some(StateKind::TargetAura { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("target aura state");
+                        self.refresh_target_aura(key, node, elapsed_ms)?;
+                    }
+                    Some(StateKind::ConstantAccel) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("constant accel state");
+                        self.tick_constant_accel(key, node, elapsed_ms)?;
+                    }
+                    Some(StateKind::WallClimb) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("wall climb state");
+                        self.tick_wall_climb(key, node, elapsed_ms)?;
+                    }
+                    Some(StateKind::Grapple) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("grapple state");
+                        self.tick_grapple(key, node, elapsed_ms)?;
+                    }
+                    Some(StateKind::FilterArray) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("filter array state");
+                        self.refresh_filter_array(key, node)?;
+                    }
+                    Some(StateKind::RecallHistory) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("recall history state");
+                        self.tick_recall_history(key, node)?;
+                    }
+                    Some(StateKind::BallRoll { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("ball roll state");
+                        self.tick_ball_roll(key, node)?;
+                    }
+                    Some(StateKind::HitTracker { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("hit tracker state");
+                        self.tick_hit_tracker(key, node)?;
+                    }
+                    Some(StateKind::RayCast) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("ray cast state");
+                        self.refresh_ray_cast(key, node)?;
+                    }
+                    Some(StateKind::EntityAttach { target }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("entity attach state");
+                        self.tick_entity_attach(key, node, target)?;
+                    }
+                    Some(StateKind::KinematicsControl { mode }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("kinematics control state");
+                        self.tick_kinematics_control(key, node, mode)?;
+                    }
+                    Some(StateKind::EntityStatus { mode }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("entity status state");
+                        self.begin_entity_status(key, node, mode)?;
+                    }
+                    Some(StateKind::PlacementCast { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("placement cast state");
+                        self.refresh_placement_cast(key, node)?;
+                    }
+                    Some(StateKind::ProximityTrigger { .. }) => {
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("proximity trigger state");
+                        self.tick_proximity_trigger(key, node)?;
+                    }
                     Some(StateKind::PlacementSelector { .. }) => {
                         self.tick_placement_selector(key)?
                     }
@@ -164,6 +293,24 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .state(usize::from(raw))
                             .expect("tracked target state");
                         self.refresh_tracked_targets(key, node)?;
+                    }
+                    Some(StateKind::GenericTrackedTargets) => {
+                        if elapsed_ms < 48 {
+                            if let Some(last) = self
+                                .machine
+                                .ticking
+                                .get_mut(&id)
+                                .and_then(|states| states.get_mut(&raw))
+                            {
+                                *last = now.saturating_sub(elapsed_ms);
+                            }
+                            continue;
+                        }
+                        let node = self
+                            .graph(id)
+                            .state(usize::from(raw))
+                            .expect("generic tracked target state");
+                        self.refresh_generic_tracked_targets(key, node)?;
                     }
                     Some(StateKind::ViewTargets { next_sample })
                         if self.machine.frame >= next_sample =>
@@ -317,14 +464,107 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         self.post_after(key.instance, milliseconds as u64, Event::Timer(key.raw, 1))
     }
 
+    pub(in crate::script_init) fn resolve_anim_key(
+        &mut self,
+        id: u16,
+        node: &Node,
+    ) -> Option<(u64, u64, u64)> {
+        let alias_field = field(&node.fields, "m_11E0A658");
+        let alias = if alias_field.is_null() {
+            return None;
+        } else {
+            match self.evaluate(id, node, alias_field, None)? {
+                Value::Asset(guid) => guid,
+                Value::Integer(0) | Value::Null => 0,
+                Value::Float(0.0) => 0,
+                _ => return None,
+            }
+        };
+        if alias == 0 {
+            return Some((0, 0, 0));
+        }
+        let category = match field(&node.fields, "m_22326315") {
+            field if field.is_null() => 0,
+            field => match self.evaluate(id, node, field, None)? {
+                Value::Asset(guid) => guid,
+                _ => 0,
+            },
+        };
+        let mut blend_tree = 0u64;
+        if let Some(instance) = self.machine.snapshot.instances.get(&id) {
+            let active_trees: Vec<(u16, &Node)> = instance
+                .states
+                .iter()
+                .filter_map(|(&raw, state)| {
+                    if !state.active || state.ending {
+                        return None;
+                    }
+                    let candidate = self.graph(id).state(usize::from(raw))?;
+                    (candidate.class == "STU_A875CA49").then_some((raw, candidate))
+                })
+                .collect();
+            if let Some((_, tree_node)) = active_trees.last() {
+                if let Some(Value::Asset(guid)) =
+                    self.evaluate(id, tree_node, field(&tree_node.fields, "m_65D335ED"), None)
+                {
+                    blend_tree = guid;
+                }
+            }
+        }
+        Some((blend_tree, alias, category))
+    }
+
     pub(in crate::script_init) fn arm_animation(
         &mut self,
         key: StateKey,
         node: &Node,
     ) -> Result<(), InitFault> {
         let id = key.instance;
-        let duration = field(&node.fields, "m_86701C3E");
-        if duration.is_null() {
+        let looping = field(&node.fields, "m_37EE887D");
+        if !looping.is_null() {
+            if let Some(value) = self.evaluate(id, node, looping, None) {
+                if truthy(&value) {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        }
+        let duration_field = field(&node.fields, "m_86701C3E");
+        let mut authored_seconds = if duration_field.is_null() {
+            None
+        } else {
+            let Some(seconds) = self.evaluate(id, node, duration_field, None) else {
+                return Ok(());
+            };
+            Some(script_expr::to_float(&seconds))
+        };
+        if authored_seconds.is_none_or(|s| s < f64::from(f32::from_bits(0x38FA_0000))) {
+            if let Some((blend_tree, alias, category)) = self.resolve_anim_key(id, node) {
+                let site = self.site(id, node);
+                if let Some(resolved) = self
+                    .world
+                    .animation_duration(site, blend_tree, alias, category)
+                {
+                    let speed_field = field(&node.fields, "m_speedScalar");
+                    let scalar = if speed_field.is_null() {
+                        1.0
+                    } else {
+                        let Some(val) = self.evaluate(id, node, speed_field, None) else {
+                            return Ok(());
+                        };
+                        script_expr::to_float(&val)
+                    };
+                    let seconds = if scalar > 0.0 {
+                        resolved / scalar
+                    } else {
+                        resolved
+                    };
+                    authored_seconds = Some(f64::from(seconds as f32));
+                }
+            }
+        }
+        let Some(seconds) = authored_seconds else {
             let client_removes_zombardier_animation = (self.graph(id).index, node.pos)
                 == (0x0ca1, 58)
                 && field(&node.fields, "m_154DBA91")["$"] == "STUConfigVarBool"
@@ -336,7 +576,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             // parent ends it. Accept the untimed idle shape and Zombardier's
             // client-removed firing animation when they have no timer links.
             if (!field(&node.fields, "m_154DBA91").is_null()
-                && !client_removes_zombardier_animation)
+                && !client_removes_zombardier_animation
+                && !self
+                    .world
+                    .admits_generic_player_runtime(self.site(id, node)))
                 || !is_unlinked_plug(&node.fields, "m_A3B86BB0", "STUStatescriptOutputPlug")
                 || !is_unlinked_plug(&node.fields, "m_onFinishedPlug", "STUStatescriptOutputPlug")
             {
@@ -346,11 +589,8 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 );
             }
             return Ok(());
-        }
-        let Some(seconds) = self.evaluate(id, node, duration, None) else {
-            return Ok(());
         };
-        let delay = ((script_expr::to_float(&seconds) * 1000.0) as f32).round();
+        let delay = ((seconds * 1000.0) as f32).round();
         if !delay.is_finite() {
             self.report(
                 self.site(id, node),
@@ -467,7 +707,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .state(usize::from(key.raw))
             .expect("active timer state");
         if parameter == 1
-            && (kind == StateKind::Wait
+            && (matches!(kind, StateKind::Wait | StateKind::RecallRewind)
                 || (kind == StateKind::Plain
                     && (parent_owned_graph_duration(node).is_some()
                         || crate::script_init::shapes::timed_position_duration(node).is_some())))
@@ -732,19 +972,22 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     .graph(key.instance)
                     .state(usize::from(key.raw))
                     .expect("active health pool");
-                self.report(
-                    self.site(key.instance, node),
-                    Issue::UnsupportedField("changing health pool capacity"),
-                );
+                let site = self.site(key.instance, node);
+                if !self.world.admits_generic_player_runtime(site) {
+                    self.report(
+                        site,
+                        Issue::UnsupportedField("changing health pool capacity"),
+                    );
+                }
             }
         }
-        if self.state(key).is_some_and(|state| state.active) {
+        if let Some(state) = self.state(key).filter(|state| state.active) {
             let graph = self.graph(key.instance);
-            if graph.index == 0x0c8c {
-                if let Some(node) = graph.state(usize::from(key.raw)) {
-                    if matches!(node.pos, 33 | 275) {
-                        self.try_complete(key, node, 0)?;
-                    }
+            if let Some(node) = graph.state(usize::from(key.raw)) {
+                if state.kind == StateKind::Anim
+                    || !array_field(&node.fields, "m_transitionPlug").is_empty()
+                {
+                    self.try_complete(key, node, 0)?;
                 }
             }
         }
@@ -1394,7 +1637,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             field(&node.fields, "m_262AE982"),
             Some(key),
         )?;
-        for (index, case) in array_field(&node.fields, "m_05706D1C").iter().enumerate() {
+        let cases = array_field(&node.fields, "m_05706D1C");
+        // Retail `m_F0F0720B == 1` marks a 0-based indexed switch (e.g. Brigitte
+        // LMB alternating swings `1248:81`, Sigma LMB `187F:62`) where every case
+        // row has `m_value: null` and the integer value selects `cases[index]`.
+        if field(&node.fields, "m_F0F0720B").as_u64() == Some(1) {
+            let idx = script_expr::to_int(&value, -1);
+            if idx >= 0 {
+                let idx = idx as usize;
+                if cases.get(idx).is_some_and(Json::is_object) {
+                    return Some(Some(idx));
+                }
+            }
+            return Some(None);
+        }
+        for (index, case) in cases.iter().enumerate() {
             if case.is_object() {
                 let candidate = self.evaluate(key.instance, node, field(case, "m_value"), None)?;
                 if equal(&value, &candidate) {
@@ -1430,14 +1687,29 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
-        let entry =
-            registered_state(self.graph(key.instance), node).expect("validated linked state");
+        let entry = registered_state(self.graph(key.instance), node).unwrap_or(
+            super::super::machine::RegisteredState {
+                class: if node.class == "STU_9935FBC8" {
+                    RegisteredClass::CinematicAim
+                } else {
+                    RegisteredClass::EntityControl
+                },
+                server_only: node.server_only,
+                suppresses_model: false,
+            },
+        );
         if entry.suppresses_model && !self.world.set_encounter_model_enabled(site, false) {
             self.report(site, Issue::UnsupportedField("encounter model control"));
             return Ok(());
         }
         if entry.class == RegisteredClass::CinematicAim {
-            let accepted = if (site.graph, site.node) == (0x224e, Some(34)) {
+            let is_cone_clamp = ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
+                .iter()
+                .any(|name| {
+                    let cfg = field(&node.fields, name);
+                    !cfg.is_null() && field(cfg, "m_value").as_i64() != Some(0)
+                });
+            let accepted = if captured_aim_lock_shape(node) {
                 let mut degrees = [0.0; 2];
                 for (out, name) in degrees.iter_mut().zip(["m_A53161C8", "m_AB37A892"]) {
                     let Some(value) = self.evaluate_at_with_initial(
@@ -1448,9 +1720,20 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     ) else {
                         return Ok(());
                     };
-                    *out = script_expr::to_float(&value);
+                    *out = match value {
+                        Value::Integer(value) => value as f64,
+                        Value::Float(value) if value.is_finite() => value,
+                        _ => {
+                            self.report(site, Issue::UnsupportedField("captured aim lock pose"));
+                            return Ok(());
+                        }
+                    };
                 }
                 self.world.set_captured_aim_lock(site, Some(degrees))
+            } else if is_cone_clamp && self.world.admits_generic_player_runtime(site) {
+                // Cone-limited aim (`0x0D06:81` Rocket Punch ±60° yaw / ±30° pitch) must
+                // link in `CinematicAim` without hard-locking server `mover.cinematic_aim`.
+                true
             } else {
                 self.world.set_cinematic_aim_lock(site, true)
             };
@@ -1473,9 +1756,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         if entry.class == RegisteredClass::CinematicAim {
             let site = self.site(key.instance, node);
-            if (site.graph, site.node) == (0x224e, Some(34)) {
+            let is_cone_clamp = ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
+                .iter()
+                .any(|name| {
+                    let cfg = field(&node.fields, name);
+                    !cfg.is_null() && field(cfg, "m_value").as_i64() != Some(0)
+                });
+            if captured_aim_lock_shape(node) {
                 self.world.set_captured_aim_lock(site, None);
-            } else {
+            } else if !(is_cone_clamp && self.world.admits_generic_player_runtime(site)) {
                 self.world.set_cinematic_aim_lock(site, false);
             }
         }
@@ -1512,6 +1801,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                         limit: self.machine.max_work,
                         operation: "linked state registry",
                     })?;
+            self.machine.snapshot_dirty = true;
             self.machine.snapshot.instances[&key.instance].states[&key.raw].kind =
                 StateKind::Registered { next };
             if !entry.server_only {
@@ -1621,6 +1911,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
             StateKind::Shockwave { .. } => {
                 if let Some(state) = self.state_mut(key) {
+                    state.ground_wave = None;
                     state.kind = StateKind::Shockwave { managed: false };
                 }
             }
@@ -1647,6 +1938,48 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 if let Some(current) = self.world.remove_health_pool(self.site(id, node), pool) {
                     self.publish_health_pool(key, node, current)?;
                 }
+            }
+            StateKind::Pet {
+                entity: Some(pet_id),
+            } => {
+                self.end_pet(key, node, pet_id)?;
+            }
+            StateKind::CombatModFilter { registered: true } => {
+                self.world.set_combat_mod(self.site(id, node), None);
+            }
+            StateKind::DeflectProjectiles { .. } => {
+                self.world.set_deflect_state(self.site(id, node), None);
+            }
+            StateKind::TargetAura { effect } => {
+                self.world
+                    .set_target_aura(self.site(id, node), &[], effect, None, 0);
+            }
+            StateKind::Grapple => {
+                if let Ok(Some(latch_var)) = script_expr::lvalue(field(&node.fields, "m_5ED803CF"))
+                {
+                    let _ = self.write(source_key(id, latch_var), Value::Bool(false));
+                }
+            }
+            StateKind::TargetSubScript { child: Some(child) } => {
+                self.destroy(child)?;
+            }
+            StateKind::BallRoll { .. } => {
+                self.world
+                    .set_ball_roll_state(self.site(id, node), false, 0.0);
+                self.machine
+                    .movement_modifiers
+                    .retain(|entry, _| entry.instance != key.instance || entry.state != key.raw);
+            }
+            StateKind::KinematicsControl { .. } => {
+                self.machine
+                    .movement_modifiers
+                    .retain(|entry, _| entry.instance != key.instance || entry.state != key.raw);
+            }
+            StateKind::ModifierControl { blocks_input: true } => {
+                self.machine.control_blocked = false;
+            }
+            StateKind::EntityStatus { mode: 1 } => {
+                self.world.set_combat_mod(self.site(id, node), None);
             }
             StateKind::BooleanSwitch(branch) => {
                 self.exit_subgraph(id, node, branch_path(branch), depth + 1)?
@@ -1717,6 +2050,21 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if matches!(kind, StateKind::HealthPool { .. }) {
             state.kind = StateKind::HealthPool { pool: None };
         }
+        if matches!(kind, StateKind::Pet { .. }) {
+            state.kind = StateKind::Pet { entity: None };
+        }
+        if matches!(kind, StateKind::CombatModFilter { .. }) {
+            state.kind = StateKind::CombatModFilter { registered: false };
+        }
+        if matches!(kind, StateKind::TargetSubScript { .. }) {
+            state.kind = StateKind::TargetSubScript { child: None };
+        }
+        if kind == StateKind::Grapple {
+            state.grapple = None;
+        }
+        if matches!(kind, StateKind::BallRoll { .. }) {
+            state.kind = StateKind::BallRoll { fireball: false };
+        }
         if matches!(kind, StateKind::DisplayName { .. }) {
             state.kind = StateKind::DisplayName { binding: None };
         }
@@ -1750,14 +2098,26 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 under: false,
             };
         }
-        self.machine.watchers.retain(|_, watchers| {
-            watchers.retain(|watcher| *watcher != key);
-            !watchers.is_empty()
-        });
-        self.machine.foreign_watchers.retain(|_, watchers| {
-            watchers.retain(|watcher| *watcher != key);
-            !watchers.is_empty()
-        });
+        if let Some(watched_vars) = self.machine.state_watches.remove(&key) {
+            for var_key in watched_vars {
+                if let Some(watchers) = self.machine.watchers.get_mut(&var_key) {
+                    watchers.retain(|watcher| *watcher != key);
+                    if watchers.is_empty() {
+                        self.machine.watchers.remove(&var_key);
+                    }
+                }
+            }
+        }
+        if let Some(foreign_keys) = self.machine.state_foreign_watches.remove(&key) {
+            for fk in foreign_keys {
+                if let Some(watchers) = self.machine.foreign_watchers.get_mut(&fk) {
+                    watchers.retain(|watcher| *watcher != key);
+                    if watchers.is_empty() {
+                        self.machine.foreign_watchers.remove(&fk);
+                    }
+                }
+            }
+        }
         let ending = if finished {
             "m_onFinishedPlug"
         } else {
@@ -1896,6 +2256,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                                 | StateKind::WeaponVolley { .. }
                                 | StateKind::ButtonBlock(Some(_))
                                 | StateKind::HealthPool { pool: Some(_) }
+                                | StateKind::Pet { entity: Some(_) }
+                                | StateKind::CombatModFilter { registered: true }
+                                | StateKind::DeflectProjectiles { .. }
+                                | StateKind::TargetAura { .. }
+                                | StateKind::BallRoll { .. }
+                                | StateKind::ModifierControl { blocks_input: true }
+                                | StateKind::EntityStatus { mode: 1 }
                                 | StateKind::DisplayName { binding: Some(_) }
                                 | StateKind::TargetTag { effect: Some(_) }
                                 | StateKind::AiWeaponOverride { record: Some(_) }
@@ -2009,6 +2376,46 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     let site = self.site(id, node);
                     self.world.remove_health_pool(site, pool);
                     self.publish_health_totals(site)?;
+                } else if let StateKind::Pet {
+                    entity: Some(pet_id),
+                } = kind
+                {
+                    let node = self.graph(id).state(usize::from(raw)).expect("pet state");
+                    self.world.despawn_pet(self.site(id, node), pet_id);
+                } else if let StateKind::CombatModFilter { registered: true } = kind {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("combat mod state");
+                    self.world.set_combat_mod(self.site(id, node), None);
+                } else if matches!(kind, StateKind::DeflectProjectiles { .. }) {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("deflect state");
+                    self.world.set_deflect_state(self.site(id, node), None);
+                } else if let StateKind::TargetAura { effect } = kind {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("target aura state");
+                    self.world
+                        .set_target_aura(self.site(id, node), &[], effect, None, 0);
+                } else if matches!(kind, StateKind::BallRoll { .. }) {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("ball roll state");
+                    self.world
+                        .set_ball_roll_state(self.site(id, node), false, 0.0);
+                } else if matches!(kind, StateKind::ModifierControl { blocks_input: true }) {
+                    self.machine.control_blocked = false;
+                } else if matches!(kind, StateKind::EntityStatus { mode: 1 }) {
+                    let node = self
+                        .graph(id)
+                        .state(usize::from(raw))
+                        .expect("entity status state");
+                    self.world.set_combat_mod(self.site(id, node), None);
                 } else if matches!(kind, StateKind::WeaponVolley { .. }) {
                     self.finish_volley(key, 0)?;
                 } else if kind == StateKind::ChaseVar {
@@ -2021,6 +2428,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
             }
             self.detach_actor_target_guard(id);
+            self.machine.snapshot_dirty = true;
             self.machine.snapshot.instances.shift_remove(&id);
             self.machine
                 .movement_modifiers
@@ -2035,6 +2443,12 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             self.machine
                 .ability_presses
                 .retain(|key, _| key.instance != id);
+            self.machine
+                .state_watches
+                .retain(|watcher, _| watcher.instance != id);
+            self.machine
+                .state_foreign_watches
+                .retain(|watcher, _| watcher.instance != id);
             self.machine.watchers.retain(|key, watchers| {
                 if matches!(key, VarKey::Instance(instance, _) if *instance == id) {
                     return false;

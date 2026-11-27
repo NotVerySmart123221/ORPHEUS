@@ -1,5 +1,135 @@
 use super::*;
 
+fn remote_contact_delivery(id: BodyId, world: &mut WorldDelivery, arrived: bool) {
+    let update = EntityUpdate {
+        entity: id.entity,
+        operation: Some(Operation::Create(Box::new(crate::world::Create::new(
+            1,
+            Vec::new(),
+        )))),
+        ..Default::default()
+    };
+    world.create_remote_player(id, update.clone());
+    let create = Record {
+        update,
+        delivery: Delivery::RemotePlayerCreate(id),
+    };
+    world.acknowledge(outcome(Arc::new(create), arrived), Duration::ZERO);
+}
+
+#[test]
+fn hostile_actor_contact_corrects_ordinary_movement_with_or_without_an_owner_script() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/owner-actor-contact-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["input"];
+    let start = u32::try_from(input["start_frame"].as_u64().unwrap()).unwrap();
+    let last = u32::try_from(input["last_frame"].as_u64().unwrap()).unwrap();
+    let hero = crate::accounts::parse_guid(input["hero"].as_str().unwrap()).unwrap();
+    let position: [f64; 3] = serde_json::from_value(input["actor_position"].clone()).unwrap();
+    let minimum_separation = input["minimum_capsule_separation"].as_f64().unwrap();
+    let right = i8::try_from(input["right"].as_i64().unwrap()).unwrap();
+    let card = PlayerCard::default();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &card,
+    };
+    for (team, scripted, delivered) in [
+        (1, true, true),
+        (1, false, true),
+        (0, true, true),
+        (0, false, true),
+        (1, true, false),
+        (1, false, false),
+    ] {
+        let mut scene = PreparedScene::fixture_for_bots(Vec::new());
+        let mut world = WorldDelivery::new(OWNER);
+        let mut egress = GameEgress::default();
+        let id = avatar(1, 1);
+        let target = avatar(2, 1);
+        world.started = Some(start);
+        world.input.processed = Some(start);
+        let room = scene.simulation_mut();
+        activate_script(&mut world, room, id, hero, Arc::default());
+        if !scripted {
+            world.cancel_body_script(Some(room));
+        }
+        room.player_body_mut(id).unwrap().mover = Mover::new(
+            MoverSettings {
+                accel_air: 35.0,
+                gravity_scale: 0.0,
+                ..MoverSettings::default()
+            },
+            Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        room.spawn_player_body(PlayerBodyState::new(
+            target,
+            OWNER + 0x100,
+            1,
+            team,
+            7,
+            mover_at(position),
+            None,
+            start,
+            None,
+        ))
+        .unwrap();
+        room.enable_movement_contacts(
+            false,
+            Arc::new(crate::mover_settings::MoverCatalog::default()),
+        );
+        world.acknowledge(
+            outcome(Arc::new(record(id.entity, Delivery::CreateBody(id))), true),
+            Duration::ZERO,
+        );
+        remote_contact_delivery(target, &mut world, delivered);
+        assert_eq!(world.actor_contact_ready(target.entity), delivered);
+        for frame in start + 1..=last {
+            scene
+                .simulation_mut()
+                .prepare_movement_frame(frame)
+                .unwrap();
+            world.queue_commands(
+                frame,
+                &[Command {
+                    frame,
+                    right,
+                    ..Command::default()
+                }],
+            );
+            world
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
+                .unwrap();
+        }
+        let pose = scene.simulation().player_body(id).unwrap().mover.pose();
+        let (_, sent) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            last,
+            0,
+        );
+        let corrected = sent.records.contains(&RecordSource::Movement(0));
+        let blocked = team == 1 && delivered;
+        if blocked {
+            assert!(
+                pose.position[0] > 0.0 && position[0] - pose.position[0] >= minimum_separation,
+                "{pose:?}"
+            );
+        } else {
+            assert!(pose.position[0] > position[0], "{pose:?}");
+        }
+        assert_eq!(corrected, scripted || blocked);
+    }
+}
+
 #[test]
 fn combat_impulse_uses_the_resolved_owner_pose_with_or_without_a_script() {
     use crate::mover::VelocityChange;
@@ -179,6 +309,7 @@ fn player_displacement_uses_room_actor_contacts_for_the_authoritative_pose() {
         target.entity += 0x100;
         world.started = Some(100);
         activate_script(&mut world, room, id, 7, Arc::default());
+        remote_contact_delivery(target, &mut world, true);
         room.spawn_player_body(PlayerBodyState::new(
             target,
             OWNER + 0x100,
@@ -267,7 +398,7 @@ fn swept_owner_correction_uses_the_applied_pose_and_outlives_a_script_fault() {
         let fault = Arc::new(AtomicBool::new(false));
         world.started = Some(spawn);
         world.input.processed = Some(spawn);
-        activate_script(
+        activate_script_without_movement_projection(
             &mut world,
             scene.simulation_mut(),
             id,

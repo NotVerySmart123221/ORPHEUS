@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "case_id": "wheel-base-actions-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "cedec602",
+    "paths": [
+      "docs/COMMUNICATION_WHEEL.txt",
+      "src/ow174/game/script/nodes.py"
+    ],
+    "notes": "The 104319 runtime registry resolves the three classes to the base Action. For STU_71FE9852, typeinfo 2DE36F8 first matches parent 2DD5430 at registry record 165. Relocated graph IDs and continuation values are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "input": [
+    {
+      "class": "STU_631D36C3",
+      "graph": 60500,
+      "continuation": 8
+    },
+    {
+      "class": "STU_94771561",
+      "graph": 60501,
+      "continuation": 9
+    },
+    {
+      "class": "STU_71FE9852",
+      "graph": 60502,
+      "continuation": 10
+    }
+  ]
+}

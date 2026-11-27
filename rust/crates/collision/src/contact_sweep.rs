@@ -127,6 +127,15 @@ pub fn shape_cast(
     b: CastShape<'_>,
     options: CastOptions,
 ) -> Result<Option<ShapeHit>, PointSetSize> {
+    shape_cast_with_skin(a, b, options, SKIN)
+}
+
+pub(crate) fn shape_cast_with_skin(
+    a: CastShape<'_>,
+    b: CastShape<'_>,
+    options: CastOptions,
+    skin: f32,
+) -> Result<Option<ShapeHit>, PointSetSize> {
     if a.points.is_empty()
         || b.points.is_empty()
         || a.points.len() > usize::from(ABSENT)
@@ -146,8 +155,8 @@ pub fn shape_cast(
     });
     let (points_a, points_b) = (points_a.as_slice(), points_b.as_slice());
     let spread_a = Points::mapped(&points_a[1..], |point| sub(point, points_a[0]));
-    let radius_a = maxps(a.radius, SKIN);
-    let mut sigma = (maxps(b.radius, SKIN) + radius_a) - SKIN;
+    let radius_a = maxps(a.radius, skin);
+    let mut sigma = (maxps(b.radius, skin) + radius_a) - skin;
     let mut target = CAST_TOLERANCE + sigma;
     let mut target_sq = target * target;
     let mut fraction = 0.0;
@@ -272,7 +281,17 @@ pub fn mesh_sweep(
     mesh: &ContactMesh,
     frame: ContactFrame,
     probe: MeshProbe<'_>,
+    max_fraction: f32,
+) -> Result<Option<MeshHit>, PointSetSize> {
+    mesh_sweep_with_skin(mesh, frame, probe, max_fraction, SKIN)
+}
+
+pub(crate) fn mesh_sweep_with_skin(
+    mesh: &ContactMesh,
+    frame: ContactFrame,
+    probe: MeshProbe<'_>,
     mut max_fraction: f32,
+    skin: f32,
 ) -> Result<Option<MeshHit>, PointSetSize> {
     if probe.points.is_empty() || probe.points.len() > usize::from(ABSENT) {
         return Err(PointSetSize);
@@ -322,7 +341,7 @@ pub fn mesh_sweep(
     }
     let b = CastShape {
         points: moved,
-        radius: maxps(SKIN, radius),
+        radius,
         frame: Some(
             ContactFrame {
                 translation: center,
@@ -338,7 +357,7 @@ pub fn mesh_sweep(
             .expect("the mesh query returned a valid triangle");
         let a = CastShape {
             points: &points,
-            radius: SKIN,
+            radius: skin,
             frame: None,
         };
         let options = CastOptions {
@@ -347,7 +366,7 @@ pub fn mesh_sweep(
             hit_touching: false,
             shrink: false,
         };
-        if let Some(hit) = shape_cast(a, b, options)? {
+        if let Some(hit) = shape_cast_with_skin(a, b, options, skin)? {
             max_fraction = hit.fraction;
             nearest = Some(MeshHit { hit, triangle });
         }

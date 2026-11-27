@@ -220,7 +220,7 @@ fn normal_cassidy_receives_victory_view_and_result() {
         )
         .unwrap();
     let mut scene = assets.prepare_junkenstein(map, card, 0).unwrap();
-    let boss = crate::junkenstein_navigation::ROADHOG;
+    let boss = crate::pve_encounter::navigation::ROADHOG;
     let catalog = NpcCatalog::load(runtime.join("data/junkenstein/junkenstein-npcs.json")).unwrap();
     let definition =
         encounter_definition(Some(&catalog), &assets.graphs, scene.heroes(), boss).unwrap();
@@ -281,23 +281,23 @@ fn normal_cassidy_receives_victory_view_and_result() {
         .unwrap();
     for (message, params) in [
         (
-            crate::junkenstein_messages::VICTORY_VIEW,
+            crate::pve_encounter::messages::VICTORY_VIEW,
             Variables::from([(0x390, Value::Bool(true)), (8, Value::Entity(entity))]),
         ),
         (
-            crate::junkenstein_messages::VICTORY_VIEW,
+            crate::pve_encounter::messages::VICTORY_VIEW,
             Variables::from([(0x390, Value::Bool(false))]),
         ),
         (
-            crate::junkenstein_messages::VICTORY_VIEW,
+            crate::pve_encounter::messages::VICTORY_VIEW,
             Variables::from([(0x390, Value::Bool(true)), (8, Value::Entity(subject))]),
         ),
         (
-            crate::junkenstein_messages::VICTORY_VIEW,
+            crate::pve_encounter::messages::VICTORY_VIEW,
             Variables::from([(0x390, Value::Bool(false))]),
         ),
         (
-            crate::junkenstein_messages::ENCOUNTER_RESULT,
+            crate::pve_encounter::messages::ENCOUNTER_RESULT,
             Variables::from([
                 (0x3ae, Value::Bool(true)),
                 (0x3ad, Value::Entity(subject)),
@@ -339,7 +339,7 @@ fn normal_cassidy_receives_victory_view_and_result() {
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn configured_normal_validation_changes_gate_capacity_and_scopes_immunity() {
     use crate::game_content::{JUNKENSTEIN_MAP, MapCatalog};
-    use crate::junkenstein_validation::JunkensteinValidation;
+    use crate::pve_encounter::validation::JunkensteinValidation;
 
     let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let mut assets = SceneAssets::load(&runtime).unwrap();
@@ -691,8 +691,12 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         assert!(hit.is_none(), "dead Boss received another hit");
                         continue;
                     }
+                    if fan && hit.is_none() {
+                        // The burst consumes the round even when its authored cone misses.
+                        continue;
+                    }
                     let hit = hit.expect("visible Boss on the street must be hit");
-                    assert_eq!(hit.health.entity, entity);
+                    assert_eq!(hit.damage.target_facts.target, entity);
                     let before_credit =
                         crate::script_expr::to_float(&owner.snapshot().unwrap().variables[&342]);
                     let mut stale_source = hit.damage.clone();
@@ -775,6 +779,9 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         terminal.then_some(CombatNotice::Elimination {
                             killer: shot.source,
                             victim: entity,
+                            loadout: 0,
+                            fire: 100,
+                            critical: false,
                         })
                     );
                     let current = room
@@ -785,7 +792,11 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                         .health
                         .unwrap();
                     assert!((current - (maximum - total_dealt)).abs() < 0.001);
-                    let Some(crate::world::Operation::Update(components)) = hit.health.operation
+                    let Some(crate::world::Operation::Update(components)) = room
+                        .take_scripted_health()
+                        .into_iter()
+                        .rfind(|update| update.entity == entity)
+                        .and_then(|update| update.operation)
                     else {
                         panic!("missing health component update")
                     };
@@ -860,12 +871,12 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                     );
                 }
             }
-            use crate::junkenstein_voice::{self, BossSpeech};
+            use crate::pve_encounter::voice::BossSpeech;
             let defeat = voices
                 .iter()
                 .filter(|request| {
                     matches!(
-                        junkenstein_voice::boss_speech(boss, None, request.stimulus),
+                        crate::pve_encounter::voice::boss_speech(boss, None, request.stimulus),
                         Some(BossSpeech::Defeat(_))
                     )
                 })
@@ -879,15 +890,19 @@ pub(super) fn verify_normal_cassidy_damage_and_charge(heroes: &[u64], variants: 
                 let notice = defeat[0];
                 assert_eq!((notice.anchor, notice.speaker), (entity, GAME_MODE_ENTITY));
                 let Some(BossSpeech::Defeat(rows)) =
-                    junkenstein_voice::boss_speech(boss, None, notice.stimulus)
+                    crate::pve_encounter::voice::boss_speech(boss, None, notice.stimulus)
                 else {
                     unreachable!()
                 };
                 assert!(rows.iter().any(|row| row.line == notice.line
                     && (row.killer.is_none() || row.killer == Some(CASSIDY))));
                 assert!(
-                    junkenstein_voice::boss_duration(notice.line as u32, notice.stimulus, true)
-                        .is_some_and(|duration| duration > 0.0)
+                    crate::pve_encounter::voice::boss_duration(
+                        notice.line as u32,
+                        notice.stimulus,
+                        true
+                    )
+                    .is_some_and(|duration| duration > 0.0)
                 );
             } else {
                 assert!(
@@ -1616,9 +1631,9 @@ fn normal_cassidy_charges_locks_and_fires_the_authored_deadeye() {
                 .unwrap()
             {
                 last_damage = Some(impact.damage.clone());
+                hit_entities.push(impact.damage.target_facts.target);
                 owner.receive_applied_damage(impact.damage).unwrap();
                 assert_eq!(charge(&*owner), 0.0, "Deadeye must not recharge itself");
-                hit_entities.push(impact.health.entity);
             }
         }
     }
@@ -1873,9 +1888,12 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     for (source, message) in [
         (
             GAME_MODE_ENTITY,
-            crate::junkenstein_messages::RESET_HIGHLIGHTS,
+            crate::pve_encounter::messages::RESET_HIGHLIGHTS,
         ),
-        (0xc000_1000, crate::junkenstein_messages::BOSS_INTRO_ENDED),
+        (
+            0xc000_1000,
+            crate::pve_encounter::messages::BOSS_INTRO_ENDED,
+        ),
     ] {
         assert_eq!(
             owner
@@ -1898,9 +1916,9 @@ fn junkenstein_room_clock_starts_countdown_once_after_cassidy_selection() {
     let sender = 0xc000_1000;
     for direction in [-1.0, 1.0] {
         owner
-            .receive_sighting(crate::junkenstein_messages::DefenderSighting {
+            .receive_sighting(crate::pve_encounter::messages::DefenderSighting {
                 target: 0xa000_0101,
-                source: crate::junkenstein_messages::SightingSource {
+                source: crate::pve_encounter::messages::SightingSource {
                     entity: sender,
                     position: [x + direction * sin, y, z + direction * cos],
                     tags: [Some(false); 3],

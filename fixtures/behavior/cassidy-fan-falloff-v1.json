@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "cassidy-fan-falloff-v1",
+  "target_build": 104319,
+  "evidence": "prepared authored weapon and synthetic room",
+  "cases": [
+    {"contact_distance": 15, "raw_damage_per_round": 50, "settled_damage": 200, "elimination": true},
+    {"contact_distance": 20, "raw_damage_per_round": 50, "settled_damage": 200, "elimination": true},
+    {"contact_distance": 30, "raw_damage_per_round": 32.5, "settled_damage": 195, "elimination": false},
+    {"contact_distance": 40, "raw_damage_per_round": 15, "settled_damage": 90, "elimination": false},
+    {"contact_distance": 55, "raw_damage_per_round": 15, "settled_damage": 90, "elimination": false}
+  ]
+}

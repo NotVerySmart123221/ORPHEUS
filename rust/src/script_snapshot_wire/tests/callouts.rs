@@ -3,6 +3,34 @@ use crate::script_init::Component;
 
 #[test]
 fn authored_callout_retries_with_its_own_values_in_both_body_streams() {
+    assert_authored_action_retry("STU_7106C356", json!({"m_text":{"$":"STU_E7579408"}}));
+}
+
+#[test]
+fn authored_self_client_message_uses_the_existing_reliable_action_stream() {
+    assert_authored_action_retry(
+        "STU_100EF8C2",
+        json!({
+            "m_gameMessage":{"$":"STUConfigVarGameMessage","m_gameMessage":"0x0240000000000001"},
+            "m_targets":{"$":"STU_B5A0CAF0"}
+        }),
+    );
+}
+
+#[test]
+fn authored_effect_retries_with_its_own_values_in_both_body_streams() {
+    assert_authored_action_retry(
+        "STUStatescriptActionEffect",
+        json!({
+            "m_effect":{"$":"STUConfigVarEffect","m_effect":"0x0300000000000001","m_resourceKey":null},
+            "m_3E3E203A":{"$":"STU_B5A0CAF0"},
+            "m_dataFlow":[{"$":"STU_13D35171",
+                "m_5A6D4FBD":{"$":"STUConfigVarDataFlow","m_5A6D4FBD":"0x0480000000000001"}}]
+        }),
+    );
+}
+
+fn assert_authored_action_retry(class: &str, mut fields: Json) {
     let fixture: Json = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/body-short-action-retry-v1.json"
     ))
@@ -24,6 +52,12 @@ fn authored_callout_retries_with_its_own_values_in_both_body_streams() {
             "m_56341592": scope
         })
     };
+    fields["m_ADEB6E05"] = json!(1);
+    fields["m_BF5B22B7"] = json!([row(instance_slot, 0), row(entity_slot, 1)]);
+    if class == "STUStatescriptActionEffect" {
+        fields["m_dataFlow"][0]["m_answer"] =
+            json!({"$":"STUConfigVarDynamic","m_identifier":instance_slot,"m_60DB8F99":0});
+    }
     let graphs = std::sync::Arc::new(
         GraphStore::from_json(
             &serde_json::to_vec(&json!({
@@ -39,11 +73,7 @@ fn authored_callout_retries_with_its_own_values_in_both_body_streams() {
                             "m_outPlug":{"$":"Plug","links":[[1,"m_inPlug"]]}
                         }},
                         {"pos":1,"uid":1,"rid":1,"remote":1,"state":null,"client_only":0,"server_only":0,
-                         "class":"STU_7106C356","fields":{
-                            "m_ADEB6E05":1,
-                            "m_text":{"$":"STU_E7579408"},
-                            "m_BF5B22B7":[row(instance_slot,0),row(entity_slot,1)]
-                        }}
+                         "class":class,"fields":fields}
                     ]
                 }]
             }))

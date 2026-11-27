@@ -41,7 +41,8 @@
     },
     "field": {
       "initial_two_actor_wounds": [0.5, 3.0],
-      "pulse_ticks_elapsed": 4
+      "pulse_ticks_elapsed": 4,
+      "dirty_full_ally_wound": 0.25
     }
   },
   "expected": {

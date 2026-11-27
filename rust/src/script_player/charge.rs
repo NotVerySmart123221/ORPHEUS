@@ -5,7 +5,6 @@ use std::{io, sync::Arc};
 use crate::{
     game_combat::AppliedDamage,
     game_content::is_junkenstein_mode,
-    game_heroes::CASSIDY,
     game_replication::OwnerRoomActivity,
     script_expr::{Scope, Variable},
     script_graph::Body,
@@ -13,23 +12,33 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
-use super::{
-    OwnerBodyPreparationError,
-    lifecycle::{DEADEYE_GRAPH, PlayerBodyRuntime},
-    unsupported,
-};
+use super::{OwnerBodyPreparationError, lifecycle::PlayerBodyRuntime, unsupported};
+
+const COMMON_CHARGE_PARENT_GRAPH: u32 = 0x004b;
+const COMMON_CHARGE_GRAPH: u32 = 0x0b8b;
+const COMMON_CHARGE_ADMISSION_VAR: u32 = 2426;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+const COMMON_ULT_CHARGE_VAR: u32 = 342;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+const COMMON_ULT_CAP_VAR: u32 = 338;
+const COMMON_DAMAGE_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0012;
+const COMMON_HEAL_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0044;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+const COMMON_DIRECT_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0148;
 
 #[derive(Clone, Copy)]
 pub(super) struct ChargeBinding {
     recipient: ChargeRecipient,
     admission: u32,
     damage_message: u64,
+    heal_message: Option<u64>,
     inhibited_by: Option<(u32, u16)>,
+    require_encounter: bool,
 }
 
 #[derive(Clone, Copy)]
 enum ChargeRecipient {
-    LegacyGraph(u32),
+    CommonGraph(u32),
     MountedRoot {
         graph: u32,
         instance: u16,
@@ -43,7 +52,6 @@ enum ChargeRecipient {
 }
 
 pub(super) enum ChargeRoute {
-    LegacyDefault,
     Disabled,
     Configured(ChargeBinding),
 }
@@ -55,10 +63,27 @@ impl ChargeRoute {
         roots: &[Root],
     ) -> Result<Self, OwnerBodyPreparationError> {
         let Some(profile) = &body.charge_compatibility else {
-            return Ok(if body.authored_charge_graph.is_some() {
-                Self::Disabled
+            if body.authored_charge_graph.is_some() {
+                return Ok(Self::Disabled);
+            }
+            // Data-driven common retail ult-charge binding: any hero whose roots mount
+            // the retail 1.74 common charge graph (`0x004B` -> `0x0B8B`, or `0x0B8B` directly)
+            // gets passive, damage (`0x0012`), and healing (`0x0044`) charge admission.
+            // `0x0B8B` itself inhibits gain while an ultimate is active via `shared_var[842]`.
+            let mounts_common_charge = roots
+                .iter()
+                .any(|root| matches!(root.graph, COMMON_CHARGE_PARENT_GRAPH | COMMON_CHARGE_GRAPH));
+            return Ok(if mounts_common_charge {
+                Self::Configured(ChargeBinding {
+                    recipient: ChargeRecipient::CommonGraph(COMMON_CHARGE_GRAPH),
+                    admission: COMMON_CHARGE_ADMISSION_VAR,
+                    damage_message: COMMON_DAMAGE_CHARGE_MESSAGE,
+                    heal_message: Some(COMMON_HEAL_CHARGE_MESSAGE),
+                    inhibited_by: None,
+                    require_encounter: is_junkenstein_mode(mode),
+                })
             } else {
-                Self::LegacyDefault
+                Self::Disabled
             });
         };
         if !profile.modes.contains(&mode) {
@@ -89,23 +114,17 @@ impl ChargeRoute {
             recipient,
             admission: profile.admission_variable,
             damage_message: profile.damage_message,
+            heal_message: (graph == COMMON_CHARGE_GRAPH).then_some(COMMON_HEAL_CHARGE_MESSAGE),
             inhibited_by: profile
                 .inhibit
                 .as_ref()
                 .map(|rule| (rule.graph, rule.state)),
+            require_encounter: false,
         }))
     }
 
-    pub(super) fn bind(&self, mode: u64, hero: u64) -> Option<ChargeBinding> {
+    pub(super) fn bind(&self, _mode: u64, _hero: u64) -> Option<ChargeBinding> {
         match self {
-            Self::LegacyDefault => {
-                (hero == CASSIDY && is_junkenstein_mode(mode)).then_some(ChargeBinding {
-                    recipient: ChargeRecipient::LegacyGraph(0x0b8b),
-                    admission: 2426,
-                    damage_message: 0x0240_0000_0000_0012,
-                    inhibited_by: Some((DEADEYE_GRAPH, 0)),
-                })
-            }
             Self::Disabled => None,
             Self::Configured(binding) => Some(*binding),
         }
@@ -113,24 +132,21 @@ impl ChargeRoute {
 }
 
 impl ChargeBinding {
-    pub(super) fn is_configured(self) -> bool {
-        !matches!(self.recipient, ChargeRecipient::LegacyGraph(_))
+    pub(super) fn admits_regular_room(self) -> bool {
+        !self.require_encounter
     }
 
     fn activity_allows(self, activity: Option<OwnerRoomActivity>) -> bool {
-        match self.recipient {
-            ChargeRecipient::LegacyGraph(_) => {
-                activity.is_none_or(OwnerRoomActivity::encounter_active)
-            }
-            ChargeRecipient::MountedRoot { .. } | ChargeRecipient::SubScript { .. } => {
-                activity.is_none_or(OwnerRoomActivity::allows_body_activity)
-            }
+        if self.require_encounter {
+            activity.is_none_or(OwnerRoomActivity::encounter_active)
+        } else {
+            activity.is_none_or(OwnerRoomActivity::allows_body_activity)
         }
     }
 
     fn receiving_instance(self, snapshot: &Snapshot) -> Option<u16> {
         match self.recipient {
-            ChargeRecipient::LegacyGraph(graph) => snapshot
+            ChargeRecipient::CommonGraph(graph) => snapshot
                 .instances
                 .iter()
                 .find_map(|(&id, instance)| (instance.graph == graph).then_some(id)),
@@ -169,7 +185,8 @@ impl PlayerBodyRuntime {
             return Ok(());
         };
         let active = active
-            && (!binding.is_configured() || binding.activity_allows(self.world.room_activity));
+            && (!binding.admits_regular_room()
+                || binding.activity_allows(self.world.room_activity));
         let enabled = Value::Bool(active && self.world.vitals.death().is_none());
         let variable = Variable {
             scope: Scope::Entity,
@@ -218,15 +235,22 @@ impl PlayerBodyRuntime {
         }
         let Some(instance) = snapshot.and_then(|snapshot| binding.receiving_instance(snapshot))
         else {
-            if matches!(binding.recipient, ChargeRecipient::SubScript { .. }) {
+            if matches!(
+                binding.recipient,
+                ChargeRecipient::SubScript { .. } | ChargeRecipient::CommonGraph(_)
+            ) {
                 return Ok(());
             }
             return Err(unsupported(
                 "damage credit requires the authored common charge graph",
             ));
         };
+        let scaled_amount = damage.amount * self.ult_charge_scale;
+        if !scaled_amount.is_finite() || scaled_amount <= 0.0 {
+            return Ok(());
+        }
         let parameters = Variables::from([
-            (0x13, Value::Float(f64::from(damage.amount as f32))),
+            (0x13, Value::Float(f64::from(scaled_amount as f32))),
             (0x15, Value::Entity(damage.target_facts.target)),
             (
                 0x3d,
@@ -250,6 +274,143 @@ impl PlayerBodyRuntime {
                 Arc::new(damage.target_facts),
             )
             .map_err(unsupported)?;
+        self.component.run_now(&mut self.world).map_err(unsupported)
+    }
+
+    pub(super) fn credit_applied_heal(
+        &mut self,
+        source: u32,
+        target: u32,
+        amount: f64,
+    ) -> io::Result<()> {
+        let Some(binding) = self.charge_binding else {
+            return Ok(());
+        };
+        let Some(heal_message) = binding.heal_message else {
+            return Ok(());
+        };
+        if !binding.activity_allows(self.world.room_activity)
+            || source != self.world.entity
+            || self.world.vitals.death().is_some()
+            || !amount.is_finite()
+            || amount <= 0.0
+        {
+            return Ok(());
+        }
+        // Retail heal event (`GameMessage 0x0240000000000044`):
+        //   param 0x3F = target entity, 0x40 = heal amount, 0x41 = tags
+        // Deliver to ALL matching instances on the healer so `0x0B8B` (ult charge),
+        // `0x01D8` (on-fire), and hero-specific healing graphs (`0x0B94`, `0x1932`,
+        // `0x0F76`, `0x006B`, `0x0263`, `0x02F3`, etc.) all receive the heal event.
+        let scaled_amount = amount * self.ult_charge_scale;
+        if !scaled_amount.is_finite() || scaled_amount <= 0.0 {
+            return Ok(());
+        }
+        let parameters = Variables::from([
+            (0x3f, Value::Entity(target)),
+            (0x40, Value::Float(f64::from(scaled_amount as f32))),
+            (0x41, Value::Array(Vec::new())),
+        ]);
+        let queued = self
+            .component
+            .queue_entity_message(heal_message, parameters)
+            .map_err(unsupported)?;
+        if queued > 0 {
+            self.component
+                .run_now(&mut self.world)
+                .map_err(unsupported)?;
+        }
+        Ok(())
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    pub(crate) fn ult_charge_percent(&self) -> f64 {
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cur_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CHARGE_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        let cur = self
+            .component
+            .resolved_variable(0, cur_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        ((cur / cap) * 100.0).clamp(0.0, 100.0)
+    }
+
+    /// Credit direct ultimate charge via retail `GameMessage 0x0240000000000148`
+    /// or direct entity variable update (`#342` capped by `#338`).
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    pub(crate) fn add_ult_charge_points(&mut self, points: f64) -> io::Result<()> {
+        if !points.is_finite() || points == 0.0 {
+            return Ok(());
+        }
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cur_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CHARGE_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        let cur = self
+            .component
+            .resolved_variable(0, cur_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0);
+        let next = (cur + points).clamp(0.0, cap);
+        self.component
+            .set_entity_variable(COMMON_ULT_CHARGE_VAR, Value::Float(next), &mut self.world)
+            .map_err(unsupported)?;
+        let _ = self
+            .component
+            .queue_entity_message(COMMON_DIRECT_CHARGE_MESSAGE, Variables::new());
+        self.component.run_now(&mut self.world).map_err(unsupported)
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    pub(crate) fn set_ult_charge_percent(&mut self, percent: f64) -> io::Result<()> {
+        if !percent.is_finite() {
+            return Ok(());
+        }
+        let frac = (percent / 100.0).clamp(0.0, 1.0);
+        let cap_var = Variable {
+            scope: Scope::Entity,
+            id: COMMON_ULT_CAP_VAR,
+        };
+        let cap = self
+            .component
+            .resolved_variable(0, cap_var)
+            .map(|v| crate::script_expr::to_float(&v))
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(1500.0);
+        self.component
+            .set_entity_variable(
+                COMMON_ULT_CHARGE_VAR,
+                Value::Float(cap * frac),
+                &mut self.world,
+            )
+            .map_err(unsupported)?;
+        let _ = self
+            .component
+            .queue_entity_message(COMMON_DIRECT_CHARGE_MESSAGE, Variables::new());
         self.component.run_now(&mut self.world).map_err(unsupported)
     }
 }

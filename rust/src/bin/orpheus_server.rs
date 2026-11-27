@@ -8,7 +8,7 @@ use orpheus::{
 const USAGE: &str = "Usage: orpheus_server --data-dir <directory> [--runtime <directory>]
        [--account <name>] [--lobby-port <port>] [--game-port <port>]
        [--stall-port <port>] [--rpc-port <port>] [--debug-port <port>] [--debug-control]
-       [--junkenstein-validation <local-json>] [--ai-script <lua-file>]
+       [--junkenstein-validation <local-json>] [--ai-script <lua-file>] [--mod-script <lua-file>]
        orpheus_server --check-runtime [--runtime <directory>]
 
 The native 1.74 server listens on loopback. Use an authorized base runtime
@@ -18,7 +18,10 @@ in a binary built with --features inspector (disabled by default).
 --debug-control enables opt-in local room pause/resume/step POST commands
 (requires --features inspector and --debug-port; disabled by default).
 --junkenstein-validation loads explicit local Normal Cassidy acceptance settings.
---ai-script enables an opt-in Lua patrol script override and 'reload' command.
+--ai-script overrides StateScript patrol decisions with local Lua and enables
+the 'reload' command (requires --features lua-debug).
+--mod-script loads a sandboxed Lua 5.4 Workshop mod and enables the 'reload'
+command (requires --features lua-mods).
 Press Enter in the terminal to stop.";
 
 fn main() -> ExitCode {
@@ -73,7 +76,20 @@ fn run() -> io::Result<()> {
                 config.junkenstein_validation = Some(PathBuf::from(value));
             }
             Some("--ai-script") => {
+                if !cfg!(feature = "lua-debug") {
+                    return Err(usage_error(
+                        "--ai-script requires a build with --features lua-debug",
+                    ));
+                }
                 config.ai_script = Some(PathBuf::from(value));
+            }
+            Some("--mod-script") => {
+                if !cfg!(feature = "lua-mods") {
+                    return Err(usage_error(
+                        "--mod-script requires a build with --features lua-mods",
+                    ));
+                }
+                config.mod_script = Some(PathBuf::from(value));
             }
             _ => return Err(usage_error("unknown option")),
         }
@@ -105,6 +121,7 @@ fn run() -> io::Result<()> {
         ));
     }
     let ai_script_configured = config.ai_script.is_some();
+    let mod_script_configured = config.mod_script.is_some();
     let debug_control_enabled = config.debug_control;
     let mut server = Server::start(config)?;
     println!(
@@ -124,31 +141,61 @@ fn run() -> io::Result<()> {
     if ai_script_configured {
         let status = server.ai_policy_status()?;
         println!(
-            "AI policy gen {} (abi v{}, sha256 {}). Type 'reload' + Enter to reload, or press Enter to stop.",
+            "AI policy gen {} (abi v{}, sha256 {}).",
             status.generation, status.abi_version, status.digest
         );
+    }
+    #[cfg(feature = "lua-mods")]
+    if let Some(status) = server.mod_status() {
+        println!(
+            "Lua Mod '{}' v{} by {} (abi v{}, gen {}, sha256 {}).",
+            status.name,
+            status.version,
+            status.author,
+            status.abi_version,
+            status.generation,
+            status.digest
+        );
+    }
+    if ai_script_configured || mod_script_configured {
+        println!("Type 'reload' + Enter to reload Lua scripts, or press Enter to stop.");
         loop {
             let mut line = String::new();
             if io::stdin().read_line(&mut line)? == 0 || line.trim().is_empty() {
                 break;
             }
             if line.trim() == "reload" {
-                match server.reload_ai_script() {
-                    Ok(report) => println!(
-                        "AI policy gen {} (abi v{}, sha256 {}, active rooms {}, changed {}).",
-                        report.generation,
-                        report.abi_version,
-                        report.digest,
-                        report.active_rooms,
-                        report.changed
-                    ),
-                    Err(error) => {
-                        eprintln!("orpheus_server: AI reload failed (rolled back): {error}");
+                if ai_script_configured {
+                    match server.reload_ai_script() {
+                        Ok(report) => println!(
+                            "AI policy gen {} (abi v{}, sha256 {}, active rooms {}, changed {}).",
+                            report.generation,
+                            report.abi_version,
+                            report.digest,
+                            report.active_rooms,
+                            report.changed
+                        ),
+                        Err(error) => {
+                            eprintln!("orpheus_server: AI reload failed (rolled back): {error}");
+                        }
+                    }
+                }
+                #[cfg(feature = "lua-mods")]
+                if mod_script_configured {
+                    match server.reload_mod_script() {
+                        Ok(Some(status)) => println!(
+                            "Lua Mod '{}' gen {} (sha256 {}, changed {}).",
+                            status.name, status.generation, status.digest, status.changed
+                        ),
+                        Ok(None) => {}
+                        Err(error) => {
+                            eprintln!("orpheus_server: Mod reload failed (rolled back): {error}");
+                        }
                     }
                 }
             } else {
                 println!(
-                    "Unknown command. Type 'reload' + Enter to reload AI script, or press Enter to stop."
+                    "Unknown command. Type 'reload' + Enter to reload Lua scripts, or press Enter to stop."
                 );
             }
         }

@@ -17,6 +17,49 @@ use super::{
     types::Snapshot,
 };
 
+/// Find the equipped voice slot in the pulse's authored client fallback.
+pub(super) fn equipped_voice_pulse_slot<'a>(graph: &'a Graph, pulse: &Node) -> Option<&'a Json> {
+    let single_link = |node: &Node, path| {
+        let mut links = node.links(path);
+        let (position, "m_inPlug") = links.next()? else {
+            return None;
+        };
+        let target = graph.node(position?)?;
+        (links.next().is_none() && target.client_only).then_some(target)
+    };
+    let filter = single_link(pulse, "m_B6A27F9A")?;
+    let condition = filter.field("m_condition")?;
+    if filter.class != "STU_3387AB5D"
+        || !script_expr::native_shape(condition, "STU_7F6B4BDE", Some("m_entity"))
+        || !script_expr::native_shape(field(condition, "m_entity"), "STU_B5A0CAF0", None)
+    {
+        return None;
+    }
+    let assignment = single_link(filter, "m_falsePlug")?;
+    let effect = assignment.field("m_value")?;
+    let own_controller = |target| {
+        script_expr::native_shape(target, "STU_F7262B36", Some("m_801B298F"))
+            && script_expr::native_shape(field(target, "m_801B298F"), "STU_B5A0CAF0", None)
+    };
+    if assignment.class != "STUStatescriptActionSetVar"
+        || !script_expr::native_fields(effect, &["m_hero", "m_target", "m_slot", "m_resourceKey"])
+        || field(effect, "$").as_str() != Some("STU_2977339D")
+        || !field(effect, "m_resourceKey").is_null()
+        || !own_controller(field(effect, "m_target"))
+    {
+        return None;
+    }
+    let hero = field(effect, "m_hero");
+    if !script_expr::native_fields(hero, &["m_entity", "m_resourceKey"])
+        || field(hero, "$").as_str() != Some("STU_93DCDDFD")
+        || !field(hero, "m_resourceKey").is_null()
+        || !own_controller(field(hero, "m_entity"))
+    {
+        return None;
+    }
+    effect.get("m_slot")
+}
+
 pub(super) fn participant_filter(node: &Node) -> Option<&Json> {
     let filter = field(&node.fields, "m_filter");
     (filter.get("$").and_then(Json::as_str) == Some("STUConfigVarFilter")
@@ -83,18 +126,21 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
                 .is_some_and(|linked| linked.pos == node.pos)
     };
     let has_local_state_slot = || node.remote == -1 && has_raw_state_slot();
+    let has_remote_state_slot = || {
+        has_raw_state_slot()
+            && usize::try_from(node.remote)
+                .ok()
+                .and_then(|slot| graph.remote_node(slot))
+                .is_some_and(|linked| linked.pos == node.pos)
+    };
     // The static form has only the protected-entity rule. A phase-model rule
     // or any other configured field needs its own verified consumer.
     let suppresses_model = node.class == "STU_33A46033"
-        && has_raw_state_slot()
-        && usize::try_from(node.remote)
-            .ok()
-            .and_then(|slot| graph.remote_node(slot))
-            .is_some_and(|linked| linked.pos == node.pos)
+        && has_remote_state_slot()
         && flag("m_7E42F868", true)
         && registered_state_fields(node, "m_7E42F868");
     let class = match node.class.as_str() {
-        "STU_9935FBC8" if placement == (0x224e, 34) && captured_aim_lock_shape(node) => {
+        "STU_9935FBC8" if has_remote_state_slot() && captured_aim_lock_shape(node) => {
             RegisteredClass::CinematicAim
         }
         "STU_9935FBC8"
@@ -111,6 +157,9 @@ pub(super) fn registered_state(graph: &Graph, node: &Node) -> Option<RegisteredS
         {
             RegisteredClass::State9028E035
         }
+        // CBAD60/CBADC0 use the shared linked-state registry. The client
+        // resolves its authored blend tree and level from the active chain.
+        "STU_A875CA49" if has_remote_state_slot() => RegisteredClass::AnimationBlendTree,
         "STU_43994F1B" | "STU_93B8758C" if has_local_state_slot() => {
             resource_free_linked_class(node)?
         }
@@ -179,12 +228,10 @@ pub(super) fn captured_aim_lock_shape(node: &Node) -> bool {
     let fields = &node.fields;
     field(fields, "m_93CDFD2F").as_u64() == Some(1)
         && field(fields, "m_4BE66EFF").is_null()
-        && [("m_A53161C8", 501), ("m_AB37A892", 502)]
-            .iter()
-            .all(|(name, id)| {
-                matches!(script_expr::dynamic(field(fields,name)), Ok(Some(variable))
-                if variable.scope == Scope::Instance && variable.id == *id)
-            })
+        && ["m_A53161C8", "m_AB37A892"].iter().all(|name| {
+            matches!(script_expr::dynamic(field(fields,name)), Ok(Some(variable))
+                if variable.scope == Scope::Instance)
+        })
         && ["m_C33684DE", "m_8FA7FF85", "m_D6119DFB", "m_83221709"]
             .iter()
             .all(|name| {
@@ -456,8 +503,9 @@ pub(super) fn is_self_stat_timer(node: &Node) -> bool {
         is_stat(stat) && stat_list.is_null()
     } else {
         node.is_networked()
-            && stat.is_null()
-            && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))
+            && ((is_stat(stat) && stat_list.is_null())
+                || (stat.is_null()
+                    && matches!(stat_list.as_array().map(Vec::as_slice), Some([entry]) if is_stat(entry))))
     }
 }
 
@@ -520,6 +568,12 @@ pub(super) fn is_stat_action(node: &Node) -> bool {
                 "m_2BBEEAB8" | "m_A2287776" | "m_AED90719" => neutral_flag(value),
                 "m_ADEB6E05" => value.as_bool() == Some(true) || value.as_u64() == Some(1),
                 "m_amount" | "m_inPlug" | "m_outPlug" | "m_stat" | "m_stats" | "m_targets" => true,
+                "m_D32CB484" => {
+                    value.is_null()
+                        || value
+                            .as_array()
+                            .is_some_and(|items| items.iter().all(is_stat))
+                }
                 _ => value.is_null(),
             })
         })
@@ -637,16 +691,19 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
             || owner
                 .as_object()
                 .is_some_and(|item| item.len() == 1 && field(owner, "item").as_u64().is_some()))
-        && empty_explosion_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
-        && empty_explosion_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
+        && is_empty_optional_plug(field(fields, "m_F198FD3A"), "STU_1CCEA5F7")
+        && is_empty_optional_plug(field(fields, "m_subgraphPlug"), "STU_904BFCEC")
         && explosion_position(position)
         && (direction.is_null() || explosion_direction(direction))
         && number(field(fields, "m_radius"))
         && explosion_float(field(fields, "m_65438EEB"))
-        && native_integer_operand(field(fields, "m_66D29548"))
+        && (native_integer_operand(field(fields, "m_66D29548"))
+            || native_dynamic_operand(field(fields, "m_66D29548")))
         && {
             let strength = field(fields, "m_6EFD110C");
-            native_integer_operand(strength) || native_expression_operand(strength)
+            native_integer_operand(strength)
+                || explosion_float(strength)
+                || native_expression_operand(strength)
         }
         && number(scalar)
         && (extra_scalar.is_null() || literal_number(extra_scalar))
@@ -654,7 +711,7 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
         && explosion_sync_matches(graph, fields)
 }
 
-fn empty_explosion_plug(config: &Json, class: &str) -> bool {
+pub(super) fn is_empty_optional_plug(config: &Json, class: &str) -> bool {
     let data = field(config, "m_FF3DAF1E");
     config.is_null()
         || (field(config, "$").as_str() == Some(class)
@@ -767,8 +824,10 @@ fn explosion_float(config: &Json) -> bool {
 
 fn native_expression_operand(config: &Json) -> bool {
     let vars = field(config, "m_configVars");
-    field(config, "$").as_str() == Some("STU_919FD47C")
-        && script_expr::native_fields(config, &["m_expression", "m_configVars"])
+    matches!(
+        field(config, "$").as_str(),
+        Some("STU_919FD47C" | "STUConfigVarExpression")
+    ) && script_expr::native_fields(config, &["m_expression", "m_configVars"])
         && field(config, "m_expression").is_object()
         && (vars.is_null() || vars.is_array())
 }

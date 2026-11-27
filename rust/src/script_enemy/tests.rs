@@ -2,6 +2,76 @@ use super::{policy::*, *};
 use crate::script_control::LEGACY_PROJECTILE_CONTROL;
 
 #[test]
+fn npc_direct_projectile_uses_the_resolved_launch_lift_in_its_sweep() {
+    use crate::script_expr::{EmptyContext, evaluate};
+    use serde_json::json;
+
+    let mut fields = json!({
+        "m_projectileSpeed": 30, "m_projectileLifetime": 2,
+        "m_5EC1EB38": {
+            "$": "STU_239B571E",
+            "m_22CE7F30": {"$":"STUConfigVarDynamic", "m_identifier": 42}
+        }
+    });
+    let shot = script_init::ShotEvent {
+        entity: 0xc000_1000,
+        instance: 1,
+        graph: 44,
+        raw_state: 3,
+        frame: 100,
+        time_ms: 0,
+        activation: 1,
+        activation_ms: 0,
+        ordinal: 0,
+    };
+    let forward = [0.0, 0.0, 1.0];
+    let mut resolve = |config: &Json| {
+        if config["m_identifier"] == 42 {
+            Ok(Value::Float(0.125))
+        } else {
+            evaluate(config, &mut EmptyContext)
+        }
+    };
+    let mut projectile = projectile_pattern(&fields, forward, &shot, 22, &mut resolve)
+        .unwrap()
+        .launch(shot.entity, 1, [0.0; 3], shot.frame)
+        .next()
+        .unwrap();
+    let mut swept = None;
+    projectile
+        .flight
+        .advance(shot.frame + 1, &[], |_, direction, _| {
+            swept = Some(direction);
+            Ok(None)
+        })
+        .unwrap();
+    let [x, y, z] = swept.unwrap();
+    assert_eq!(x, 0.0);
+    assert!((y / z - 0.125).abs() < 1e-7);
+    assert!((y * y + z * z - 1.0).abs() < 1e-7);
+
+    assert!(
+        projectile_pattern(&fields, forward, &shot, 22, &mut |cfg| {
+            if cfg["m_identifier"] == 42 {
+                Err(crate::script_expr::EvalError::MalformedConfig(
+                    "test launch lift",
+                ))
+            } else {
+                evaluate(cfg, &mut EmptyContext)
+            }
+        })
+        .is_none()
+    );
+    fields["m_5EC1EB38"]["m_22CE7F30"] = Json::Null;
+    assert_eq!(
+        projectile_pattern(&fields, forward, &shot, 22, &mut resolve)
+            .unwrap()
+            .directions,
+        [forward]
+    );
+}
+
+#[test]
 fn authored_pose_queries_read_live_npc_pose_with_static_fallback() {
     let (graphs, _, definition, _) = fixture(false);
     let gate = EnemyGate {
@@ -539,7 +609,7 @@ fn shared_flashbang_targeted_message_contract() {
         assert!(!world.send_message(
             invalid_site,
             invalid_target,
-            junkenstein_messages::FLASHBANG_HIT,
+            crate::pve_encounter::messages::FLASHBANG_HIT,
             &invalid_params
         ));
     }
@@ -547,7 +617,12 @@ fn shared_flashbang_targeted_message_contract() {
         MAX_INIT_WORK,
         DefenderMessage::flashbang(site, target, &params).unwrap(),
     );
-    assert!(!world.send_message(site, target, junkenstein_messages::FLASHBANG_HIT, &params));
+    assert!(!world.send_message(
+        site,
+        target,
+        crate::pve_encounter::messages::FLASHBANG_HIT,
+        &params
+    ));
     world.control_records.defender_messages.truncate(1);
     let request = world.control_records.defender_messages.pop().unwrap();
     assert_eq!(request.source, source);
@@ -681,7 +756,7 @@ fn shared_self_damage_clock_contract() {
             ("corpse_due_frames", true),
         ] {
             assert_eq!(
-                crate::junkenstein_host::common_corpse_due(
+                crate::pve_encounter::host::common_corpse_due(
                     0x02e0_0000_0000_0175,
                     world.vitals.death().map(|death| death.frame),
                     frame + contract[key].as_u64().unwrap() as u32,
@@ -1383,7 +1458,10 @@ fn authored_boss_intro_end_releases_the_paired_controller_facing() {
             .collect::<Vec<_>>(),
         [
             (binding.body, BOSS_INTRO_ENDED),
-            (binding.body, junkenstein_messages::RESET_HIGHLIGHTS)
+            (
+                binding.body,
+                crate::pve_encounter::messages::RESET_HIGHLIGHTS
+            )
         ],
     );
     scripts.advance(&graphs, &binding, &mut vitals, 5).unwrap();

@@ -87,6 +87,7 @@ fn view_query_ranks_visible_actors_and_rejects_unavailable_profiles() {
     let mut query = ViewTargetQuery {
         source,
         offset: [0.0, 1.0, 0.0],
+        eye_heading: None,
         range: 23.0,
         aperture: 34.0,
         limit: 8,
@@ -120,4 +121,12 @@ fn view_query_ranks_visible_actors_and_rejects_unavailable_profiles() {
     let frame = room.capture_spatial_frame(101).unwrap().unwrap();
     query.sight = Some(&actor);
     assert_eq!(frame.view_targets(&query), Some(listed("blocked_order")));
+
+    query.sight = None;
+    query.eye_heading = data["explicit_eye_heading"].as_f64();
+    query.profile = 0;
+    assert_eq!(
+        frame.view_targets(&query),
+        Some(listed("explicit_eye_order"))
+    );
 }

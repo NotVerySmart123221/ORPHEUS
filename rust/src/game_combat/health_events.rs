@@ -45,6 +45,16 @@ impl SampledBody {
         }
     }
 
+    pub(super) fn position(self, world: &World) -> Option<[f64; 3]> {
+        let position = if let Some(state) = world.get::<BotState>(self.entity) {
+            (state.bot.entity == self.wire).then_some(state.bot.position)?
+        } else {
+            let state = world.get::<PlayerBodyState>(self.entity)?;
+            (state.id.entity == self.wire).then(|| state.mover.pose().position)?
+        };
+        position.into_iter().all(f64::is_finite).then_some(position)
+    }
+
     fn room_status(self, world: &World, free_for_all: bool) -> Option<RoomEntityStatus> {
         let (team, alive) = if let Some(state) = world.get::<BotState>(self.entity) {
             (state.bot.entity == self.wire).then_some((
@@ -61,7 +71,7 @@ impl SampledBody {
         })
     }
 
-    fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
+    pub(super) fn health_target_facts(self, world: &World) -> Option<HealthTargetFacts> {
         if let Some(state) = world.get::<BotState>(self.entity) {
             return (state.bot.entity == self.wire).then(|| state.health_target_facts());
         }
@@ -117,6 +127,8 @@ impl HealthApplied {
 #[derive(Default)]
 pub(super) struct RoomHealthEvents {
     enabled: bool,
+    authored_hit_variant: Option<f32>,
+    authored_elimination_feedback: bool,
     pending: VecDeque<HealthApplied>,
 }
 
@@ -176,6 +188,29 @@ impl RoomSimulation {
         self.health_events.enabled = true;
     }
 
+    pub(crate) fn enable_authored_hit_feedback(&mut self, variant: f32) {
+        self.health_events.authored_hit_variant = Some(variant);
+        self.enable_host_health_events();
+    }
+
+    pub(crate) fn enable_authored_elimination_feedback(&mut self) {
+        self.health_events.authored_elimination_feedback = true;
+    }
+
+    pub(super) fn authored_elimination_target(&self, wire: u32) -> Option<HealthTargetFacts> {
+        if !self.health_events.authored_elimination_feedback {
+            return None;
+        }
+        let target = self.sample_health_body(wire)?;
+        let mut facts = target.health_target_facts(&self.world)?;
+        let status = target.room_status(&self.world, self.free_for_all)?;
+        if status.alive {
+            return None;
+        }
+        facts.room_status = Some(status);
+        Some(facts)
+    }
+
     pub(super) fn record_health_applied(
         &mut self,
         source: u32,
@@ -187,12 +222,14 @@ impl RoomSimulation {
         #[cfg(feature = "inspector")]
         if delta.is_finite() && delta < 0.0 && crate::owner_trace::playtest_enabled() {
             let frame = damage.as_ref().and_then(|evidence| evidence.frame);
-            let critical = damage
+            let impact = damage
                 .as_ref()
                 .and_then(|evidence| evidence.impact)
-                .map(|(impact, _)| impact.critical);
+                .map(|(impact, _)| impact);
+            let critical = impact.map(|impact| impact.critical);
+            let geometry = impact.and_then(|impact| impact.geometry);
             crate::owner_trace::playtest(format_args!(
-                "combat settled frame={frame:?} source={source:08X} target={target:08X} delta={delta} critical={critical:?} killed={killed} health_events={}",
+                "combat settled frame={frame:?} source={source:08X} target={target:08X} delta={delta} critical={critical:?} killed={killed} health_events={} geometry={geometry:?}",
                 self.health_events.enabled,
             ));
         }
@@ -229,7 +266,54 @@ impl RoomSimulation {
 
     /// Queue each event for the recipients' next VM frames, in settlement order.
     pub(super) fn flush_health_events(&mut self) {
-        while let Some(change) = self.health_events.pending.pop_front() {
+        while let Some(mut change) = self.health_events.pending.pop_front() {
+            // Coalesce multi-pellet weapon impacts sharing the same `(source, target, damage_frame)`
+            // so shotguns deliver one consolidated `HostEvent::HealthApplied` + hit cue per volley.
+            if change.delta < 0.0
+                && change.critical_hit.is_some()
+                && change.damage_frame.is_some()
+                && change.source.is_some_and(|s| s != change.target)
+            {
+                let mut rest = VecDeque::with_capacity(self.health_events.pending.len());
+                while let Some(next) = self.health_events.pending.pop_front() {
+                    if next.source == change.source
+                        && next.target == change.target
+                        && next.delta < 0.0
+                        && next.critical_hit.is_some()
+                        && next.damage_frame == change.damage_frame
+                    {
+                        change.delta += next.delta;
+                        change.killed |= next.killed;
+                        change.critical_hit = Some(
+                            change.critical_hit.unwrap_or(false)
+                                || next.critical_hit.unwrap_or(false),
+                        );
+                        if next.killed && next.target_facts.is_some() {
+                            change.target_facts = next.target_facts;
+                        }
+                        if let Some(more_losses) = next.named_pool_losses {
+                            let mut combined: Vec<NamedPoolLoss> = change
+                                .named_pool_losses
+                                .as_deref()
+                                .map_or_else(Vec::new, <[NamedPoolLoss]>::to_vec);
+                            for loss in more_losses.iter() {
+                                if let Some(prev) = combined
+                                    .iter_mut()
+                                    .find(|l| l.identifier == loss.identifier)
+                                {
+                                    prev.amount += loss.amount;
+                                } else {
+                                    combined.push(loss.clone());
+                                }
+                            }
+                            change.named_pool_losses = Some(Arc::from(combined));
+                        }
+                    } else {
+                        rest.push_back(next);
+                    }
+                }
+                self.health_events.pending = rest;
+            }
             if let Some((event, receivers)) = change.resolve(self) {
                 let HostEvent::HealthApplied { source, .. } = event;
                 // Resolve keeps verified source attribution even for a self-change,
@@ -301,7 +385,27 @@ impl RoomSimulation {
         // A full or halted VM only drops its own notification.
         if let Some(mut state) = self.world.get_mut::<PlayerBodyState>(entity) {
             if state.alive() {
+                let HostEvent::HealthApplied { target, killed, .. } = event;
+                let allow_hit_feedback = match (context.critical_hit, context.damage_frame) {
+                    (Some(crit), Some(frame))
+                        if context
+                            .source_body
+                            .is_some_and(|source| source.generation == entity.to_bits()) =>
+                    {
+                        state.should_emit_hit_feedback(target, frame, crit, killed)
+                    }
+                    _ => true,
+                };
                 if let Some(runtime) = &mut state.runtime {
+                    if let Some(variant) = self.health_events.authored_hit_variant.filter(|_| {
+                        allow_hit_feedback
+                            && context.critical_hit.is_some()
+                            && context
+                                .source_body
+                                .is_some_and(|source| source.generation == entity.to_bits())
+                    }) {
+                        let _ = runtime.receive_authored_hit_feedback(event, &context, variant);
+                    }
                     let _ = runtime.receive_host_event(event, context);
                 }
             }
@@ -316,6 +420,8 @@ impl RoomSimulation {
                         .scripts
                         .body
                         .queue_host_event_with_context(event, context);
+                } else if let Some(stock) = state.stock_script.as_mut() {
+                    stock.receive_host_event(event, context);
                 }
             }
         }
@@ -549,9 +655,12 @@ mod tests {
         use crate::{
             contact_world::ContactWorld,
             game_combat::{BioticField, BotQueries, FIELD_DELAY, tests::fixture_ground},
+            game_heroes::SOLDIER,
             game_replication::BodyId,
             mover::Mover,
             mover_settings::{MoverCatalog, MoverSettings},
+            script_player::fixture_body_factory,
+            world::Operation,
         };
         use std::sync::Arc;
 
@@ -569,26 +678,50 @@ mod tests {
         let deltas: [f64; 2] =
             serde_json::from_value(fixture["expected"]["field"]["actual_deltas"].clone()).unwrap();
         let elapsed = u32::try_from(field["pulse_ticks_elapsed"].as_u64().unwrap()).unwrap();
+        let dirty_full_ally_wound = field["dirty_full_ally_wound"].as_f64().unwrap();
 
-        let bots = fixture_bots();
-        let targets = [bots[0].entity, bots[1].entity];
+        let mut bots = fixture_bots();
+        bots.truncate(1);
+        let (ally_factory, mut ally_spawn) = fixture_body_factory();
+        ally_spawn.pose.position = [0.0; 3];
+        ally_spawn.body_filter = crate::match_scene::team_bit(1).unwrap();
+        ally_spawn.slot = 1;
+        let targets = [bots[0].entity, ally_spawn.entity];
         let mut room = RoomSimulation::new(bots).unwrap();
         let owner = BodyId {
             entity: 702,
             generation: 1,
         };
-        let owner_body = |id| {
-            let mover = Mover::new(
+        let ally = BodyId {
+            entity: ally_spawn.entity,
+            generation: 1,
+        };
+        let mover = || {
+            Mover::new(
                 MoverSettings::default(),
                 Arc::new(ContactWorld::new(Vec::new()).unwrap()),
                 [0.0; 3],
                 0,
                 0x08,
             )
-            .unwrap();
-            PlayerBodyState::new(id, 701, 0, 1, 703, mover, None, 100, None)
+            .unwrap()
+        };
+        let owner_body = |id| PlayerBodyState::new(id, 701, 0, 1, 703, mover(), None, 100, None);
+        let ally_body = |id| {
+            PlayerBodyState::new(
+                id,
+                ally_spawn.controller,
+                ally_spawn.slot,
+                1,
+                SOLDIER,
+                mover(),
+                Some(Box::new(ally_factory.start(ally_spawn).unwrap())),
+                ally_spawn.frame,
+                None,
+            )
         };
         room.spawn_player_body(owner_body(owner)).unwrap();
+        room.spawn_player_body(ally_body(ally)).unwrap();
         room.enable_host_health_events();
         let mut field = BioticField::new([0.0; 3]);
         assert!(field.advance(100).0.is_none());
@@ -604,28 +737,54 @@ mod tests {
         let movers = MoverCatalog::default();
         let queries = BotQueries::new(false, &movers, &ground, None);
 
-        let wound = |room: &mut RoomSimulation, target, amount| {
-            room.state_mut(target).unwrap().unwrap().vitals.damage(
-                amount,
-                Death {
-                    killer: owner.entity,
-                    frame: 100,
-                    time: 1.6,
-                },
-            );
+        let dealer = Death {
+            killer: owner.entity,
+            frame: 100,
+            time: 1.6,
         };
-        for (target, amount) in targets.into_iter().zip(wounds) {
-            wound(&mut room, target, amount);
-        }
-        let updates = room
-            .heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+        let wound_bot = |room: &mut RoomSimulation| {
+            room.state_mut(targets[0])
+                .unwrap()
+                .unwrap()
+                .vitals
+                .damage(wounds[0], dealer);
+        };
+        wound_bot(&mut room);
+        room.player_body_mut(ally)
+            .unwrap()
+            .runtime
+            .as_mut()
+            .unwrap()
+            .receive_damage(wounds[1], dealer);
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
             .unwrap();
+        let updates = room.take_scripted_health();
         assert_eq!(
             updates
                 .iter()
                 .map(|update| update.entity)
                 .collect::<Vec<_>>(),
             targets
+        );
+        let bot_health = room
+            .state_mut(targets[0])
+            .unwrap()
+            .unwrap()
+            .vitals
+            .component();
+        let ally_health = room
+            .player_body(ally)
+            .unwrap()
+            .vitals()
+            .unwrap()
+            .cumulative_component();
+        assert_eq!(
+            updates[0].operation,
+            Some(Operation::Update(vec![bot_health]))
+        );
+        assert_eq!(
+            updates[1].operation,
+            Some(Operation::Update(vec![ally_health.clone()]))
         );
         for (wire, delta) in targets.into_iter().zip(deltas) {
             let event = room.health_events.pending.pop_front().unwrap();
@@ -650,12 +809,50 @@ mod tests {
             );
         }
         assert!(room.health_events.pending.is_empty());
-        assert!(
-            room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
-                .unwrap()
-                .is_empty()
+
+        // This body returned to full health with a separate pending update.
+        let ally_state = room.player_body_mut(ally).unwrap();
+        assert!(ally_state.take_health_update().is_none());
+        let ally_runtime = ally_state.runtime.as_mut().unwrap();
+        assert_eq!(
+            ally_runtime
+                .receive_damage(dirty_full_ally_wound, dealer)
+                .dealt,
+            dirty_full_ally_wound
         );
+        assert_eq!(
+            ally_runtime.heal(dirty_full_ally_wound),
+            dirty_full_ally_wound
+        );
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        assert!(room.take_scripted_health().is_empty());
         assert!(room.health_events.pending.is_empty());
+        assert_eq!(
+            room.player_body_mut(ally).unwrap().take_health_update(),
+            Some(ally_health)
+        );
+
+        room.player_body_mut(ally)
+            .unwrap()
+            .runtime
+            .as_mut()
+            .unwrap()
+            .receive_damage(dirty_full_ally_wound, dealer);
+        room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
+            .unwrap();
+        let before_replacement = room.scripted_health.last().unwrap().clone();
+        assert_eq!(before_replacement.entity, ally.entity);
+        room.record_observer_player_health(ally_spawn.controller, before_replacement);
+        room.spawn_player_body(ally_body(BodyId {
+            generation: 2,
+            ..ally
+        }))
+        .unwrap();
+        assert!(room.take_scripted_health().is_empty());
+        assert!(room.take_observer_player_health().is_empty());
+        let original_ally_event = room.health_events.pending.pop_front().unwrap();
+        assert!(original_ally_event.resolve(&room).is_none());
 
         room.spawn_player_body(owner_body(BodyId {
             generation: 2,
@@ -666,7 +863,7 @@ mod tests {
             room.advance_player_fields(owner, 100 + FIELD_DELAY + elapsed)
                 .is_none()
         );
-        wound(&mut room, targets[0], wounds[0]);
+        wound_bot(&mut room);
         room.heal_allies(&queries, 1, Some(owner.entity), Some(owner), &pulses)
             .unwrap();
         let event = room.health_events.pending.pop_front().unwrap();

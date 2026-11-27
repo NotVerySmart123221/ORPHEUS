@@ -12,6 +12,30 @@
     [[0.5, -1, 2], [2, -1, 2], [0.5, 3, 2]],
     [[2, -1, 2], [2, 3, 2], [0.5, 3, 2]]
   ],
+  "layered_weapon_terrain_category": 512,
+  "placed_mesh_sweep": {
+    "query_category": 128,
+    "excluded_category": 8,
+    "radius": 0.2
+  },
+  "scaled_placed_mesh_sweep": {
+    "scale": [1.0, 0.5, 3.0],
+    "radius": 0.2,
+    "paths": [
+      {"origin": [2.0, 0.65, 0.0], "point_blocked": false, "sphere_blocked": true},
+      {"origin": [2.0, 0.80, 0.0], "point_blocked": false, "sphere_blocked": false},
+      {"origin": [2.0, 0.0, 0.0], "point_blocked": true, "sphere_blocked": true}
+    ]
+  },
+  "small_projectile_gap": {
+    "origin": [0.493, 0.5, 0.0],
+    "clear_radius": 0.003,
+    "blocked_radius": 0.009
+  },
+  "movement_fallback": [
+    {"expanded_cache": "missing", "mover_contacts": false},
+    {"expanded_cache": "rejected", "mover_contacts": true}
+  ],
   "rays": [
     {"origin": [0, 0.5, 0], "distance": null, "narrow_sweep_blocked": false, "wide_sweep_blocked": true},
     {"origin": [-1, 0.5, 0], "distance": 2, "narrow_sweep_blocked": true, "wide_sweep_blocked": true},

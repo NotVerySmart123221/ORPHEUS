@@ -961,6 +961,7 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
                     "m_numShotsPerSecond":9,
                     "m_24E351A4":var(53,false),
                     "m_3FFC9EB9":var(231,false),
+                    "m_5EC1EB38":{"$":"STU_239B571E","m_AC20B1C1":4},
                     "m_FEC435C6":180
                 }),
             ),
@@ -982,9 +983,13 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
     )
     .unwrap();
     let mut shots = Vec::new();
+    let mut spread = Vec::new();
     for frame in 0..=14 {
         component.advance_frame(frame, &mut EmptyWorld).unwrap();
-        shots.extend(component.take_shots().unwrap());
+        for report in component.take_reported_shots().unwrap() {
+            shots.push(report.event);
+            spread.push(report.normalized_spread);
+        }
         if frame == 6 {
             let snapshot = component.snapshot().unwrap();
             assert!(snapshot.bindings.is_empty());
@@ -1000,6 +1005,7 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
             .collect::<Vec<_>>(),
         [(0, 0, 0), (6, 111, 1), (13, 222, 2)]
     );
+    assert_eq!(spread, [Some(0.5), Some(0.5), Some(0.75)]);
     assert!(
         shots
             .iter()
@@ -1019,6 +1025,61 @@ fn volley_reports_exact_times_and_bakes_linked_ammo_on_finish() {
     assert!(snapshot.resolved_bindings.is_empty());
     assert!(!snapshot.instances[&1].states[&0].active);
     assert_eq!(snapshot.instances[&1].variables[&53], Value::Integer(27));
+}
+
+#[test]
+fn volley_spread_delay_holds_initial_spread_before_ramping() {
+    let weapon = graph(
+        42,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":plug(&[(1,"m_beginPlug")],&[])}),
+            ),
+            node(
+                1,
+                "STUStatescriptStateWeaponVolley",
+                Some(0),
+                json!({
+                    "m_A17BE89B":4,
+                    "m_numShotsPerSecond":10,
+                    "m_24E351A4":var(53,false),
+                    "m_3FFC9EB9":var(231,false),
+                    "m_5EC1EB38":{"$":"STU_239B571E","m_AC20B1C1":8,"m_23C72C36":0.075},
+                    "m_FEC435C6":180
+                }),
+            ),
+        ],
+        json!([1]),
+        json!([0]),
+    );
+    let mut root = Root::new(1, 42);
+    root.variables.insert(53, Value::Integer(30));
+    root.variables.insert(231, Value::Float(0.25));
+    let mut component = Component::start(
+        Arc::new(store(vec![weapon])),
+        42,
+        Variables::new(),
+        vec![root],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let mut spread = Vec::new();
+    for frame in 0..=20 {
+        component.advance_frame(frame, &mut EmptyWorld).unwrap();
+        for report in component.take_reported_shots().unwrap() {
+            spread.push(report.normalized_spread);
+        }
+    }
+    assert_eq!(spread.len(), 4);
+    assert_eq!(spread[0], Some(0.25));
+    assert!(spread[1].unwrap() > 0.25);
+    assert!(spread[2].unwrap() > spread[1].unwrap());
+    assert!(spread[3].unwrap() > spread[2].unwrap());
 }
 #[test]
 fn animation_callback_routes_a_typed_self_message_to_the_live_receiver() {

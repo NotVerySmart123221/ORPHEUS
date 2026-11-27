@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "case_id": "script-contact-effect.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "initial_targets": [53, 54],
+    "changed_targets": [54],
+    "placements": [
+      {"graph": 4921, "node": 0, "contact_set": "0x01200000000000A5"},
+      {"graph": 6283, "node": 4, "contact_set": "0x01200000000000E4"}
+    ]
+  }
+}

@@ -13,9 +13,11 @@ use crate::collision_cache::{
     CacheError, CollisionCache, Hull, Mesh, Placement, RayCacheIdentity, Shape,
 };
 use crate::collision_grid::{ColumnGrid, ColumnRange};
+use crate::collision_scene::BreakableState;
 use crate::contact_gjk::PointSetSize;
 use crate::contact_gjk::sweep::{
-    CastFrame, CastOptions, CastShape, MeshProbe, ShapeHit, mesh_sweep, shape_cast,
+    CastFrame, CastOptions, CastShape, MeshProbe, ShapeHit, mesh_sweep_with_skin,
+    shape_cast_with_skin,
 };
 use crate::contact_math::{ContactFrame, Vec3, add, maxps, minps, mul, scale, sub};
 use crate::contact_mesh::{ContactBounds, ContactMesh, ContactMeshError};
@@ -92,6 +94,8 @@ pub struct StaticShape {
     frame: Option<ContactFrame>,
     matrix: Option<CastFrame>,
     fat: Option<ContactBounds>,
+    placement: Option<usize>,
+    breakable: bool,
 }
 
 impl StaticShape {
@@ -123,7 +127,23 @@ impl StaticShape {
             frame,
             matrix,
             fat,
+            placement: None,
+            breakable: false,
         })
+    }
+
+    pub fn with_breakable_placement(mut self, placement: usize, breakable: bool) -> Self {
+        self.placement = Some(placement);
+        self.breakable = breakable;
+        self
+    }
+
+    pub fn placement(&self) -> Option<usize> {
+        self.placement
+    }
+
+    pub fn breakable_placement(&self) -> Option<usize> {
+        self.breakable.then_some(self.placement).flatten()
     }
 
     pub fn geometry(&self) -> &StaticGeometry {
@@ -271,7 +291,7 @@ impl ContactWorld {
         identifiers: &BTreeSet<u64>,
     ) -> Result<Self, ContactWorldError> {
         cache.header.check_movement()?;
-        Self::from_static_cache(cache, identifiers)
+        Self::from_static_cache(cache, identifiers, false)
     }
 
     /// Prepare swept queries over the same verified geometry as combat rays.
@@ -281,12 +301,13 @@ impl ContactWorld {
         identity: RayCacheIdentity<'_>,
     ) -> Result<Self, ContactWorldError> {
         cache.header.check_ray(identity)?;
-        Self::from_static_cache(cache, identifiers)
+        Self::from_static_cache(cache, identifiers, true)
     }
 
     fn from_static_cache(
         cache: CollisionCache,
         identifiers: &BTreeSet<u64>,
+        expanded_rays: bool,
     ) -> Result<Self, ContactWorldError> {
         let groups = cache.header.placement_groups(identifiers);
         let mut shapes = Vec::new();
@@ -302,7 +323,7 @@ impl ContactWorld {
         }
         let mut scaled = HashMap::new();
         let mut raw_meshes = HashMap::<(u32, usize), Arc<Mesh>>::new();
-        for placement in cache.placements {
+        for (placement_index, placement) in cache.placements.into_iter().enumerate() {
             if !groups.contains(&placement.group) {
                 continue;
             }
@@ -318,11 +339,19 @@ impl ContactWorld {
                 let key = (placement.model, slot, placement.scale.map(f32::to_bits));
                 let geometry = match scaled.entry(key) {
                     Entry::Occupied(found) => found.into_mut(),
-                    Entry::Vacant(slot_entry) => {
-                        slot_entry.insert(placed_geometry(shape, placement, slot, &mut raw_meshes)?)
-                    }
+                    Entry::Vacant(slot_entry) => slot_entry.insert(placed_geometry(
+                        shape,
+                        placement,
+                        slot,
+                        &mut raw_meshes,
+                        expanded_rays,
+                    )?),
                 };
-                shapes.push(StaticShape::new(geometry.clone(), Some(frame))?);
+                let breakable = cache.header.is_breakable_shape(placement.model, slot);
+                shapes.push(
+                    StaticShape::new(geometry.clone(), Some(frame))?
+                        .with_breakable_placement(placement_index, breakable),
+                );
             }
         }
         Self::new(shapes)
@@ -332,12 +361,34 @@ impl ContactWorld {
         &self.shapes
     }
 
-    /// Find shapes whose fat bounds overlap the box, in proxy order.
-    pub fn query(&self, bounds: ContactBounds) -> Vec<u32> {
-        self.query_precise(bounds.low.map(f64::from), bounds.high.map(f64::from))
+    pub fn shape_breakable_placement(&self, id: u32) -> Option<usize> {
+        self.shapes.get(id as usize)?.breakable_placement()
     }
 
-    fn query_precise(&self, low: [f64; 3], high: [f64; 3]) -> Vec<u32> {
+    /// Find shapes whose fat bounds overlap the box, in proxy order.
+    pub fn query(&self, bounds: ContactBounds) -> Vec<u32> {
+        self.query_with_breakables(bounds, None)
+    }
+
+    /// Find intact shapes whose fat bounds overlap the box, skipping broken placements.
+    pub fn query_with_breakables(
+        &self,
+        bounds: ContactBounds,
+        breakables: Option<&BreakableState>,
+    ) -> Vec<u32> {
+        self.query_precise(
+            bounds.low.map(f64::from),
+            bounds.high.map(f64::from),
+            breakables,
+        )
+    }
+
+    fn query_precise(
+        &self,
+        low: [f64; 3],
+        high: [f64; 3],
+        breakables: Option<&BreakableState>,
+    ) -> Vec<u32> {
         if !valid_box(low, high) {
             return Vec::new();
         }
@@ -348,6 +399,12 @@ impl ContactWorld {
         let mut seen = HashSet::new();
         self.grid.visit(range.expanded(1), |id| {
             let shape = &self.shapes[id as usize];
+            if shape
+                .breakable_placement()
+                .is_some_and(|placement| breakables.is_some_and(|state| state.is_broken(placement)))
+            {
+                return;
+            }
             if shape.fat.is_some_and(|bounds| overlaps(low, high, bounds)) && seen.insert(id) {
                 found.push(id);
             }
@@ -358,6 +415,38 @@ impl ContactWorld {
 
     /// Sweep the probe through all applicable static shapes, in proxy order.
     pub fn scene_sweep(&self, probe: MeshProbe<'_>) -> Result<Option<WorldHit>, PointSetSize> {
+        self.scene_sweep_with_breakables(probe, None)
+    }
+
+    /// Sweep the probe through intact static shapes, skipping broken placements.
+    pub fn scene_sweep_with_breakables(
+        &self,
+        probe: MeshProbe<'_>,
+        breakables: Option<&BreakableState>,
+    ) -> Result<Option<WorldHit>, PointSetSize> {
+        self.sweep_with_skin(probe, SKIN, breakables)
+    }
+
+    /// Sweep weapon geometry using its authored radius in place of movement padding.
+    pub fn projectile_sweep(&self, probe: MeshProbe<'_>) -> Result<Option<WorldHit>, PointSetSize> {
+        self.projectile_sweep_with_breakables(probe, None)
+    }
+
+    /// Sweep weapon geometry through intact static shapes, skipping broken placements.
+    pub fn projectile_sweep_with_breakables(
+        &self,
+        probe: MeshProbe<'_>,
+        breakables: Option<&BreakableState>,
+    ) -> Result<Option<WorldHit>, PointSetSize> {
+        self.sweep_with_skin(probe, 0.0, breakables)
+    }
+
+    fn sweep_with_skin(
+        &self,
+        probe: MeshProbe<'_>,
+        skin: f32,
+        breakables: Option<&BreakableState>,
+    ) -> Result<Option<WorldHit>, PointSetSize> {
         if probe.points.is_empty() || probe.points.len() > usize::from(u8::MAX) {
             return Err(PointSetSize);
         }
@@ -373,7 +462,7 @@ impl ContactWorld {
         let high = std::array::from_fn(|k| f64::from(probe.start[k].max(probe.end[k])) + reach);
         let b = CastShape {
             points: probe.points,
-            radius: maxps(SKIN, probe.radius),
+            radius: probe.radius,
             frame: Some(
                 ContactFrame {
                     translation: probe.start,
@@ -384,7 +473,7 @@ impl ContactWorld {
         };
         let mut nearest = None;
         let mut max_fraction = 1.0;
-        for id in self.query_precise(low, high) {
+        for id in self.query_precise(low, high, breakables) {
             let shape = &self.shapes[id as usize];
             if shape.geometry.mask() & probe.category == 0 {
                 continue;
@@ -396,7 +485,7 @@ impl ContactWorld {
                 shrink: false,
             };
             let cast = |points, radius| {
-                shape_cast(
+                shape_cast_with_skin(
                     CastShape {
                         points,
                         radius,
@@ -404,17 +493,19 @@ impl ContactWorld {
                     },
                     b,
                     options,
+                    skin,
                 )
             };
             let result = match &shape.geometry {
-                StaticGeometry::Mesh(mesh) => mesh_sweep(
+                StaticGeometry::Mesh(mesh) => mesh_sweep_with_skin(
                     mesh,
                     shape.frame.unwrap_or(ContactFrame::IDENTITY),
                     probe,
                     max_fraction,
+                    skin,
                 )?
                 .map(|hit| (hit.hit, Some(hit.triangle))),
-                StaticGeometry::Hull(hull) => cast(&hull.vertices, SKIN)?.map(|hit| (hit, None)),
+                StaticGeometry::Hull(hull) => cast(&hull.vertices, skin)?.map(|hit| (hit, None)),
                 StaticGeometry::Round {
                     shape: RoundShape::Capsule(capsule),
                     ..
@@ -442,17 +533,34 @@ fn placed_geometry(
     placement: Placement,
     slot: usize,
     raw_meshes: &mut HashMap<(u32, usize), Arc<Mesh>>,
+    expanded_rays: bool,
 ) -> Result<StaticGeometry, ContactWorldError> {
     let scale = placement.scale;
     match shape {
         Shape::Mesh { mask, mesh } => {
-            let raw = raw_meshes
-                .entry((placement.model, slot))
-                .or_insert_with(|| Arc::new(mesh.clone()));
+            // Expanded rays select individual faces. Their sweep must admit the same
+            // face categories before the mesh query applies the per-face filter.
+            let mask = if expanded_rays {
+                mesh.triangles.iter().fold(0, |mask, face| mask | face.mask)
+            } else {
+                *mask
+            };
+            // A sphere stays round in placed space. The raw-mesh sweep can only
+            // convert its scalar radius directly for a positive uniform scale.
+            let (mesh, scale) = if expanded_rays && (scale[0] <= 0.0 || scale != [scale[0]; 3]) {
+                let mut scaled = mesh.clone();
+                for vertex in &mut scaled.vertices {
+                    *vertex = mul(*vertex, scale);
+                }
+                (Arc::new(scaled), [1.0; 3])
+            } else {
+                let raw = raw_meshes
+                    .entry((placement.model, slot))
+                    .or_insert_with(|| Arc::new(mesh.clone()));
+                (Arc::clone(raw), scale)
+            };
             Ok(StaticGeometry::Mesh(Arc::new(ContactMesh::new(
-                Arc::clone(raw),
-                scale,
-                *mask,
+                mesh, scale, mask,
             )?)))
         }
         Shape::Hull(hull) => {
@@ -671,5 +779,77 @@ mod tests {
         };
         assert!(Arc::ptr_eq(a, b));
         assert_eq!(prop_b.frame().unwrap().translation, [10.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn breakable_placement_blocks_until_broken_then_clears_movement_and_sweeps() {
+        use crate::{contact_body::CharacterBody, contact_cache::CapsulePose};
+
+        let glass = Mesh {
+            vertices: vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 0.0]],
+            triangles: vec![Triangle {
+                corners: [0, 1, 2],
+                wings: [-1; 3],
+                mask: 0x18,
+                surface: 0,
+            }],
+        };
+        let cache = CollisionCache {
+            header: serde_json::from_value(json!({
+                "meshes": [], "hulls": 0, "models": 1, "placements": 1,
+                "identifiers": [],
+                "breakable_model_shapes": { "0": [0] },
+            }))
+            .unwrap(),
+            meshes: vec![],
+            hulls: vec![],
+            models: vec![vec![Shape::Mesh {
+                mesh: glass,
+                mask: 0x18,
+            }]],
+            placements: vec![Placement {
+                model: 0,
+                group: 0,
+                translation: [0.0, 0.0, 1.0],
+                scale: [1.0; 3],
+                rotation: ContactFrame::IDENTITY.rotation,
+            }],
+        };
+        let world = Arc::new(ContactWorld::from_movement_cache(cache, &BTreeSet::new()).unwrap());
+        let breakables = Arc::new(BreakableState::new());
+        let probe = MeshProbe {
+            points: &[[0.0; 3]],
+            radius: 0.1,
+            start: [0.0, 0.5, 0.0],
+            end: [0.0, 0.5, 2.0],
+            category: 0x18,
+        };
+        assert!(
+            world
+                .projectile_sweep_with_breakables(probe, Some(&breakables))
+                .unwrap()
+                .is_some()
+        );
+
+        let mut body = CharacterBody::new(
+            Arc::clone(&world),
+            CapsulePose {
+                position: [0.0, 0.0, 1.0],
+                radius: 0.3,
+                top: 1.5,
+            },
+            0x18,
+        );
+        body.set_breakables(Arc::clone(&breakables));
+        assert!(!body.fits(0.3, 1.5).unwrap());
+
+        breakables.mark_broken(0);
+        assert!(body.fits(0.3, 1.5).unwrap());
+        assert!(
+            world
+                .projectile_sweep_with_breakables(probe, Some(&breakables))
+                .unwrap()
+                .is_none()
+        );
     }
 }

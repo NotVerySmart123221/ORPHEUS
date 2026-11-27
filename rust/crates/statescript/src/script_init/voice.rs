@@ -366,6 +366,7 @@ pub(super) struct InstanceContext<'a, W> {
     pub(super) reads: Vec<VarKey>,
     pub(super) foreign_reads: Vec<(u32, u32)>,
     pub(super) parameters: Option<&'a Variables>,
+    pub(super) cycle_candidate: Option<i64>,
     pub(super) health_target_facts: Option<&'a HealthTargetFacts>,
     pub(super) observed_sample: Option<&'a ObservedSample>,
     pub(super) settled_damage: bool,
@@ -437,6 +438,15 @@ impl<W: World> Context for InstanceContext<'_, W> {
         self.graphs.asset_has_category(asset, kind, id)
     }
 
+    fn equipped_cosmetic(
+        &mut self,
+        entity: u32,
+        slot: usize,
+        cosmetic: crate::script_expr::EquippedCosmetic,
+    ) -> Option<u64> {
+        self.world.equipped_cosmetic(entity, slot, cosmetic)
+    }
+
     fn asset_texture(&mut self, action: u64) -> Option<u64> {
         self.graphs.asset_texture(action)
     }
@@ -461,6 +471,9 @@ impl<W: World> Context for InstanceContext<'_, W> {
     }
 
     fn parameter(&mut self, id: u32) -> Value {
+        if let Some(candidate) = self.cycle_candidate {
+            return Value::Integer(candidate);
+        }
         self.parameters
             .and_then(|parameters| parameters.get(&id))
             .cloned()
@@ -740,6 +753,19 @@ impl<W: World> Context for InstanceContext<'_, W> {
     fn entity_component92(&mut self, entity: u32) -> Option<bool> {
         self.read_native = true;
         self.world.entity_component92(self.site, entity)
+    }
+
+    fn button_held(&mut self, entity: u32, button: u8) -> Option<bool> {
+        self.read_native = true;
+        if entity == self.site.entity {
+            Some(
+                !self.machine.control_blocked
+                    && self.machine.button_blocks[usize::from(button)] == 0
+                    && self.machine.held_buttons.contains(&button),
+            )
+        } else {
+            Some(false)
+        }
     }
 
     fn related_entity(&mut self, relation: EntityRelation, entity: u32) -> Option<u32> {

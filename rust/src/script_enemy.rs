@@ -5,17 +5,17 @@ use crate::{
     game_combat::RoomScriptRequests,
     game_content::{TUTORIAL_MODE, is_junkenstein_mode},
     game_hitscan::{HitDefinition, HitscanShot, TargetPose, aim_direction},
-    junkenstein_messages::{
-        self, BOSS_INTRO_ENDED, BOSS_INTRO_STARTED, DefenderMessage, DefenderSighting, SIGHTING,
-        SIGHTING_TAGS, SightingSource,
-    },
-    junkenstein_navigation::{
-        BossTarget, GrenadeArc, JUNKRAT, REAPER, ROADHOG, SHOCK_TIRE, SUMMONER, WITCH, ZOMBARDIER,
-    },
-    junkenstein_voice::{self, IntroCue, VoiceRequest},
     mover::sample_movement_flags,
     npc_catalog::NpcDefinition,
     projectile_flight::{ProjectileBallistics, ProjectileFlight, authored_gravity},
+    pve_encounter::messages::{
+        BOSS_INTRO_ENDED, BOSS_INTRO_STARTED, DefenderMessage, DefenderSighting, SIGHTING,
+        SIGHTING_TAGS, SightingSource,
+    },
+    pve_encounter::navigation::{
+        BossTarget, GrenadeArc, JUNKRAT, REAPER, ROADHOG, SHOCK_TIRE, SUMMONER, WITCH, ZOMBARDIER,
+    },
+    pve_encounter::voice::{IntroCue, VoiceRequest},
     script_expr::{EntityRelation, OnFire, native_shape},
     script_graph::{EnemyPair, GraphStore, asset_guid},
     script_init::{

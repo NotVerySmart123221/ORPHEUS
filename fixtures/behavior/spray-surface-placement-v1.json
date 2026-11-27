@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "case_id": "spray-surface-placement-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "cedec602",
+    "paths": [
+      "src/ow174/game/script/spray_placement.py",
+      "docs/COMMUNICATION_WHEEL.txt"
+    ],
+    "notes": "The map and loadout are synthetic. The surface category and quantized field layout follow the 104319 reference."
+  },
+  "evidence": "synthetic-reference",
+  "input": {
+    "eye": [
+      0,
+      1,
+      0
+    ],
+    "direction": [
+      0,
+      0,
+      1
+    ],
+    "reach": 4.5,
+    "excluded_wall_z": 1,
+    "spray_wall_z": 2
+  },
+  "expected": {
+    "point": [
+      0.0,
+      1.0,
+      2.0
+    ],
+    "normal": [
+      0,
+      0,
+      -1
+    ],
+    "bits": 163,
+    "payload_hex": "01000100010000000000007f00000080feff010001"
+  },
+  "attachment": {
+    "entity": 2147484206,
+    "point": [
+      2.0,
+      0.0,
+      0.0
+    ],
+    "normal": [
+      0,
+      0,
+      1
+    ],
+    "cases": [
+      {
+        "key": null,
+        "bits": 184,
+        "payload_hex": "0100010001000080000000000000000000000100938b00"
+      },
+      {
+        "key": 311,
+        "bits": 202,
+        "payload_hex": "0100010001000080000000000000000000000100938bc06e0200"
+      }
+    ]
+  }
+}

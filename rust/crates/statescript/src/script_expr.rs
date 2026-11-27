@@ -184,7 +184,9 @@ pub enum HealthQuery {
 /// Relationship selected by the explicitly admitted scene filter.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FilterRelation {
+    Any,
     Hostile,
+    Friendly,
     FriendlyOther,
 }
 
@@ -254,6 +256,13 @@ pub fn stack_priority(config: &Json) -> Result<StackPriority, EvalError> {
 pub enum OnFire {
     Active(bool),
     NoStats,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EquippedCosmetic {
+    Spray,
+    EmoteAlias,
+    EmoteBlendTree,
 }
 
 pub trait Context {
@@ -435,6 +444,16 @@ pub trait Context {
         None
     }
 
+    /// Some(0) is an empty slot; None means the entity loadout is unavailable.
+    fn equipped_cosmetic(
+        &mut self,
+        _entity: u32,
+        _slot: usize,
+        _cosmetic: EquippedCosmetic,
+    ) -> Option<u64> {
+        None
+    }
+
     fn asset_texture(&mut self, _action: u64) -> Option<u64> {
         None
     }
@@ -451,6 +470,10 @@ pub trait Context {
         None
     }
 
+    fn button_held(&mut self, _entity: u32, _button: u8) -> Option<bool> {
+        None
+    }
+
     /// None leaves a tag fact unknown for this entity.
     fn has_target_tag(&mut self, _entity: u32, _tag: u64) -> Option<bool> {
         None
@@ -459,6 +482,11 @@ pub trait Context {
     /// Admit the scene-specific relationship and tag layout.
     fn scene_filter_policy(&mut self, _filter: &Json) -> Option<SceneFilterPolicy> {
         None
+    }
+
+    fn optional_ruleset(&mut self, id: u32) -> Option<Value> {
+        let value = self.ruleset(id);
+        (value != Value::Null).then_some(value)
     }
 
     /// None leaves candidate flags unknown. A known absence can report zero.

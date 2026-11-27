@@ -48,6 +48,7 @@
     }
   },
   "rust_selection": {
+    "equipped_effect": "0x0300000000000123",
     "criterion": "0x0D80000000000AEB",
     "unavailable_stimulus": "0x0EE000000000FFF1",
     "alternate_line": "0x076000000000FFF2",

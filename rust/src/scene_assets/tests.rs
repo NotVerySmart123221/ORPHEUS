@@ -19,12 +19,14 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
         serde_json::from_value(input["combat_triangles"].clone()).unwrap();
     let movement: Vec<[[f32; 3]; 3]> =
         serde_json::from_value(input["movement_triangles"].clone()).unwrap();
-    let cache = |triangles: Vec<[[f32; 3]; 3]>, expanded| {
+    let category = input["layered_weapon_terrain_category"].as_u64().unwrap() as u16;
+    let cache = |triangles: Vec<[[f32; 3]; 3]>, weapon_category: Option<u16>| {
         let mut header = json!({
             "meshes":[[triangles.len()*3, triangles.len()]],
             "hulls":0,"models":0,"placements":0,"identifiers":[]
         });
-        if expanded {
+        if let Some(category) = weapon_category {
+            header["weapon_terrain_category"] = json!(category);
             header["geometry"] = json!("expanded-static-rays");
             header["category_mask"] = json!(65535);
             header["prop_scope"] = json!("indexed-static-models");
@@ -40,7 +42,7 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
                     .map(|i| Triangle {
                         corners: [3 * i, 3 * i + 2, 3 * i + 1],
                         wings: [-1; 3],
-                        mask: MOVER_CATEGORY,
+                        mask: weapon_category.unwrap_or(MOVER_CATEGORY),
                         surface: 0,
                     })
                     .collect(),
@@ -58,16 +60,23 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
     };
     let mut scene = PreparedScene::fixture_for_bots(Vec::new());
     let groups = BTreeSet::new();
-    let movement = cache(movement, false);
+    let movement = cache(movement, None);
     scene.ground = Arc::new(CollisionScene::movement_probe(&movement, &groups).unwrap());
+    let mut combat = cache(triangles, Some(category));
+    combat
+        .header
+        .meshes
+        .extend_from_slice(&movement.header.meshes);
+    combat.meshes.extend(movement.meshes.iter().cloned());
     let movement_contacts = Arc::new(ContactWorld::from_movement_cache(movement, &groups).unwrap());
     scene.contacts = Some(Arc::clone(&movement_contacts));
-    let combat = cache(triangles, true);
     scene.combat_rays =
         Arc::new(CollisionScene::expanded_rays(&combat, &groups, identity).unwrap());
     scene.combat_sweeps = Some(Arc::new(
         ContactWorld::from_expanded_ray_cache(combat, &groups, identity).unwrap(),
     ));
+    assert_eq!(scene.combat_rays.weapon_terrain_category(), Some(category));
+    assert_eq!(scene.ground.weapon_terrain_category(), None);
     for row in input["rays"].as_array().unwrap() {
         let origin = serde_json::from_value(row["origin"].clone()).unwrap();
         let direction = [0.0, 0.0, 1.0];
@@ -88,7 +97,9 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
                 .unwrap()
                 .is_some()
         );
+        assert_eq!(fallback.combat_ray_geometry(), "movement");
         let (_, queries) = scene.bot_simulation();
+        assert_eq!(queries.combat_ray_geometry(), "expanded");
         let expected = row["distance"].as_f64();
         assert_eq!(
             queries.hitscan_wall(origin, direction, 4.0).unwrap(),
@@ -113,6 +124,21 @@ fn weapon_queries_preserve_openings_in_the_prepared_combat_geometry() {
             );
         }
     }
+
+    let gap = &input["small_projectile_gap"];
+    let origin = serde_json::from_value(gap["origin"].clone()).unwrap();
+    let (_, queries) = scene.bot_simulation();
+    for (key, blocked) in [("clear_radius", false), ("blocked_radius", true)] {
+        let radius = serde_json::from_value(gap[key].clone()).unwrap();
+        assert_eq!(
+            queries
+                .projectile_wall(origin, [0.0, 0.0, 1.0], 4.0, radius)
+                .unwrap()
+                .is_some(),
+            blocked,
+            "{key}"
+        );
+    }
 }
 
 #[test]
@@ -128,6 +154,44 @@ fn prepared_map_selects_the_validated_combat_ray_side_cache() {
     let sweeps = prepared.combat_sweeps.unwrap();
     assert!(!Arc::ptr_eq(&movement, &sweeps));
     assert!(!sweeps.shapes().is_empty());
+}
+
+#[test]
+#[ignore = "requires prepared 104319 Practice Range movement geometry"]
+fn prepared_map_fallback_preserves_projectile_sweeps_without_mover_contacts() {
+    let input: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/map-combat-ray-geometry-v1.json"
+    ))
+    .unwrap();
+    let dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let mut assets = SceneAssets::load(&dir).unwrap();
+    let map = GameMap::practice_range();
+    let movement_name = format!("{:04X}.col", map.map_guid as u32);
+    let isolated = tempfile::tempdir().unwrap();
+    let collision = isolated.path().join("collision");
+    fs::create_dir(&collision).unwrap();
+    let data = isolated.path().join("data");
+    fs::create_dir(&data).unwrap();
+    let keys = "collision_keys_174.json";
+    fs::copy(dir.join("data").join(keys), data.join(keys)).unwrap();
+    let movement = collision.join(&movement_name);
+    fs::copy(assets.collision.join(movement_name), &movement).unwrap();
+    assets.collision = collision;
+
+    for case in input["movement_fallback"].as_array().unwrap() {
+        if case["expanded_cache"] == "rejected" {
+            fs::write(movement.with_extension("rays.col"), b"incomplete cache").unwrap();
+        }
+        let mover_contacts = case["mover_contacts"].as_bool().unwrap();
+        let prepared = assets.map_collision(&map, mover_contacts).unwrap();
+        assert!(Arc::ptr_eq(&prepared.combat_rays, &prepared.ground));
+        let sweeps = prepared.combat_sweeps.as_ref().unwrap();
+        assert!(!sweeps.shapes().is_empty());
+        assert_eq!(prepared.contacts.is_some(), mover_contacts);
+        if let Some(contacts) = prepared.contacts {
+            assert!(Arc::ptr_eq(&contacts, sweeps));
+        }
+    }
 }
 
 #[test]
@@ -192,6 +256,7 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
         let assets = SceneAssets {
             junkenstein_validation: None,
             environment: EnvironmentCatalog::default(),
+            ability_rules: crate::hero_ability_rules::HeroAbilityRules::default_shared(),
             collision: PathBuf::new(),
             junkenstein_map_world: PathBuf::new(),
             last_collision: Mutex::default(),
@@ -206,7 +271,8 @@ fn practice_only_omits_owner_runtime_when_all_owner_content_is_absent() {
             movers: Arc::new(MoverCatalog::default()),
             hurt_volumes: Arc::new(HurtVolumeCatalog::default()),
             actor_voice: None,
-            stats: StatsCatalog::default(),
+            anim_timing: None,
+            stats: Arc::new(StatsCatalog::default()),
             heroes: Arc::clone(&heroes),
             pools: Arc::new(PoolCatalog::default()),
             combat_voice: Arc::new(CombatVoiceCatalog::default()),
@@ -317,8 +383,10 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
             false,
         );
         (
-            hero.guid,
-            prepared.map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
+            (hero.guid, hero.body),
+            prepared
+                .map(Arc::new)
+                .map_err(|error| Arc::new(SceneOwnerPreparationError::Body(Box::new(error)))),
         )
     });
     assert!(definitions[0].1.is_ok() && definitions[1].1.is_ok());
@@ -327,7 +395,15 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
         matches!(invalid, Some(SceneOwnerPreparationError::Body(error))
         if matches!(error.as_ref(), OwnerBodyPreparationError::MissingBody))
     );
-    scene.owner_body_factory = Some(practice_owner_selector(definitions.into_iter().collect()));
+    scene.owner_body_factory = Some(practice_owner_selector(
+        definitions.into_iter().collect(),
+        Arc::clone(&graphs),
+        Some(Arc::clone(&codecs)),
+        scene.map().mode_guid,
+        Arc::new(PoolCatalog::default()),
+        Some(false),
+        None,
+    ));
     let spawn = OwnerBodySpawn {
         slot: 0,
         controller: OWNER_PROBE_CONTROLLER,
@@ -371,7 +447,7 @@ fn practice_owner_selector_starts_the_validated_actor_definition() {
 #[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
-    use crate::junkenstein_navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
+    use crate::pve_encounter::navigation::{JUNKRAT, REAPER, ROADHOG, SUMMONER, WITCH};
     junkenstein::verify_normal_cassidy_damage_and_charge(
         &[REAPER, ROADHOG, JUNKRAT, WITCH, SUMMONER],
         &[(false, false), (false, true), (true, true)],
@@ -379,9 +455,365 @@ fn normal_cassidy_primary_and_fan_damage_all_boss_bodies() {
 }
 
 #[test]
+#[ignore = "requires the prepared 104319 Practice Range runtime"]
+fn prepared_practice_firing_lane_stops_at_the_front_bot() {
+    use crate::{
+        game_hitscan::direction_for_angles,
+        static_ray::{along, norm},
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let bots: Vec<_> = scene.bots().unwrap().collect();
+    let (shooter, front, rear_position) = bots
+        .iter()
+        .filter(|bot| bot.spawn.team == 1 && !bot.spawn.placement_graphs.is_empty())
+        .find_map(|shooter| {
+            let direction = direction_for_angles(shooter.spawn.yaw, 0);
+            bots.iter()
+                .filter(|bot| bot.spawn.team == 0 && bot.spawn.placement_graphs.is_empty())
+                .find_map(|target| {
+                    let delta: [f64; 3] =
+                        std::array::from_fn(|axis| target.position[axis] - shooter.position[axis]);
+                    let distance: f64 = delta.into_iter().zip(direction).map(|(a, b)| a * b).sum();
+                    let miss = std::array::from_fn(|axis| delta[axis] - direction[axis] * distance);
+                    (distance > 0.0 && norm(miss) < 0.05).then(|| {
+                        (
+                            shooter.entity,
+                            target.entity,
+                            along(target.position, direction, 1.5),
+                        )
+                    })
+                })
+        })
+        .expect("an authored enemy firing lane through a friendly bot");
+
+    check_practice_firing_lane(scene, shooter, front, rear_position, true);
+    check_practice_firing_lane(
+        assets.prepare(GameMap::practice_range()).unwrap(),
+        shooter,
+        front,
+        rear_position,
+        false,
+    );
+}
+
+fn check_practice_firing_lane(
+    mut scene: PreparedScene,
+    shooter: u32,
+    front: u32,
+    rear_position: [f64; 3],
+    live_cover: bool,
+) {
+    use crate::{
+        game_clock::{FIRST_TICK, TICK_PERIOD},
+        game_combat::{ObservedProjectileEvent, PlayerBodyState},
+        game_combat_messages::CombatNotice,
+        game_replication::BodyId,
+        mover_settings::MoverSettings,
+        script_player::fixture_body_factory,
+        static_ray::norm,
+    };
+
+    let (room, queries) = scene.bot_simulation();
+    let (factory, mut spawn) = fixture_body_factory();
+    spawn.frame = FIRST_TICK;
+    spawn.pose.position = rear_position;
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        rear_position,
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let rear = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let state = PlayerBodyState::new(
+        rear,
+        spawn.controller,
+        spawn.slot,
+        0,
+        crate::game_heroes::SOLDIER,
+        mover,
+        Some(Box::new(factory.start(spawn).unwrap())),
+        FIRST_TICK,
+        None,
+    );
+    let rear_health = state.vitals().unwrap().total();
+    room.spawn_player_body(state).unwrap();
+    room.enable_received_damage_feedback();
+    let front_health = room.body_healths().unwrap()[&front];
+    let mut lane_flights = BTreeSet::new();
+    let mut cover_down = false;
+    for tick in FIRST_TICK + 1..=FIRST_TICK + 800 {
+        let elapsed = TICK_PERIOD * (tick - FIRST_TICK);
+        room.finish_tick(&queries, tick, elapsed).unwrap();
+        let mut completed = false;
+        for event in room.take_projectile_reports() {
+            match event {
+                ObservedProjectileEvent::Launched {
+                    id, presentation, ..
+                } if presentation.volley.event.entity == shooter => {
+                    lane_flights.insert(id);
+                    if !live_cover && !cover_down {
+                        room.kill_bot_for_test(front, tick, elapsed);
+                        cover_down = true;
+                    }
+                }
+                ObservedProjectileEvent::Completed { id, .. } if lane_flights.remove(&id) => {
+                    completed = true;
+                }
+                _ => {}
+            }
+        }
+        let cues: Vec<_> = room
+            .take_player_cues()
+            .into_iter()
+            .filter(|cue| matches!(cue.notice, CombatNotice::DamageReceived { .. }))
+            .collect();
+        let player_hp = room.player_body(rear).unwrap().vitals().unwrap().total();
+        if live_cover {
+            assert_eq!(player_hp, rear_health);
+            assert!(cues.is_empty());
+            let health = room.body_healths().unwrap()[&front];
+            if health < front_health {
+                assert!(health > 0.0 && completed);
+                return;
+            }
+        } else if player_hp < rear_health {
+            assert!(cover_down && room.is_bot_dead(front) && completed);
+            let [cue] = cues.as_slice() else {
+                panic!("expected one received-damage cue after the lethal cover was removed");
+            };
+            assert_eq!(cue.listener, rear);
+            let CombatNotice::DamageReceived {
+                source,
+                victim,
+                dealt,
+                origin: Some(origin),
+                normal: Some(normal),
+                ..
+            } = cue.notice
+            else {
+                panic!("expected a damage cue with the settled NPC hit geometry");
+            };
+            assert_eq!(source, shooter);
+            assert_eq!(victim, rear.entity);
+            assert!((f64::from(dealt) - (rear_health - player_hp)).abs() < 1e-6);
+            assert!((norm(normal) - 1.0).abs() < 1e-8);
+            let dot: f64 = normal
+                .into_iter()
+                .zip(origin.into_iter().zip(rear_position))
+                .map(|(axis, (source, victim))| axis * (source - victim))
+                .sum();
+            assert!(dot > 0.0);
+            return;
+        }
+    }
+    panic!("the authored lane did not settle the expected impact with live_cover={live_cover}");
+}
+
+#[test]
+#[ignore = "requires the local 104319 Practice Range runtime with authored mode rules"]
+fn prepared_reaper_primary_projects_the_authored_pellet_count() {
+    use crate::{
+        commands::{Command, FIRE},
+        game_clock::FIRST_TICK,
+        game_combat::PosedShot,
+        game_replication::BodyStep,
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = scene.heroes().find_hero("Reaper").unwrap();
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let mut owner = scene
+        .owner_body_runtime(
+            hero,
+            OwnerBodySpawn {
+                slot: 0,
+                controller: 0xa000_0100,
+                entity: 0xa000_0101,
+                body_filter: team_bit(0).unwrap(),
+                frame: FIRST_TICK,
+                pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
+                quanta: RETAIL_QUANTA,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+    for frame in FIRST_TICK + 1..=FIRST_TICK + 90 {
+        let command = Command {
+            frame,
+            buttons: FIRE,
+            ..Command::default()
+        };
+        owner.advance(command, &mover, BodyStep::Posed).unwrap();
+        let shots = owner.take_shots(Some(command), &mover);
+        if shots.is_empty() {
+            continue;
+        }
+        assert_eq!(shots.len(), 20);
+        let mut directions = BTreeSet::new();
+        for shot in shots {
+            let PosedShot::Hitscan(shot) = shot else {
+                panic!("expected a shotgun ray");
+            };
+            assert_eq!(shot.shot_frame, frame);
+            assert!(shot.hit.amount > 0.0);
+            directions.insert(shot.direction.map(f64::to_bits));
+        }
+        assert_eq!(directions.len(), 20);
+        return;
+    }
+    panic!(
+        "the prepared Reaper body did not fire: {:?}",
+        owner.snapshot().unwrap().diagnostics
+    );
+}
+
+#[test]
+#[ignore = "requires the local 104319 Practice Range runtime"]
+fn prepared_cassidy_fan_uses_authored_cone_and_falloff() {
+    use crate::{
+        commands::{Command, SECONDARY},
+        game_clock::FIRST_TICK,
+        game_combat::{PosedShot, ShotContext},
+        game_combat_messages::CombatNotice,
+        game_replication::BodyStep,
+    };
+
+    let assets = SceneAssets::load(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap()).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let hero = scene.heroes().find_hero("Cassidy").unwrap();
+    let mover = Mover::new(
+        *scene.movers.for_body(Some(hero.body)),
+        Arc::clone(scene.contacts.as_ref().unwrap()),
+        [0.0; 3],
+        0,
+        MOVER_CATEGORY,
+    )
+    .unwrap();
+    let mut owner = scene
+        .owner_body_runtime(
+            hero,
+            OwnerBodySpawn {
+                slot: 0,
+                controller: 0xa000_0100,
+                entity: 0xa000_0101,
+                body_filter: team_bit(0).unwrap(),
+                frame: FIRST_TICK,
+                pose: mover.pose(),
+                eye_position: script_eye_position(hero.guid, &mover),
+                skin: 0,
+                quanta: RETAIL_QUANTA,
+            },
+        )
+        .unwrap()
+        .unwrap();
+    let mut directions = BTreeSet::new();
+    let mut volley = Vec::new();
+    for frame in FIRST_TICK + 1..=FIRST_TICK + 90 {
+        let command = Command {
+            frame,
+            buttons: SECONDARY,
+            ..Command::default()
+        };
+        owner.advance(command, &mover, BodyStep::Posed).unwrap();
+        for shot in owner.take_shots(Some(command), &mover) {
+            let PosedShot::Hitscan(shot) = shot else {
+                panic!("expected hitscan from the authored alternate fire");
+            };
+            volley.push(*shot);
+            directions.insert(shot.direction.map(f64::to_bits));
+            assert!(shot.direction[2] >= 6.0_f64.to_radians().cos() - 1e-6);
+            assert_eq!(shot.hit.damage_at(15.0, false), 50.0);
+            assert!((shot.hit.damage_at(30.0, false) - 32.5).abs() < 1e-5);
+            assert!((shot.hit.damage_at(50.0, false) - 15.0).abs() < 1e-5);
+        }
+    }
+    assert_eq!(volley.len(), 6);
+    assert_eq!(directions.len(), volley.len());
+
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/cassidy-fan-falloff-v1.json"
+    ))
+    .unwrap();
+    for case in contract["cases"].as_array().unwrap() {
+        let range = case["contact_distance"].as_f64().unwrap();
+        let per_round = case["raw_damage_per_round"].as_f64().unwrap();
+        let bot = Bot::fixture_walker([0.0, 0.0, 1.0]);
+        let target = bot.entity;
+        let health = bot.spawn.health;
+        let mut room = PreparedScene::fixture_for_bots(vec![bot]);
+        let (simulation, queries) = room.bot_simulation();
+        let target_pose = queries.target(simulation.bodies().unwrap().next().unwrap());
+        let [x, y, z] = target_pose.feet;
+        let centre = [x, y + target_pose.height * 0.5, z];
+        let mut total = 0.0;
+        let mut eliminated = false;
+        for mut shot in volley.iter().copied() {
+            // Keep the authored spread. Translate the ray so that each round
+            // goes through the torso and contacts it at the requested range.
+            // This measures the full burst even if natural spread would miss.
+            let [dx, _, dz] = shot.direction;
+            let axis_range = range + target_pose.radius / dx.hypot(dz);
+            shot.origin = crate::static_ray::along(centre, shot.direction, -axis_range);
+            let context = ShotContext {
+                team: 0,
+                quanta: RETAIL_QUANTA,
+                tick: shot.shot_frame,
+                now: std::time::Duration::ZERO,
+            };
+            let hit = simulation
+                .hitscan(&queries, shot, context, |id| id == target)
+                .unwrap();
+            if eliminated {
+                assert!(hit.is_none());
+                continue;
+            }
+            let hit = hit.unwrap_or_else(|| panic!("miss at {range} m"));
+            let expected = per_round.min(health - total);
+            assert!(
+                (hit.damage.amount - expected).abs() < 1e-5,
+                "at {range} m: {} vs {expected}",
+                hit.damage.amount
+            );
+            assert!(matches!(
+                hit.notices[0],
+                Some(CombatNotice::Hit { target: victim, critical: false, shot_frame, .. })
+                    if victim == target && shot_frame == shot.shot_frame
+            ));
+            total += hit.damage.amount;
+            eliminated = matches!(hit.notices[1], Some(CombatNotice::Elimination { victim, .. }) if victim == target);
+        }
+        let expected = case["settled_damage"].as_f64().unwrap();
+        assert!(
+            (total - expected).abs() < 1e-5,
+            "at {range} m: {total} vs {expected}"
+        );
+        assert_eq!(
+            eliminated,
+            case["elimination"].as_bool().unwrap(),
+            "at {range} m"
+        );
+        assert_eq!(
+            simulation.bodies().unwrap().next().unwrap().dead,
+            eliminated
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires separately prepared 104319 Junkenstein runtime"]
 fn normal_cassidy_common_npc_damage_charge_and_retirement() {
-    use crate::junkenstein_navigation::{SHOCK_TIRE, ZOMBARDIER};
+    use crate::pve_encounter::navigation::{SHOCK_TIRE, ZOMBARDIER};
     const ZOMNIC: u64 = 0x02e0_0000_0000_0175;
     junkenstein::verify_normal_cassidy_damage_and_charge(
         &[ZOMNIC, ZOMBARDIER, SHOCK_TIRE],
@@ -1566,4 +1998,153 @@ fn practice_range_stock_bots_drive_overhead_nameplates_through_death_and_respawn
         .expect("respawned bot script projection");
     assert!(fresh_projected.has_graph(0x0c18));
     assert!(fresh_projected.has_graph(0x0d24));
+}
+
+#[test]
+#[ignore = "requires prepared external 104319 Practice Range runtime"]
+fn prepared_practice_railings_block_player_mover() {
+    use crate::{
+        collision_cache::read_movement_cache, commands::Command, game_clock::TICK_PERIOD,
+        game_heroes::SOLDIER,
+    };
+
+    let runtime = PathBuf::from(
+        std::env::var_os("ORPHEUS_RUNTIME_DIR").expect("ORPHEUS_RUNTIME_DIR is required"),
+    );
+    let assets = SceneAssets::load(&runtime).unwrap();
+    let scene = assets.prepare(GameMap::practice_range()).unwrap();
+
+    let cache = read_movement_cache(BufReader::new(
+        File::open(runtime.join("collision/0688.col")).unwrap(),
+    ))
+    .unwrap();
+    let contacts = scene.contacts.as_ref().expect("Practice Range contacts");
+    let breakable_shapes: Vec<_> = contacts
+        .shapes()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, shape)| {
+            let placement = shape.breakable_placement()?;
+            let p = cache.placements[placement];
+            let bounds = shape.fat_bounds()?;
+            Some((
+                idx,
+                placement,
+                p.model,
+                shape.geometry().mask(),
+                p.translation,
+                bounds,
+            ))
+        })
+        .collect();
+    assert!(
+        breakable_shapes.len() >= 148,
+        "expected Practice Range breakable railings in ContactWorld"
+    );
+
+    let soldier_body = scene.heroes.get(SOLDIER).unwrap().body;
+    let settings = *scene.movers.for_body(Some(soldier_body));
+    let category = mover_category(scene.map(), 0);
+    let dt = TICK_PERIOD.as_secs_f64();
+
+    // Walking straight into intact axis-aligned railing placement 10 must stop at the railing.
+    let (_, _, _, _, tr, bounds) = breakable_shapes
+        .iter()
+        .find(|(_, placement, _, _, _, _)| *placement == 10)
+        .copied()
+        .expect("placement 10 railing");
+    let cx = f64::from(bounds.low[0] + bounds.high[0]) * 0.5;
+    let cz = f64::from(bounds.low[2] + bounds.high[2]) * 0.5;
+    let floor_y = f64::from(tr[1]);
+    let mut mover = Mover::new(
+        settings,
+        Arc::clone(contacts),
+        [cx + 1.5, floor_y, cz],
+        -16384,
+        category,
+    )
+    .unwrap();
+    mover.set_breakables(Arc::clone(&scene.breakables));
+    for frame in 1..=60u32 {
+        mover
+            .step(
+                scene.movement_index(),
+                Command {
+                    frame,
+                    yaw: -16384,
+                    pitch: 0,
+                    forward: 127,
+                    right: 0,
+                    buttons: 0,
+                    ..Command::default()
+                },
+                dt,
+                |_, _| {},
+            )
+            .unwrap();
+    }
+    assert!(
+        mover.pose().position[0] > cx + 0.35,
+        "player mover walked through intact railing placement 10: pos={:?} cx={cx:.2}",
+        mover.pose().position
+    );
+
+    // Every model 0 and model 2 railing placement must block a team-0 player capsule sweep.
+    let mut swept_hits = 0usize;
+    let mut swept_misses = 0usize;
+    for &(_, placement, model, _, str_pos, sbounds) in &breakable_shapes {
+        if model != 0 && model != 2 {
+            continue;
+        }
+        let p = cache.placements[placement];
+        let q = p.rotation;
+        let lx = [
+            1.0 - 2.0 * (q[1] * q[1] + q[2] * q[2]),
+            2.0 * (q[0] * q[1] + q[2] * q[3]),
+            2.0 * (q[0] * q[2] - q[1] * q[3]),
+        ];
+        let lz = [
+            2.0 * (q[0] * q[2] + q[1] * q[3]),
+            2.0 * (q[1] * q[2] - q[0] * q[3]),
+            1.0 - 2.0 * (q[0] * q[0] + q[1] * q[1]),
+        ];
+        let center = [
+            (sbounds.low[0] + sbounds.high[0]) * 0.5,
+            str_pos[1],
+            (sbounds.low[2] + sbounds.high[2]) * 0.5,
+        ];
+        let hit_axis = |axis: [f32; 3]| {
+            contacts
+                .scene_sweep_with_breakables(
+                    crate::contact_gjk::sweep::MeshProbe {
+                        points: &[[0.0, 0.5, 0.0], [0.0, 1.5, 0.0]],
+                        radius: 0.5,
+                        start: [
+                            center[0] - axis[0] * 1.5,
+                            center[1],
+                            center[2] - axis[2] * 1.5,
+                        ],
+                        end: [
+                            center[0] + axis[0] * 1.5,
+                            center[1],
+                            center[2] + axis[2] * 1.5,
+                        ],
+                        category,
+                    },
+                    Some(&scene.breakables),
+                )
+                .unwrap()
+                .is_some()
+        };
+        if hit_axis(lx) || hit_axis(lz) {
+            swept_hits += 1;
+        } else {
+            swept_misses += 1;
+        }
+    }
+    assert_eq!(swept_hits, 148);
+    assert_eq!(
+        swept_misses, 0,
+        "all model 0/2 railings must block capsule sweep"
+    );
 }

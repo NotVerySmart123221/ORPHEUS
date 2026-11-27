@@ -22,7 +22,7 @@ pub(super) fn verify_natural_ending(ending: NormalEnding) {
     let victory = matches!(ending, NormalEnding::DeadeyeVictory);
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let mut assets = SceneAssets::load(&runtime).unwrap();
-    assets.set_junkenstein_validation(crate::junkenstein_validation::JunkensteinValidation {
+    assets.set_junkenstein_validation(crate::pve_encounter::validation::JunkensteinValidation {
         invulnerable_cassidy: true,
         gate_capacity: late.then_some(1_000_000_000.0),
     });
@@ -889,6 +889,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
             };
             admitted.push(AdmittedFlight {
                 token,
+                launch_frame: projectile.shot.frame,
                 flight,
                 stun: projectile.stun,
                 hit_effect: Some(crate::script_init::Site {
@@ -897,6 +898,8 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                     graph: projectile.shot.graph,
                     node: Some(7),
                 }),
+                impact_spawn: None,
+                presentation: None,
             });
             launches += 1;
         }
@@ -937,6 +940,7 @@ pub(super) fn normal_encounter_first_reaper_finishes_intro_and_pursues_live_defe
                     tick,
                     now: Duration::from_millis(u64::from(tick - FIRST_TICK) * 16),
                 },
+                |_| true,
             )
             .unwrap();
         for hit in hits {
@@ -1500,6 +1504,7 @@ fn admitted_flashbang_hits_deliver_effects_to_all_boss_pairs() {
                         tick,
                         now: Duration::from_millis(u64::from(tick) * 16),
                     },
+                    |_| true,
                 )
                 .unwrap();
             if !hits.is_empty() {
@@ -1553,8 +1558,8 @@ fn authored_encounter_enemies_publish_their_observer_baselines() {
     use crate::{
         game_content::{JUNKENSTEIN_MAP, JUNKENSTEIN_REVENGE, JunkensteinCard, MapCatalog},
         game_heroes::HeroCatalog,
-        junkenstein_navigation::SHOCK_TIRE,
         npc_catalog::{NpcCatalog, encounter_definition},
+        pve_encounter::navigation::SHOCK_TIRE,
         script_codecs::CodecTable,
         script_enemy::EnemySpawn,
         script_graph::GraphStore,
@@ -2104,8 +2109,8 @@ fn authored_encounter_enemies_publish_their_observer_baselines() {
 fn authored_shock_tire_damages_the_gate_and_retires() {
     use crate::{
         game_content::{JUNKENSTEIN_MAP, JunkensteinCard, MapCatalog},
-        junkenstein_navigation::SHOCK_TIRE,
         npc_catalog::NpcCatalog,
+        pve_encounter::navigation::SHOCK_TIRE,
         script_codecs::CodecTable,
         script_enemy::{EnemyGate, EnemySpawn},
         script_expr::to_float,
@@ -2895,7 +2900,7 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     let hero = 0x02e0_0000_0000_0002;
     let definition = encounter_definition(None, &graphs, &heroes, hero).unwrap();
     let request = EntityCreation {
-        position: crate::junkenstein_navigation::REAPER_BALCONY,
+        position: crate::pve_encounter::navigation::REAPER_BALCONY,
         kind: CreationKind::Hero {
             hero,
             team: 1,
@@ -3127,7 +3132,7 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     assert!(!intro.states[&39].active);
     assert_eq!(
         room.take_encounter_voice_requests(),
-        [crate::junkenstein_voice::VoiceRequest {
+        [crate::pve_encounter::voice::VoiceRequest {
             anchor: entity,
             speaker: crate::world::GAME_MODE_ENTITY,
             stimulus: 0x0ee0_0000_0000_06b5,
@@ -3150,8 +3155,8 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
         .find(|(_, instance)| instance.graph == 0x0ce0)
         .unwrap();
     for (raw, message) in [
-        (8, crate::junkenstein_messages::BOSS_PAUSE),
-        (14, crate::junkenstein_messages::BOSS_CAMERA),
+        (8, crate::pve_encounter::messages::BOSS_PAUSE),
+        (14, crate::pve_encounter::messages::BOSS_CAMERA),
     ] {
         let state = &intro.states[&raw];
         assert!(state.active);
@@ -3196,7 +3201,7 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     assert_eq!(enemy.scripts.facing_direction(), None);
     assert_eq!(
         room.take_encounter_voice_requests(),
-        [crate::junkenstein_voice::VoiceRequest {
+        [crate::pve_encounter::voice::VoiceRequest {
             anchor: entity,
             speaker: entity,
             stimulus: 0x0ee0_0000_0000_06bd,
@@ -3206,9 +3211,9 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     assert_eq!(
         room.take_defender_messages(),
         [
-            crate::junkenstein_messages::RESET_HIGHLIGHTS,
-            crate::junkenstein_messages::BOSS_INTRO_ENDED,
-            crate::junkenstein_messages::RESET_HIGHLIGHTS,
+            crate::pve_encounter::messages::RESET_HIGHLIGHTS,
+            crate::pve_encounter::messages::BOSS_INTRO_ENDED,
+            crate::pve_encounter::messages::RESET_HIGHLIGHTS,
         ]
         .map(|message| DefenderMessage {
             target: None,
@@ -3247,7 +3252,7 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     let state = room.state_mut(entity).unwrap().unwrap();
     assert_eq!(
         state.bot.position,
-        crate::junkenstein_navigation::REAPER_BALCONY
+        crate::pve_encounter::navigation::REAPER_BALCONY
     );
     assert!(matches!(
         state.enemy.as_ref().unwrap().reaper_exit,
@@ -3270,7 +3275,7 @@ fn authored_reaper_publishes_an_observer_baseline_and_receives_wave_setup() {
     let (landed, position) = landing.expect("Reaper lands on the street");
     assert!(airborne);
     assert!(
-        position[1] < crate::junkenstein_navigation::REAPER_BALCONY[1] - 3.0,
+        position[1] < crate::pve_encounter::navigation::REAPER_BALCONY[1] - 3.0,
         "{position:?}"
     );
     let defender_position = [87.0, 12.6, -64.0];

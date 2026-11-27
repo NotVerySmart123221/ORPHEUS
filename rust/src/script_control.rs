@@ -3,7 +3,6 @@
 use serde_json::Value as Json;
 
 use crate::{
-    game_content::is_junkenstein_mode,
     game_heroes::CASSIDY,
     script_expr::{self, Context, Scope, Variable},
     script_graph::{GraphStore, asset_guid},
@@ -62,7 +61,7 @@ impl LegacyProjectileControl {
     }
 
     pub(crate) fn matches_recipient_mode(&self, mode: u64) -> bool {
-        is_junkenstein_mode(mode)
+        crate::game_content::is_junkenstein_mode(mode)
     }
 
     fn wrapper_overrides<'a>(&self, graphs: &'a GraphStore) -> Option<&'a [Json]> {

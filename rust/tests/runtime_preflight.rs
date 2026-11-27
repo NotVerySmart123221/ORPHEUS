@@ -22,6 +22,21 @@ fn seed_data_files(root: &Path) {
     }
 }
 
+#[cfg(not(feature = "lua-debug"))]
+#[test]
+fn default_binary_rejects_lua_override_before_runtime_validation() {
+    let output = Command::new(env!("CARGO_BIN_EXE_orpheus_server"))
+        .args(["--ai-script", "patrol.lua"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--features lua-debug")
+    );
+}
+
 #[test]
 fn check_runtime_groups_missing_inputs_without_starting_the_server() {
     let dir = tempfile::tempdir().unwrap();

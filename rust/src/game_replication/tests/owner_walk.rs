@@ -371,6 +371,8 @@ impl Harness {
             ))
             .unwrap();
             room.enable_movement_contacts(false, Arc::default());
+            // The peer participates in owner contact only once its create is visible.
+            delivery.created.insert(peer.entity);
         }
         Self {
             scene,
@@ -1033,7 +1035,7 @@ fn owner_hook_runs_the_prepared_widowmaker_graph() {
     // The prepared kit boots to a deterministic initialization report. None of
     // the diagnostics touches the hook graph: the trace chain, its listener,
     // the VERIFIED start codec, and the composed profile table are complete.
-    // The nine entries are the remaining production classes in the support
+    // The entries are the remaining production diagnostics in the support
     // graphs of her full kit; each is an authored demand with its site.
     let error = runtime
         .encoder()
@@ -1041,25 +1043,24 @@ fn owner_hook_runs_the_prepared_widowmaker_graph() {
         .expect_err("prepared kit reports its initialization gaps");
     let error_text = error.to_string();
     assert!(
-        error_text.starts_with("body A0000101 has 8 initialization diagnostics: "),
+        error_text.starts_with("body A0000101 has 7 initialization diagnostics: "),
         "{error_text}"
     );
     for site in [
         "004B:21:Expression(UnsupportedConfig(\"STU_AC829876\"))",
-        "001B:15:UnsupportedState(\"STU_75D1C308\")",
-        "001B:200:UnsupportedState(\"STU_D1BF5FA6\")",
         "01CF:27:Expression(UnsupportedConfig(\"STU_A77AC2AC\"))",
         "01CF:186:Expression(UnsupportedConfig(\"STU_25ECB55F\"))",
         "0B8B:89:Expression(UnsupportedConfig(\"STU_A3DEF368\"))",
         "01CA:122:Expression(UnsupportedConfig(\"STU_A77AC2AC\"))",
         "05AC:85:Expression(UnsupportedConfig(\"STU_A3DEF368\"))",
+        "0B8B:63:Expression(UnsupportedConfig(\"STU_A3DEF368\"))",
     ] {
         assert!(error_text.contains(site), "missing {site} in {error_text}");
     }
     assert_eq!(
         error_text.matches(":Expression(UnsupportedConfig(").count()
             + error_text.matches(":UnsupportedState(").count(),
-        8,
+        7,
         "{error_text}"
     );
     assert!(
@@ -1171,13 +1172,12 @@ fn assert_tag_only_state_group(bytes: &[u8], item: u64) {
 }
 
 const PREPARED_SITES: &str = "004B:21:Expression(UnsupportedConfig(\"STU_AC829876\")), \
-    001B:15:UnsupportedState(\"STU_75D1C308\"), \
-    001B:200:UnsupportedState(\"STU_D1BF5FA6\"), \
     01CF:27:Expression(UnsupportedConfig(\"STU_A77AC2AC\")), \
     01CF:186:Expression(UnsupportedConfig(\"STU_25ECB55F\")), \
     0B8B:89:Expression(UnsupportedConfig(\"STU_A3DEF368\")), \
     01CA:122:Expression(UnsupportedConfig(\"STU_A77AC2AC\")), \
-    05AC:85:Expression(UnsupportedConfig(\"STU_A3DEF368\"))";
+    05AC:85:Expression(UnsupportedConfig(\"STU_A3DEF368\")), \
+    0B8B:63:Expression(UnsupportedConfig(\"STU_A3DEF368\"))";
 
 /// The full Widowmaker kit (real body roots and all support graphs) driven
 /// through the production command path for the given number of commanded
@@ -1330,10 +1330,10 @@ fn full_kit_diagnostics_gate_the_hook_under_the_strict_policy() {
         .expect("the strict policy stops the body on the report");
     let text = fault.error.to_string();
     assert!(
-        text.starts_with("body A0000101 has 9 initialization diagnostics: "),
+        text.starts_with("body A0000101 has 8 initialization diagnostics: "),
         "{text}"
     );
-    assert_eq!(text.matches("STU_").count(), 9, "{text}");
+    assert_eq!(text.matches("STU_").count(), 8, "{text}");
     for site in PREPARED_SITES.split(", ") {
         assert!(text.contains(site), "missing {site} in {text}");
     }
@@ -2101,7 +2101,12 @@ fn owner_move_to_arrival_and_obstructions_use_the_production_pose() {
             h.player().mover.pose().position
         );
         assert!(!h.active(1));
-        assert_eq!(h.active(2), expected == MoveOutcome::Arrived);
+        assert_eq!(
+            h.active(2),
+            expected == MoveOutcome::Arrived,
+            "instance={instance} pose={:?}",
+            h.player().mover.pose()
+        );
         assert_eq!(h.active(3), expected == MoveOutcome::Blocked);
         let next = if expected == MoveOutcome::Arrived {
             2

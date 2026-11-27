@@ -10,19 +10,58 @@ use crate::{
 
 pub const CLIENT_GAME_MESSAGE: u32 = 21616;
 pub(crate) const CLIENT_WHEEL_ACTION: u32 = 21608;
+const WHEEL_USE: u64 = 0x0240_0000_0000_1313;
 pub const PICK_HERO: u64 = 0x0240_0000_0000_1361;
 pub const OPEN_OR_CLOSE: u64 = 0x0240_0000_0000_1360;
 const HERO_ASSET_TYPE: u16 = 0x02e0;
 const WHEEL_ACTION_PREFIX: u64 = 0x0a90_0000_0000_0000;
 const WHEEL_SELECTION: u64 = 0x0240_0000_0000_02a3;
 
+/// Retail 1.74 wheel action GUIDs (matches `script_expr/wheel_slots.json`).
+#[cfg(feature = "lua-mods")]
+pub(crate) const EMOTE_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_0172,
+    0x0a90_0000_0000_01a1,
+    0x0a90_0000_0000_01a0,
+    0x0a90_0000_0000_019f,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const VOICELINE_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_016f,
+    0x0a90_0000_0000_019d,
+    0x0a90_0000_0000_019c,
+    0x0a90_0000_0000_019b,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const SPRAY_WHEEL_ACTIONS: [u64; 4] = [
+    0x0a90_0000_0000_0173,
+    0x0a90_0000_0000_01a5,
+    0x0a90_0000_0000_01a4,
+    0x0a90_0000_0000_01a3,
+];
+#[cfg(feature = "lua-mods")]
+pub(crate) const GREETING_WHEEL_ACTION: u64 = 0x0a90_0000_0000_016b;
+#[cfg(feature = "lua-mods")]
+pub(crate) const NEED_HEALING_WHEEL_ACTION: u64 = 0x0a90_0000_0000_016c;
+#[cfg(feature = "lua-mods")]
+pub(crate) const THANKS_WHEEL_ACTION: u64 = 0x0a90_0000_0000_0171;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ClientWheelAction {
     action: u64,
     confirmed: bool,
+    target: Option<u32>,
 }
 
 impl ClientWheelAction {
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn synthetic(action: u64) -> Self {
+        Self {
+            action,
+            confirmed: true,
+            target: None,
+        }
+    }
     pub(crate) fn read(message: &Message) -> Option<Self> {
         if message.id != CLIENT_WHEEL_ACTION {
             return None;
@@ -36,17 +75,32 @@ impl ClientWheelAction {
         if action & !u64::from(u32::MAX) != WHEEL_ACTION_PREFIX || action == WHEEL_ACTION_PREFIX {
             return None;
         }
-        // Contextual targeting needs its own room validation. Accept only
-        // the context-free request while that path is unavailable.
-        match message.fields.get(&0x84) {
-            None => (),
-            Some(Value::Struct(marker))
-                if marker
-                    .get(&0)
-                    .is_none_or(|value| *value == Value::Unsigned(0)) => {}
+        let target = match message.fields.get(&0x84) {
+            None => None,
+            Some(Value::Struct(marker)) => match marker.get(&0) {
+                None | Some(Value::Unsigned(0)) => None,
+                Some(Value::Unsigned(entity)) => Some(u32::try_from(*entity).ok()?),
+                _ => return None,
+            },
             _ => return None,
-        }
-        Some(Self { action, confirmed })
+        };
+        Some(Self {
+            action,
+            confirmed,
+            target,
+        })
+    }
+
+    pub(crate) fn confirmed(self) -> bool {
+        self.confirmed
+    }
+
+    pub(crate) fn asset(self) -> u64 {
+        self.action
+    }
+
+    pub(crate) fn target(self) -> Option<u32> {
+        self.target
     }
 
     pub(crate) fn into_local_message(self) -> RoomMessage {
@@ -56,6 +110,40 @@ impl ClientWheelAction {
                 (0x08fc, ScriptValue::Asset(self.action)),
                 (0x03e1, ScriptValue::Bool(self.confirmed)),
             ]),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ClientWheelUse {
+    pub entity: u32,
+    pub instance: u16,
+    pub unlock: u64,
+}
+
+impl ClientWheelUse {
+    pub(crate) fn read(message: ClientGameMessage<'_>) -> Option<Self> {
+        if message.guid != WHEEL_USE {
+            return None;
+        }
+        // Default header and one compact 053B Asset parameter, followed by
+        // the original sender and target placeholders.
+        const PREFIX: &[u8] = &[0, 0, 0, 0, 1, 0xc3, 0x3b, 0x05, 0x40, 0x0a, 4];
+        let (body, [0, 0]) = message.parameters.split_entity_tail()? else {
+            return None;
+        };
+        let unlock = u64::from_le_bytes(body.strip_prefix(PREFIX)?.try_into().ok()?);
+        (unlock >> 48 == 0x0250 && unlock & 0x0000_ffff_ffff_ffff != 0).then_some(Self {
+            entity: message.entity,
+            instance: u16::try_from(message.instance).ok()?,
+            unlock,
+        })
+    }
+
+    pub(crate) fn into_local_message(self) -> RoomMessage {
+        RoomMessage {
+            id: WHEEL_USE,
+            parameters: Variables::from([(0x053b, ScriptValue::Asset(self.unlock))]),
         }
     }
 }
@@ -189,6 +277,61 @@ mod tests {
     };
 
     #[test]
+    fn spray_use_report_requires_the_exact_asset_parameter() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/wheel-spray-use-report-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let parse = |value: &serde_json::Value| {
+            crate::accounts::parse_guid(value.as_str().unwrap()).unwrap()
+        };
+        let expected = ClientWheelUse {
+            entity: u32::try_from(parse(&input["entity"])).unwrap(),
+            instance: u16::try_from(input["instance"].as_u64().unwrap()).unwrap(),
+            unlock: parse(&input["unlock"]),
+        };
+        let raw = input["parameters_hex"].as_str().unwrap().as_bytes();
+        let mut parameters: Vec<_> = raw
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        let read = |parameters: &[u8], instance| {
+            ClientWheelUse::read(ClientGameMessage {
+                entity: expected.entity,
+                guid: WHEEL_USE,
+                instance,
+                parameters: Parameters::new(parameters),
+            })
+        };
+        let accepted = read(&parameters, expected.instance as i16).unwrap();
+        assert_eq!(accepted, expected);
+        assert_eq!(
+            accepted.into_local_message().parameters[&0x053b],
+            ScriptValue::Asset(expected.unlock)
+        );
+        assert_eq!(
+            read(
+                &parameters[..parameters.len() - 1],
+                expected.instance as i16
+            ),
+            None
+        );
+        assert_eq!(read(&parameters, -1), None);
+        for change in input["invalid_byte_changes"].as_array().unwrap() {
+            let index = usize::try_from(change[0].as_u64().unwrap()).unwrap();
+            let original = parameters[index];
+            parameters[index] = u8::try_from(change[1].as_u64().unwrap()).unwrap();
+            assert_eq!(
+                read(&parameters, expected.instance as i16),
+                None,
+                "byte {index}"
+            );
+            parameters[index] = original;
+        }
+    }
+
+    #[test]
     fn envelope_uses_the_client_message_id_and_fixed_width_fields() {
         let mut message = Message {
             id: CLIENT_GAME_MESSAGE,
@@ -244,6 +387,30 @@ mod tests {
         assert_eq!(
             known.hero_select(&heroes),
             Some(HeroSelectRequest::Pick(Some(heroes.get(SOLDIER).unwrap())))
+        );
+    }
+
+    #[test]
+    fn wheel_action_parses_optional_contextual_target_marker() {
+        use crate::jam_codec::Value as WireValue;
+
+        let make = |marker| Message {
+            id: CLIENT_WHEEL_ACTION,
+            fields: Fields::from([
+                (0x78, WireValue::Unsigned(0x0a90_0000_0000_016b)),
+                (0x80, WireValue::Bool(true)),
+                (
+                    0x84,
+                    WireValue::Struct(Fields::from([(0, WireValue::Unsigned(marker))])),
+                ),
+            ]),
+        };
+        assert_eq!(ClientWheelAction::read(&make(0)).unwrap().target(), None);
+        assert_eq!(
+            ClientWheelAction::read(&make(0xc000_1005))
+                .unwrap()
+                .target(),
+            Some(0xc000_1005)
         );
     }
 

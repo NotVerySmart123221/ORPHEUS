@@ -30,20 +30,31 @@ impl<W: World> Vm<'_, '_, '_, W> {
         let elapsed = frame.saturating_sub(*next_sample);
         *next_sample = frame.saturating_add(track.period - elapsed % track.period);
         let mut evaluate = |config| self.evaluate_at(site, config, None);
-        let (
-            Some(Value::Entity(source)),
-            Some(Value::Vector(offset)),
-            Some(range),
-            Some(aperture),
-            Some(Value::Integer(limit)),
-        ) = (
-            evaluate(track.origin),
+        let (source, eye_heading) = if let Some(heading) = track.eye_heading {
+            let Some(heading) = evaluate(heading)
+                .and_then(pool_number)
+                .filter(|v| v.is_finite())
+            else {
+                return Ok(false);
+            };
+            (site.entity, Some(heading))
+        } else {
+            let Some(Value::Entity(source)) = evaluate(track.origin) else {
+                return Ok(false);
+            };
+            (source, None)
+        };
+        let limit = if track.limit.is_null() && eye_heading.is_some() {
+            Some(Value::Integer(MAX_TRACKED_TARGETS as i64))
+        } else {
+            evaluate(track.limit)
+        };
+        let (Some(Value::Vector(offset)), Some(range), Some(aperture), Some(Value::Integer(limit))) = (
             evaluate(track.offset),
             evaluate(track.range).and_then(pool_number),
             evaluate(track.aperture).and_then(pool_number),
-            evaluate(track.limit),
-        )
-        else {
+            limit,
+        ) else {
             return Ok(false);
         };
         let Some(limit) = usize::try_from(limit)
@@ -65,6 +76,7 @@ impl<W: World> Vm<'_, '_, '_, W> {
         let query = ViewTargetQuery {
             source,
             offset,
+            eye_heading,
             range,
             aperture,
             limit,

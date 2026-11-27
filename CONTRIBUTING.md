@@ -1,28 +1,28 @@
 # Contributing to ORPHEUS (`rust`)
 
-Contributors are welcome across Rust implementation, behavior contracts, collision/navigation research, and 104319 client testing. Check [open issues](https://github.com/leafall903/ORPHEUS/issues) (`#60`–`#65` track current Rust modularization, contracts, inspector, navmesh, and ECS work).
+Contributors are welcome across Rust implementation, behavior contracts, collision and navigation research, and 104319 client testing. Check [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen) for tasks and the [roadmap](docs/ROADMAP.md) for behaviors that still need verification.
 
-- **`rust`:** Native Rust server and workspace crates (target branch for Rust PRs).
-- **`main`:** Python reference server, launchers, and data extractors (target branch for Python/tool PRs).
+- **`rust`:** Default branch and target for native Rust contributions.
+- **`python`:** Archived Python reference server with reference tests, launchers, and data extractors.
 
 ---
 
 ## Development Setup
 
-Install **Git**, **stable Rust** (`>= 1.85.0`) with `rustfmt` and `clippy`. On Windows, install **x64 MSVC Build Tools** and the **Windows SDK** (needed for vendored Lua 5.4):
+Install **Git**, **stable Rust** (`>= 1.85.0`) with `rustfmt` and `clippy`. On Windows, install **x64 MSVC Build Tools** and the **Windows SDK** for Rust's MSVC toolchain:
 
 ```powershell
 git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-For Python work, clone with `git clone --branch main https://github.com/leafall903/ORPHEUS.git`. Set the PR base to `main` for Python and `rust` for Rust, including after the planned default branch change on November 19, 2026 at 12:00 UTC. [Branch guide](docs/BRANCH_TRANSITION.md)
+To inspect the Python reference, clone with `git clone --branch python https://github.com/leafall903/ORPHEUS.git`. Use `rust` as the base for Rust pull requests. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 ---
 
 ## Public Source Checks (CI Gate)
 
-Every PR targeting `rust` must keep formatting, both feature lanes (`default` and `inspector`), MSRV (`1.85.0`), portable Linux tests, and all shared contracts green:
+Every PR targeting `rust` must keep formatting, the `default`, `inspector`, and `lua-debug` lanes, MSRV (`1.85.0`), portable Linux tests, and all shared contracts green:
 
 ```powershell
 cargo fmt --all -- --check
@@ -36,6 +36,9 @@ git diff --check
 Optional local checks matching the other GitHub Actions lanes:
 
 ```powershell
+# Opt-in Lua override
+cargo test --locked -p orpheus --features lua-debug --lib
+
 # MSRV check (if toolchain 1.85.0 is installed)
 cargo +1.85.0 check --locked --workspace --all-targets --features inspector
 
@@ -44,7 +47,7 @@ cargo test --locked --all-targets -p orpheus-collision -p orpheus-golden-trace -
 python3 -B scripts/check_gallery_preview_policy.py
 ```
 
-Windows default runs the full workspace and verifies that the named shared Rust contracts passed. Pipelines for Windows Inspector and Linux run targeted checks for feature and platform behavior. Update the workflow's expected name when moving a guarded test. The six required jobs run on pull requests to `rust`. Build and workflow input changes also run them on the protected branch to refresh its cache. **Run workflow** repeats these checks on a selected branch. Enable **Run the archived Python server comparison tool tests** to include the legacy comparison tool tests.
+The Windows default lane runs the full workspace and verifies that the named shared Rust contracts passed. The Inspector and Lua debug lanes cover their optional features. Linux runs the portable crate checks. Update the workflow's expected name when moving a guarded test. Public checks run on pull requests to `rust`. Build and workflow input changes also run them on the protected branch to refresh its cache. **Run workflow** repeats these checks on a selected branch. Enable **Run the archived Python server comparison tool tests** to include the legacy comparison tool tests.
 
 To compare local cross-language gameplay evidence, see [the trace format, command and synthetic example](docs/GOLDEN_COMPARISON.md).
 

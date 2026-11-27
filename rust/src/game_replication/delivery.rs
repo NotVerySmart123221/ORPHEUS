@@ -74,6 +74,7 @@ impl WorldDelivery {
             queued: Vec::new(),
             created: HashSet::new(),
             bots: HashMap::new(),
+            pending_respawn_presentation: HashSet::new(),
             bot_controllers: HashMap::new(),
             health_updates: HashMap::new(),
             health_revision: 0,
@@ -92,7 +93,6 @@ impl WorldDelivery {
             encounter_outcome_queued: false,
             select_open: true,
             body: None,
-            player_respawn: None,
             bound: None,
             generation: 0,
             bodies: HashMap::new(),
@@ -105,8 +105,10 @@ impl WorldDelivery {
             projectile_destroys: HashMap::new(),
             biotic_views: BTreeMap::new(),
             scene_views: BTreeMap::new(),
+            retiring_nameplate_chunks: HashSet::new(),
             observed_projectiles: Default::default(),
             bot_chunk_waited: false,
+            last_sent_remote_movement: None,
             gate: None,
             next_biotic_view: FIRST_BIOTIC_VIEW,
         }
@@ -117,10 +119,10 @@ impl WorldDelivery {
     }
 
     pub(crate) fn clear(&mut self) {
-        self.player_respawn = None;
         self.queued.clear();
         self.created.clear();
         self.bots.clear();
+        self.pending_respawn_presentation.clear();
         self.bot_controllers.clear();
         self.remote_players.clear();
         self.health_updates.clear();
@@ -139,8 +141,10 @@ impl WorldDelivery {
         self.projectile_destroys.clear();
         self.biotic_views.clear();
         self.scene_views.clear();
+        self.retiring_nameplate_chunks.clear();
         self.observed_projectiles = Default::default();
         self.bot_chunk_waited = false;
+        self.last_sent_remote_movement = None;
         self.gate = None;
         self.input.clear();
     }
@@ -172,6 +176,19 @@ impl WorldDelivery {
 
     pub(crate) fn identity_ready(&self, entity: u32) -> bool {
         self.world_started() && self.created.contains(&entity)
+    }
+
+    pub(crate) fn actor_contact_ready(&self, entity: u32) -> bool {
+        self.identity_ready(entity) && !self.pending_respawn_presentation.contains(&entity)
+    }
+
+    pub(super) fn owner_movement_blockers(
+        &self,
+        frame: &crate::game_combat::MovementContactFrame,
+        source: u32,
+        team: u8,
+    ) -> Vec<crate::contact_cache::CapsulePose> {
+        frame.blockers_where(source, team, |entity| self.actor_contact_ready(entity))
     }
 
     pub(crate) fn owner_body_ready(&self, id: BodyId) -> bool {
@@ -206,6 +223,7 @@ impl WorldDelivery {
 
     pub(crate) fn queue_health(&mut self, update: EntityUpdate) {
         let entity = update.entity;
+        let is_owner_or_mode = entity == self.owner || entity == GAME_MODE_ENTITY;
         let live_bot = self.tracks_current_bot(entity);
         let live_remote = self
             .remote_players
@@ -215,7 +233,7 @@ impl WorldDelivery {
             body.id.entity == entity
                 && self.bodies.get(&entity) == Some(&(body.id.generation, Lifetime::Live))
         });
-        if !live_bot && !live_remote && !live_body {
+        if !is_owner_or_mode && !live_bot && !live_remote && !live_body {
             return;
         }
         self.health_revision = self.health_revision.wrapping_add(1);
@@ -294,6 +312,10 @@ impl WorldDelivery {
         }
         self.bots.insert(old, BotLifetime::Retiring);
         self.bots.insert(new, BotLifetime::Live);
+        self.pending_respawn_presentation.remove(&old);
+        if replacement.waits_for_presentation {
+            self.pending_respawn_presentation.insert(new);
+        }
         self.created.remove(&old);
         self.health_updates.remove(&old);
         self.remove_stale();
@@ -389,7 +411,15 @@ impl WorldDelivery {
             Delivery::ObservedProjectile { id, step } => {
                 self.observed_projectiles.current(id, step)
                     && (step != super::observed_projectiles::ProjectileDelivery::Launch
-                        || self.tracks_current_bot(entity))
+                        || self.tracks_current_bot(entity)
+                        || self
+                            .remote_players
+                            .get(&entity)
+                            .is_some_and(|&(_, life)| life == BotLifetime::Live)
+                        || self
+                            .body_script
+                            .as_ref()
+                            .is_some_and(|s| s.id.entity == entity && self.owner_body_ready(s.id)))
             }
             Delivery::Script {
                 last, close: true, ..
@@ -450,6 +480,10 @@ impl WorldDelivery {
                 }
                 match (packet.arrived, record.delivery) {
                     (arrived, Delivery::SceneScript { last }) => {
+                        if arrived {
+                            self.retiring_nameplate_chunks
+                                .remove(&(record.update.entity, last));
+                        }
                         let stream = self
                             .scene_views
                             .get_mut(&record.update.entity)
@@ -459,12 +493,33 @@ impl WorldDelivery {
                         } else {
                             stream.lost(last)
                         };
+                        if delivery.advanced {
+                            let _presented = self
+                                .pending_respawn_presentation
+                                .remove(&record.update.entity);
+                            #[cfg(feature = "inspector")]
+                            if _presented {
+                                crate::owner_trace::playtest(format_args!(
+                                    "bot-respawn event=presentation-ack owner={:08x} packet={} new={:08x}",
+                                    self.owner, packet.sequence, record.update.entity
+                                ));
+                            }
+                        }
                         if delivery.retry {
                             retry.push(record);
                         }
                     }
                     (arrived, Delivery::BodyScript { last, .. }) => {
                         let script = self.body_script.as_mut().expect("current body stream");
+                        #[cfg(feature = "inspector")]
+                        let prior_action = if arrived && crate::owner_trace::playtest_enabled() {
+                            script
+                                .stream
+                                .base()
+                                .map(|(_, snapshot)| snapshot.acknowledged_callout())
+                        } else {
+                            None
+                        };
                         let delivery = if arrived {
                             script.stream.arrived(last)
                         } else {
@@ -479,6 +534,18 @@ impl WorldDelivery {
                                 "owner-volley delivery body={:08x} chunk={last} arrived={arrived}",
                                 script.id.entity
                             ));
+                        }
+                        #[cfg(feature = "inspector")]
+                        if let Some((before, (_, snapshot))) =
+                            prior_action.zip(script.stream.base())
+                        {
+                            let serial = snapshot.acknowledged_callout();
+                            if serial > before {
+                                crate::owner_trace::playtest(format_args!(
+                                    "combat owner action acknowledged body={:08X} generation={} serial={serial} chunk={last}",
+                                    script.id.entity, script.id.generation
+                                ));
+                            }
                         }
                         if let Some((projectiles, arrived)) =
                             script.projectiles.as_mut().zip(delivery.owner_report)
@@ -509,6 +576,8 @@ impl WorldDelivery {
                         self.bots.remove(&record.update.entity);
                         self.created.remove(&record.update.entity);
                         self.scene_views.remove(&record.update.entity);
+                        self.retiring_nameplate_chunks
+                            .retain(|&(entity, _)| entity != record.update.entity);
                     }
                     (true, Delivery::BotControllerCreate) => {
                         self.created.insert(record.update.entity);
@@ -516,7 +585,15 @@ impl WorldDelivery {
                             state.created = true;
                         }
                     }
-                    (true, Delivery::BotPossession { .. }) => {}
+                    (true, Delivery::BotPossession { body }) => {
+                        if let Some(state) = self
+                            .bot_controllers
+                            .values_mut()
+                            .find(|state| state.possessed == Some(body))
+                        {
+                            state.possessed_acked = Some(body);
+                        }
+                    }
                     (true, Delivery::RemotePlayerCreate(id)) => {
                         self.created.insert(id.entity);
                         if let Some(stream) = self.scene_views.get_mut(&id.entity) {
@@ -624,6 +701,12 @@ impl WorldDelivery {
                     id.entity
                 ));
             }
+            Delivery::ObservedProjectile { id, step } => {
+                crate::owner_trace::playtest(format_args!(
+                    "npc-projectile event={event} owner={:08x} packet={sequence} batch={id} step={step:?} entity={entity:08x}",
+                    self.owner
+                ));
+            }
             _ => {}
         }
     }
@@ -687,7 +770,11 @@ impl WorldDelivery {
                     {
                         return None;
                     }
-                    Delivery::Health { .. } if !self.identity_ready(record.update.entity) => {
+                    Delivery::Health { .. }
+                        if record.update.entity != self.owner
+                            && record.update.entity != GAME_MODE_ENTITY
+                            && !self.identity_ready(record.update.entity) =>
+                    {
                         return None;
                     }
                     Delivery::CreateBody(id) if Some(id) == body => created = true,
@@ -803,6 +890,9 @@ impl WorldDelivery {
                 history.candidate(tick, self.created.contains(&id.entity))
             })
         };
+        if let Some(last) = self.last_sent_remote_movement {
+            movements.sort_unstable_by_key(|record| (record.entity <= last, record.entity));
+        }
         let owner_index = correction.map(|correction| {
             let index = movements.len();
             movements.push(correction.update());
@@ -811,9 +901,15 @@ impl WorldDelivery {
         let mut queued = self.ready();
         let is_bot_chunk = |item: &Ready<'_>| {
             let record = item.record;
-            matches!(record.delivery, Delivery::SceneScript { .. })
-                && record.update.chunk.is_some()
-                && self.bots.contains_key(&record.update.entity)
+            matches!(
+                record.delivery,
+                Delivery::SceneScript { last }
+                    if record.update.chunk.is_some()
+                        && self.bots.contains_key(&record.update.entity)
+                        && !self
+                            .retiring_nameplate_chunks
+                            .contains(&(record.update.entity, last))
+            )
         };
         // A mixed packet can be acknowledged even when the receiver drops
         // the NPC chunk. Give each class a send opportunity under sustained
@@ -853,6 +949,23 @@ impl WorldDelivery {
             send,
         )?;
         let indexes = Self::sent_indices(&queued, &sent.records);
+        if let Some(entity) = sent.records.iter().rev().find_map(|source| match *source {
+            RecordSource::Movement(index) if Some(index) != owner_index => {
+                Some(movements[index].entity)
+            }
+            _ => None,
+        }) {
+            self.last_sent_remote_movement = Some(entity);
+        }
+        for &index in &indexes {
+            if let Delivery::ObservedProjectile {
+                id,
+                step: super::observed_projectiles::ProjectileDelivery::Launch,
+            } = self.queued[index].delivery
+            {
+                self.observed_projectiles.launch_sent(id, tick);
+            }
+        }
         #[cfg(feature = "inspector")]
         if crate::owner_trace::playtest_enabled() {
             for &index in &indexes {
@@ -1167,7 +1280,15 @@ impl WorldDelivery {
             return Ok(());
         }
         let bot = self.bots.contains_key(&entity);
-        let can_introduce = self.mode_ready() && !bot_dead;
+        let controller_ready = !self
+            .bot_controllers
+            .values()
+            .any(|state| state.possessed == Some(entity))
+            || self
+                .bot_controllers
+                .values()
+                .any(|state| state.possessed_acked == Some(entity));
+        let can_introduce = self.mode_ready() && !bot_dead && controller_ready;
         let stream = self
             .scene_views
             .entry(entity)
@@ -1175,29 +1296,55 @@ impl WorldDelivery {
         if self.created.contains(&entity) {
             stream.create_arrived();
         }
-        if stream.pending().next().is_some() {
-            return Ok(());
+        let pending: Vec<_> = stream
+            .pending()
+            .map(|(last, snapshot, _)| (last, snapshot.has_practice_nameplate()))
+            .collect();
+        if !pending.is_empty() {
+            let allow_pipeline =
+                bot_dead && stream.base().is_some() && pending.iter().all(|&(_, has_np)| has_np);
+            if !allow_pipeline {
+                return Ok(());
+            }
+            for (last, _) in pending {
+                if stream.discard_unsent(last) {
+                    self.queued.retain(|record| {
+                        record.update.entity != entity
+                            || !matches!(record.delivery, Delivery::SceneScript { last: queued } if queued == last)
+                    });
+                }
+            }
         }
         let encoder = projection.encoder;
+        let revision = projection.snapshot.revision;
+        let can_cache_clean = !projection.snapshot.has_time_sensitive_projection()
+            && (!bot || !self.observed_projectiles.has_active_volleys_for(entity));
+        if can_cache_clean && stream.observer_matches_clean(revision, bot_dead, can_introduce) {
+            return Ok(());
+        }
         let chunk = if let Some((_, base)) = stream.base() {
             let mut snapshot = encoder
                 .project_next(projection.snapshot, base)
                 .map_err(invalid)?;
             if bot {
-                snapshot.stage_practice_nameplates(Some(base), can_introduce);
-                self.observed_projectiles.retain_volleys(&mut snapshot);
+                snapshot.stage_practice_nameplates((!bot_dead).then_some(base), can_introduce);
             }
-            encoder
+            self.observed_projectiles.retain_volleys(&mut snapshot);
+            let delta = encoder
                 .queue_delta(stream, &snapshot, DeltaKind::Observer { resend: true }, 16)
-                .map_err(invalid)?
+                .map_err(invalid)?;
+            if delta.is_none() && can_cache_clean {
+                stream.mark_observer_clean(revision, bot_dead, can_introduce);
+            }
+            delta
         } else {
             let mut snapshot = encoder
                 .project(projection.snapshot, View::Observer)
                 .map_err(invalid)?;
             if bot {
                 snapshot.stage_practice_nameplates(None, false);
-                self.observed_projectiles.retain_volleys(&mut snapshot);
             }
+            self.observed_projectiles.retain_volleys(&mut snapshot);
             Some(encoder.queue_full(stream, &snapshot).map_err(invalid)?)
         };
         if let Some(chunk) = chunk {
@@ -1205,6 +1352,9 @@ impl WorldDelivery {
                 &chunk.update,
                 "scene script chunk exceeds the datagram budget",
             )?;
+            if bot && bot_dead {
+                self.retiring_nameplate_chunks.insert((entity, chunk.last));
+            }
             self.push(Record {
                 update: chunk.update,
                 delivery: Delivery::SceneScript { last: chunk.last },
@@ -1357,10 +1507,13 @@ impl WorldDelivery {
                     .get(&hero.guid)
                     .copied()
                     .unwrap_or_default();
-                if self
-                    .body
-                    .is_some_and(|body| (body.hero, body.skin) == (hero.guid, skin))
-                {
+                if self.body.is_some_and(|body| {
+                    (body.hero, body.skin) == (hero.guid, skin)
+                        && !scene
+                            .simulation()
+                            .player_body(body.id)
+                            .is_some_and(PlayerBodyState::needs_runtime_restart)
+                }) {
                     self.queue_controller(scene, tick, false, Some(hero.guid))?;
                 } else if let Some(entity) = self.next_body(now) {
                     self.switch(scene, viewer, tick, quanta, entity, (&hero, skin))?;
@@ -1384,6 +1537,15 @@ impl WorldDelivery {
     }
 
     pub(crate) fn queue_game_message(&mut self, tick: u32, received: Duration, message: Message) {
+        if let Some(report) = ClientGameMessage::read(&message).and_then(ClientWheelUse::read) {
+            if let Some(body) = self
+                .active_body_id()
+                .filter(|&id| id.entity == report.entity && self.owner_body_ready(id))
+            {
+                self.input.push(InputWork::WheelUse { body, report });
+            }
+            return;
+        }
         if self.can_handle_game_message() {
             self.input.push(InputWork::Message {
                 message,
@@ -1393,7 +1555,12 @@ impl WorldDelivery {
         }
     }
 
-    pub(crate) fn queue_wheel_action(&mut self, simulation: &RoomSimulation, message: &Message) {
+    pub(crate) fn queue_wheel_action(
+        &mut self,
+        simulation: &RoomSimulation,
+        message: &Message,
+        command_frame: Option<u32>,
+    ) {
         let Some(body) = self
             .active_body_id()
             .filter(|&id| self.owner_body_ready(id))
@@ -1409,7 +1576,16 @@ impl WorldDelivery {
             return;
         }
         if let Some(action) = ClientWheelAction::read(message) {
-            self.input.push(InputWork::WheelAction { body, action });
+            if let Some(target) = action.target() {
+                if target == body.entity || !simulation.tracks_living_actor(target) {
+                    return;
+                }
+            }
+            self.input.push(InputWork::WheelAction {
+                body,
+                action,
+                command_frame,
+            });
         }
     }
 
@@ -1468,7 +1644,10 @@ impl WorldDelivery {
         self.body_script.is_some()
     }
 
-    pub(crate) fn take_hitscan(&self, simulation: &mut RoomSimulation) -> Vec<PosedHitscan> {
+    pub(crate) fn take_hitscan(
+        &self,
+        simulation: &mut RoomSimulation,
+    ) -> Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)> {
         let Some(id) = self.active_body_id() else {
             return Vec::new();
         };
@@ -1619,7 +1798,6 @@ impl WorldDelivery {
         simulation: &mut RoomSimulation,
     ) -> Option<(BodyId, Vec<AdmittedFlight>)> {
         let script = self.body_script.as_ref()?;
-        script.projectiles.as_ref()?;
         let launches = simulation.take_player_projectile_launches(script.id)?;
         Some((script.id, launches))
     }
@@ -1716,7 +1894,16 @@ impl WorldDelivery {
                     self.game_message(scene, viewer, tick, received, quanta, &message)?;
                     remaining -= 1;
                 }
-                InputWork::WheelAction { body, action } => {
+                InputWork::WheelAction {
+                    body,
+                    action,
+                    command_frame,
+                } => {
+                    let command_frame = command_frame.filter(|&frame| {
+                        self.input
+                            .admitted
+                            .is_some_and(|admitted| frame <= admitted)
+                    });
                     let runtime = self
                         .active_body_id()
                         .filter(|&active| active == body && self.owner_body_ready(active))
@@ -1726,7 +1913,25 @@ impl WorldDelivery {
                         .filter(|runtime| runtime.wheel_actions_available());
                     if let Some(runtime) = runtime {
                         // A full or halted VM queue rejects the request locally.
-                        let _ = runtime.queue_local_message(action.into_local_message());
+                        let _ = runtime.queue_wheel_selection(action, command_frame);
+                    }
+                    remaining -= 1;
+                }
+                InputWork::WheelUse { body, report } => {
+                    let sent_instance_start = self
+                        .body_script
+                        .as_ref()
+                        .filter(|script| script.id == body)
+                        .and_then(|script| script.sent_spray_origin(report));
+                    if self.active_body_id() == Some(body) && self.owner_body_ready(body) {
+                        if let Some(runtime) = scene
+                            .simulation_mut()
+                            .player_body_mut(body)
+                            .filter(|state| state.owner == self.owner && state.alive())
+                            .and_then(|state| state.runtime.as_mut())
+                        {
+                            let _ = runtime.queue_wheel_use(report, sent_instance_start);
+                        }
                     }
                     remaining -= 1;
                 }
@@ -1742,15 +1947,6 @@ impl WorldDelivery {
                     command,
                     mut pending,
                 } => {
-                    if let Some(id) = self.body_script.as_ref().map(|script| script.id) {
-                        if scene.simulation().player_has_deadeye(id) {
-                            let deadeye =
-                                scene.deadeye_scene(viewer.team).map_err(io::Error::other)?;
-                            scene
-                                .simulation_mut()
-                                .set_player_deadeye_targets(id, deadeye);
-                        }
-                    }
                     let (used, complete) =
                         self.advance_command(scene, command, &mut pending, quanta, remaining)?;
                     remaining -= used;
@@ -1779,6 +1975,24 @@ impl WorldDelivery {
         let Some(id) = self.body.map(|body| body.id) else {
             return Ok((1, true));
         };
+        let needs_deadeye = scene.simulation().player_body(id).and_then(|state| {
+            state
+                .runtime
+                .as_deref()
+                .filter(|runtime| runtime.has_deadeye())
+                .map(|_| state.team)
+        });
+        if let Some(team) = needs_deadeye {
+            if let Ok(deadeye) = scene.deadeye_scene(team) {
+                if let Some(runtime) = scene
+                    .simulation_mut()
+                    .player_body_mut(id)
+                    .and_then(|state| state.runtime.as_deref_mut())
+                {
+                    runtime.set_deadeye_targets(deadeye);
+                }
+            }
+        }
         let (simulation, rays) = scene.simulation_and_rays();
         let motion_frame = simulation.movement_contact_frame();
         let Some(state) = simulation.player_body_mut(id) else {
@@ -1795,6 +2009,21 @@ impl WorldDelivery {
         let mut used = 0;
         let mut fault = None;
         let team = state.team;
+        let blockers = motion_frame.as_ref().map_or_else(Vec::new, |frame| {
+            self.owner_movement_blockers(frame, id.entity, team)
+        });
+        let ally_sep = if alive && self.body_script.is_some() {
+            motion_frame.as_ref().map_or([0.0; 2], |frame| {
+                frame.ally_separation_where(
+                    id.entity,
+                    team,
+                    state.mover.contact_capsule(),
+                    |entity| self.actor_contact_ready(entity),
+                )
+            })
+        } else {
+            [0.0; 2]
+        };
         let previously_processed = self.input.processed;
         let script = &mut self.body_script;
         let detached_motion = &mut self.detached_motion;
@@ -1807,6 +2036,9 @@ impl WorldDelivery {
             hitscan,
             ..
         } = state;
+        if ally_sep != [0.0; 2] {
+            mover.set_ally_separation(ally_sep);
+        }
         let mut buffers = StepBuffers {
             frame: body_frame,
             fields,
@@ -1835,18 +2067,21 @@ impl WorldDelivery {
                 stage_scripted_motion(runtime, mover);
             }
         }
+        let mut posed_buttons: Vec<u32> = Vec::new();
         let stepped = mover.step_pending(
             rays,
             &mut pending.poses,
             f64::from(frame_us) / 1_000_000.0,
             budget - used,
-            || {
-                motion_frame
-                    .as_ref()
-                    .map_or_else(Vec::new, |frame| frame.blockers(id.entity, team))
-            },
+            || &blockers,
             |mover, command| {
-                if script.is_none() && frame_us != 0 && mover.scripted_motion_at(command.frame) {
+                if alive {
+                    posed_buttons.push(command.buttons);
+                }
+                if script.is_none()
+                    && frame_us != 0
+                    && mover.needs_owner_correction_at(command.frame)
+                {
                     if detached_motion
                         .as_ref()
                         .is_some_and(|(owner, _)| *owner != id)
@@ -1869,7 +2104,7 @@ impl WorldDelivery {
                 }
                 if let Some(script) = script.as_mut() {
                     // The pose already moved even if the state's next update fails.
-                    script.record_scripted_movement(
+                    script.record_authoritative_movement(
                         mover,
                         command.frame,
                         frame_us,
@@ -1897,6 +2132,25 @@ impl WorldDelivery {
             },
         );
         let complete = pending.poses.len() == 0;
+        if alive && (!posed_buttons.is_empty() || complete) {
+            if let Some(state) = simulation.player_body_mut(id) {
+                if posed_buttons.is_empty() {
+                    let pressed = command.buttons & !state.last_buttons;
+                    let released = state.last_buttons & !command.buttons;
+                    state.last_buttons = command.buttons;
+                    state.pending_pressed_buttons |= pressed;
+                    state.pending_released_buttons |= released;
+                } else {
+                    for buttons in posed_buttons {
+                        let pressed = buttons & !state.last_buttons;
+                        let released = state.last_buttons & !buttons;
+                        state.last_buttons = buttons;
+                        state.pending_pressed_buttons |= pressed;
+                        state.pending_released_buttons |= released;
+                    }
+                }
+            }
+        }
         if let Some((frame, step, error)) = fault {
             eprintln!("body owner statescript stopped at frame {frame} during {step:?}: {error}");
             #[cfg(test)]
@@ -1914,20 +2168,6 @@ impl WorldDelivery {
         Ok((used, complete))
     }
 
-    pub(crate) fn schedule_player_respawn(&mut self, body: BodyId, due: Duration) {
-        if self.active_body_id() == Some(body)
-            && self
-                .player_respawn
-                .is_none_or(|(scheduled, _)| scheduled != body)
-        {
-            self.player_respawn = Some((body, due));
-        }
-    }
-
-    pub(crate) fn pending_player_respawn(&self) -> Option<(BodyId, Duration)> {
-        self.player_respawn
-    }
-
     pub(crate) fn advance_player_respawn(
         &mut self,
         scene: &mut PreparedScene,
@@ -1936,22 +2176,10 @@ impl WorldDelivery {
         quanta: u32,
         now: Duration,
     ) -> io::Result<()> {
-        let Some((dead_body, due)) = self.player_respawn else {
+        let Some(body) = self.body else {
             return Ok(());
         };
-        let Some(body) = self.body.filter(|body| body.id == dead_body) else {
-            self.player_respawn = None;
-            return Ok(());
-        };
-        if scene
-            .simulation()
-            .player_body(dead_body)
-            .is_none_or(PlayerBodyState::alive)
-        {
-            self.player_respawn = None;
-            return Ok(());
-        }
-        if now < due
+        if !scene.simulation().is_player_respawn_due(body.id, now)
             || self.input.work.iter().any(|work| {
                 // A partial command encodes work for the old mover. Ordered
                 // messages and skin choices get a chance to replace that body.
@@ -1964,8 +2192,8 @@ impl WorldDelivery {
             return Ok(());
         };
         // A startup attempt is transactional. A rejected body leaves the
-        // corpse and its selection in place.
-        self.player_respawn = None;
+        // corpse and its selection in place without repeating startup.
+        scene.simulation_mut().clear_player_respawn(body.id);
         let hero = scene
             .heroes()
             .get(body.hero)
@@ -1985,6 +2213,144 @@ impl WorldDelivery {
             })
     }
 
+    pub(crate) fn advance_body_swap(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        now: Duration,
+    ) -> io::Result<()> {
+        let Some(body) = self.body else {
+            return Ok(());
+        };
+        if self.input.work.iter().any(|work| {
+            matches!(
+                work,
+                InputWork::Command {
+                    pending: Some(_),
+                    ..
+                }
+            )
+        }) {
+            return Ok(());
+        }
+        let Some(entity) = self.next_body(now) else {
+            return Ok(());
+        };
+        let dva = crate::hero_ability_rules::HeroAbilityRules::defaults().dva_mech;
+        let swap = {
+            let duplicate_revert = scene
+                .simulation_mut()
+                .take_pending_duplicate_revert(self.owner);
+            let Some(state) = scene.simulation_mut().player_body_mut(body.id) else {
+                return Ok(());
+            };
+            let Some(new_body) = duplicate_revert.or_else(|| {
+                state
+                    .runtime
+                    .as_mut()
+                    .and_then(|runtime| runtime.take_body_swap())
+            }) else {
+                return Ok(());
+            };
+            if new_body == state.body_template {
+                return Ok(());
+            }
+            let pose = state.mover.pose();
+            let old_body = state.body_template;
+            (new_body, old_body, pose.position, pose.velocity, pose.yaw)
+        };
+        // D.Va Call Mech crush (Pilot -> MEKA): AoE damage + knockback from HeroAbilityRules.
+        if swap.1 == dva.pilot_body && swap.0 == dva.meka_body {
+            scene.simulation_mut().apply_call_mech_crush(
+                body.id.entity,
+                viewer.team,
+                swap.2,
+                tick,
+                now,
+            );
+        }
+        // D.Va Self-Destruct eject (MEKA -> Pilot while moving forward): glide & detonate.
+        if swap.1 == dva.meka_body
+            && swap.0 == dva.pilot_body
+            && swap.3[0].hypot(swap.3[2]) > dva.self_destruct_min_speed
+        {
+            scene.simulation_mut().spawn_self_destruct_bomb(
+                body.id.entity,
+                viewer.team,
+                swap.2,
+                swap.3,
+                tick,
+            );
+        }
+        let mut hero = scene
+            .heroes()
+            .get(body.hero)
+            .cloned()
+            .ok_or_else(|| invalid("active player hero is absent from the scene catalog"))?;
+        hero.body = swap.0;
+        self.switch_at(
+            scene,
+            viewer,
+            tick,
+            quanta,
+            entity,
+            (&hero, body.skin),
+            Some((swap.2, swap.4)),
+            true,
+        )
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn advance_mod_hero_switch(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        now: Duration,
+    ) -> io::Result<()> {
+        let Some(target_hero) = scene.simulation_mut().take_mod_hero_switch(self.owner) else {
+            return Ok(());
+        };
+        let Some(hero) = scene.heroes().get(target_hero).cloned() else {
+            return Ok(());
+        };
+        let Some(entity) = self.next_body(now) else {
+            return Ok(());
+        };
+        let skin = viewer
+            .card
+            .skins
+            .get(&target_hero)
+            .copied()
+            .unwrap_or_default();
+        let current_pose = self
+            .body
+            .and_then(|body| scene.simulation().player_body(body.id))
+            .map(|state| state.mover.pose())
+            .filter(|pose| pose.position.into_iter().all(f64::is_finite))
+            .map(|pose| (pose.position, pose.yaw));
+        // Clear pending wheel/emote inputs targeting the retiring body before switching heroes.
+        self.input.work.retain(|item| {
+            !matches!(
+                item,
+                InputWork::WheelAction { .. } | InputWork::WheelUse { .. }
+            )
+        });
+        self.switch_at(
+            scene,
+            viewer,
+            tick,
+            quanta,
+            entity,
+            (&hero, skin),
+            current_pose,
+            false,
+        )
+    }
+
     pub(super) fn switch(
         &mut self,
         scene: &mut PreparedScene,
@@ -1994,47 +2360,86 @@ impl WorldDelivery {
         entity: u32,
         selection: (&Hero, SkinTheme),
     ) -> io::Result<()> {
-        let (hero, skin) = selection;
-        let mover = scene.player_spawn_mover(hero.body, viewer.team)?;
-        let movement = mover.pose();
-        let pose = owner_pose(movement);
+        self.switch_at(scene, viewer, tick, quanta, entity, selection, None, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn switch_at(
+        &mut self,
+        scene: &mut PreparedScene,
+        viewer: &PlayerAppearance<'_>,
+        tick: u32,
+        quanta: u32,
+        entity: u32,
+        selection: (&Hero, SkinTheme),
+        override_pose: Option<([f64; 3], i32)>,
+        same_hero_swap: bool,
+    ) -> io::Result<()> {
+        let (initial_hero, skin) = selection;
+        let mut effective_hero = initial_hero.clone();
+        let make_mover = |body_def: u64| -> io::Result<Mover> {
+            match override_pose {
+                Some((position, yaw)) => {
+                    scene.player_spawn_mover_at(body_def, viewer.team, position, yaw)
+                }
+                None => scene.player_spawn_mover(body_def, viewer.team),
+            }
+        };
+        let mut mover = make_mover(effective_hero.body)?;
+        let mut movement = mover.pose();
         let generation = scene
             .simulation()
             .next_player_generation(self.owner, self.generation)?;
         let id = BodyId { entity, generation };
         let body = Body {
             id,
-            hero: hero.guid,
+            hero: effective_hero.guid,
             skin,
         };
-        let body_filter = team_bit(viewer.team)?;
+        let body_filter = crate::match_scene::HERO_BIT | team_bit(viewer.team)?;
         let start_frame = self.input.processed.unwrap_or(tick);
         let slot = u8::try_from(viewer.slot).map_err(invalid)?;
-        let candidate = scene
-            .owner_body_runtime(
-                hero,
-                OwnerBodySpawn {
-                    slot,
-                    controller: self.owner,
-                    entity,
-                    body_filter,
-                    frame: start_frame,
-                    pose: movement,
-                    eye_position: crate::game_combat::script_eye_position(hero.guid, &mover),
-                    skin: skin.guid,
-                    quanta,
-                },
-            )
-            .and_then(|runtime| {
-                let script = runtime
-                    .as_deref()
-                    .map(|runtime| {
-                        BodyScript::new(body, start_frame, self.input.processed, runtime)
-                    })
-                    .transpose()?;
-                Ok((runtime, script))
-            });
-        let (runtime, script) = match candidate {
+        let start_candidate = |hero_def: &Hero, current_mover: &Mover, current_pose: Movement| {
+            scene
+                .owner_body_runtime(
+                    hero_def,
+                    OwnerBodySpawn {
+                        slot,
+                        controller: self.owner,
+                        entity,
+                        body_filter,
+                        frame: start_frame,
+                        pose: current_pose,
+                        eye_position: crate::game_combat::script_eye_position(
+                            hero_def.guid,
+                            current_mover,
+                        ),
+                        skin: skin.guid,
+                        quanta,
+                    },
+                )
+                .and_then(|mut runtime| {
+                    if let Some(runtime) = &mut runtime {
+                        runtime.set_wheel_cosmetics(
+                            viewer
+                                .card
+                                .wheel_cosmetics
+                                .get(&hero_def.guid)
+                                .copied()
+                                .unwrap_or_default(),
+                        );
+                    }
+                    let script = runtime
+                        .as_deref()
+                        .map(|runtime| {
+                            BodyScript::new(body, start_frame, self.input.processed, runtime)
+                        })
+                        .transpose()?;
+                    Ok((runtime, script))
+                })
+        };
+        let candidate = start_candidate(&effective_hero, &mover, movement);
+        let (mut runtime, mut script) = match candidate {
             Ok(candidate) => candidate,
             Err(error) => {
                 eprintln!(
@@ -2044,6 +2449,53 @@ impl WorldDelivery {
                 return Ok(());
             }
         };
+        // If startup statescript immediately requested possession of an authored alternate
+        // hero body (e.g. STU_B6E3C77D + STU_CA861E44), swap directly before creating on wire.
+        // Only apply on fresh spawn/hero-switch (`!same_hero_swap`), never mid-life ejects.
+        if !same_hero_swap {
+            if let Some(swap_body) = runtime
+                .as_mut()
+                .and_then(|rt| rt.take_body_swap())
+                .filter(|&b| b != effective_hero.body)
+            {
+                let mut swapped_hero = effective_hero.clone();
+                swapped_hero.body = swap_body;
+                match make_mover(swapped_hero.body) {
+                    Ok(swapped_mover) => {
+                        let swapped_movement = swapped_mover.pose();
+                        match start_candidate(&swapped_hero, &swapped_mover, swapped_movement) {
+                            Ok((Some(swapped_rt), swapped_script)) => {
+                                effective_hero = swapped_hero;
+                                mover = swapped_mover;
+                                movement = swapped_movement;
+                                runtime = Some(swapped_rt);
+                                script = swapped_script;
+                            }
+                            Ok((None, _)) => {
+                                eprintln!(
+                                    "body swap startup returned None for {:016X} -> {:016X}",
+                                    effective_hero.body, swap_body
+                                );
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "body swap startup rejected for {:016X} -> {:016X}: {error}",
+                                    effective_hero.body, swap_body
+                                );
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "body swap mover rejected for {:016X} -> {:016X}: {error}",
+                            effective_hero.body, swap_body
+                        );
+                    }
+                }
+            }
+        }
+        let pose = owner_pose(movement);
+        let hero = &effective_hero;
         let body_create_input = BodyCreate {
             entity,
             hero,
@@ -2099,13 +2551,16 @@ impl WorldDelivery {
             Some(observer_create),
         )
         .with_body_template(hero.body);
-        scene.simulation_mut().spawn_player_body(state)?;
+        if same_hero_swap {
+            scene.simulation_mut().swap_player_body(state)?;
+        } else {
+            scene.simulation_mut().spawn_player_body(state)?;
+        }
         self.controller = controller;
         self.generation = generation;
         self.bodies.insert(entity, (generation, Lifetime::Live));
         self.created.remove(&entity);
         let old = self.body.replace(body);
-        self.player_respawn = None;
         self.cancel_body_script(None);
         self.body_script = script;
         self.bound = None;
@@ -2117,7 +2572,9 @@ impl WorldDelivery {
         self.push(Record {
             update: EntityUpdate {
                 entity: self.owner,
-                operation: Some(Operation::Update(possession.components().into())),
+                operation: Some(Operation::Update(
+                    viewer.card.possession_components(possession),
+                )),
                 ..EntityUpdate::default()
             },
             delivery: Delivery::Possession(id),

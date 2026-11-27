@@ -70,16 +70,29 @@ impl<'a> SnapshotEncoder<'a> {
         let mut entity_exclusions = frozen
             .cloned()
             .unwrap_or_else(|| BTreeSet::from([OWNER_HEALTH]));
+        let mut owner_syncs_health = false;
+        let mut server_only_health = false;
         let mut instances = BTreeMap::new();
         for (&id, instance) in &snapshot.instances {
             if instance.is_server_only() || only_instance.is_some_and(|only| id != only) {
                 continue;
             }
             let graph = self.graph(id, instance.graph)?;
-            let exclusions = graph.server_only_variables().collect();
+            let exclusions: BTreeSet<u32> = graph.server_only_variables().collect();
             let variables =
                 self.project_variables(snapshot, id, &instance.variables, &exclusions, view)?;
             if frozen.is_none() {
+                if exclusions.contains(&OWNER_HEALTH) {
+                    server_only_health = true;
+                }
+                if view == View::Owner
+                    && graph
+                        .sync_vars
+                        .iter()
+                        .any(|var| var.0 == Some(OWNER_HEALTH) && var.1 == 1)
+                {
+                    owner_syncs_health = true;
+                }
                 entity_exclusions.extend(exclusions);
             }
             let mut states = BTreeMap::new();
@@ -168,6 +181,7 @@ impl<'a> SnapshotEncoder<'a> {
                 id,
                 ProjectedInstance {
                     graph: instance.graph,
+                    start_ms: instance.started_at_ms(),
                     parent: instance.parent,
                     variables,
                     states,
@@ -178,6 +192,9 @@ impl<'a> SnapshotEncoder<'a> {
                     },
                 },
             );
+        }
+        if frozen.is_none() && owner_syncs_health && !server_only_health {
+            entity_exclusions.remove(&OWNER_HEALTH);
         }
         let variables = if let Some(id) = only_instance {
             let graph = self.graph(id, snapshot.instances[&id].graph)?;
@@ -428,7 +445,7 @@ impl<'a> SnapshotEncoder<'a> {
                         && raw != 21
                         && state.kind
                             != StateKind::PersistentSend(
-                                crate::junkenstein_messages::POST_MATCH_SIGNAL,
+                                crate::pve_encounter::messages::POST_MATCH_SIGNAL,
                             ))
                 {
                     continue;
@@ -492,6 +509,7 @@ impl<'a> SnapshotEncoder<'a> {
                 id,
                 ProjectedInstance {
                     graph: instance.graph,
+                    start_ms: instance.started_at_ms(),
                     parent,
                     variables,
                     states,
@@ -587,6 +605,34 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             StateKind::Plain
             | StateKind::ForCode
             | StateKind::ModifyHealth
+            | StateKind::GenericModifyHealth { .. }
+            | StateKind::Pet { .. }
+            | StateKind::DeflectProjectiles { .. }
+            | StateKind::GenericContactSweep
+            | StateKind::TargetAura { .. }
+            | StateKind::TargetSubScript { .. }
+            | StateKind::ConstantAccel
+            | StateKind::WallClimb
+            | StateKind::Grapple
+            | StateKind::RecallHistory
+            | StateKind::BallRoll { .. }
+            | StateKind::SpatialQuery
+            | StateKind::PhysicsExplosion
+            | StateKind::HitTracker { .. }
+            | StateKind::RayCast
+            | StateKind::EntityAttach { .. }
+            | StateKind::ModifierControl { .. }
+            | StateKind::KinematicsControl { .. }
+            | StateKind::PlacementCast { .. }
+            | StateKind::TeleportEffect
+            | StateKind::ProximityTrigger { .. }
+            | StateKind::EntityStatus { .. }
+            | StateKind::UxPresenter
+            | StateKind::SyncVars
+            | StateKind::HeroOverride
+            | StateKind::AiTactic
+            | StateKind::FieldDrivenState
+            | StateKind::FilterArray
             | StateKind::Shockwave { .. }
             | StateKind::PlacementSelector { .. }
             | StateKind::MoveTo { .. }
@@ -594,6 +640,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::NamedShieldDecay
             | StateKind::ExplosionContact
             | StateKind::DeadeyeEffects
+            | StateKind::GroundRay
             | StateKind::WitchStaffEffect
             | StateKind::WitchStaffHealing
             | StateKind::SummonerBeamRay
@@ -621,6 +668,7 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
             | StateKind::Watch
             | StateKind::Switch { .. }
             | StateKind::ActiveQuery
+            | StateKind::Defer
             | StateKind::GamePadVibration,
             Some("none"),
         ) if codec.empty() => StatePayload::new(),
@@ -640,13 +688,19 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
         (StateKind::MovementSample { flags: mask, .. }, Some("flags13")) => {
             StatePayload::from([("value".into(), Value::Integer(i64::from(mask)))])
         }
-        (StateKind::SubScript { child }, Some("subscript")) => StatePayload::from([(
+        (
+            StateKind::SubScript { child } | StateKind::TargetSubScript { child },
+            Some("subscript"),
+        ) => StatePayload::from([(
             "child".into(),
             Value::Integer(i64::from(child.unwrap_or_default())),
         )]),
         (
-            StateKind::ButtonBlock(_)
+            StateKind::Plain
+            | StateKind::ButtonBlock(_)
+            | StateKind::CombatModFilter { .. }
             | StateKind::OutgoingDamageFilter { .. }
+            | StateKind::ModifierControl { .. }
             | StateKind::RollMovementParameter,
             Some("link"),
         )
@@ -705,10 +759,37 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                 Value::Bool(fresh_at.is_some_and(|at| now_ms.saturating_sub(at) <= 500)),
             ),
         ]),
-        (StateKind::Plain | StateKind::PhaseScriptList, Some("hits"))
-        | (StateKind::PhaseTransition, Some("bit")) => StatePayload::new(),
+        (
+            StateKind::Plain | StateKind::PhaseScriptList | StateKind::HitTracker { .. },
+            Some("hits"),
+        )
+        | (StateKind::PhaseTransition, Some("bit"))
+        | (
+            StateKind::Plain | StateKind::TeleportEffect,
+            Some("blink" | "time16+s64" | "two_vectors+s64"),
+        )
+        | (StateKind::RecallRewind, Some("time16+s64"))
+        | (
+            StateKind::Plain
+            | StateKind::PlacementSelector { .. }
+            | StateKind::PlacementCast { .. },
+            Some("none+u8"),
+        )
+        | (
+            StateKind::SyncVars | StateKind::FieldDrivenState | StateKind::Plain,
+            Some("none+u16" | "63B7ADFD" | "239B1E64"),
+        ) => StatePayload::new(),
+        (StateKind::Plain | StateKind::Grapple, Some("start")) => StatePayload::from([(
+            "start".into(),
+            Value::Integer(i64::try_from(state.start_ms).ok()?),
+        )]),
         (StateKind::EmptyTargets, Some("targets")) => StatePayload::new(),
-        (StateKind::TrackedTargets, Some("targets")) => StatePayload::from([(
+        (
+            StateKind::TrackedTargets
+            | StateKind::GenericTrackedTargets
+            | StateKind::ViewTargets { .. },
+            Some("targets"),
+        ) => StatePayload::from([(
             "targets".into(),
             Value::Array(
                 state
@@ -718,6 +799,31 @@ fn state_payload(state: &State, codec: &Codec, now_ms: u64) -> Option<StatePaylo
                     .collect(),
             ),
         )]),
+        (StateKind::SprayPlacement(placement), Some("861D9015")) => {
+            let Some((unlock, hit)) = placement else {
+                return Some(StatePayload::new());
+            };
+            let mut payload = StatePayload::from([
+                ("unlock".into(), Value::Asset(unlock)),
+                (
+                    "direction".into(),
+                    Value::Vector(hit.direction.map(f64::from)),
+                ),
+                ("point".into(), Value::Vector(hit.point.map(f64::from))),
+                ("normal".into(), Value::Vector(hit.normal.map(f64::from))),
+                (
+                    "activation".into(),
+                    Value::Integer(i64::from(state.activation)),
+                ),
+            ]);
+            if let Some(attachment) = hit.attachment {
+                payload.insert("entity".into(), Value::Entity(attachment.entity));
+                if let Some(key) = attachment.key {
+                    payload.insert("extra".into(), Value::Integer(i64::from(key.get())));
+                }
+            }
+            payload
+        }
         (StateKind::ChaseVar, Some("chase")) => {
             let chase = state.chase.as_ref()?;
             if !matches!(chase.current, Value::Float(_) | Value::Vector(_)) {

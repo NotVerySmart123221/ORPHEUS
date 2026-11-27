@@ -16,7 +16,11 @@
       "spatial_exit_rva": "911E50",
       "view_enter_rva": "AD6500",
       "view_exit_rva": "AD6510",
-      "view_dispatch_rva": "AE03F0"
+      "view_dispatch_rva": "AE03F0",
+      "presentation_enter_rva": "8E3B60",
+      "presentation_exit_rva": "8E3CA0",
+      "presentation_target_enter_rva": "9AE1F0",
+      "presentation_target_exit_rva": "9AB2D0"
     },
     "scope": "Known auxiliary-owner absence only. Rust rejects unsupported ownership at state admission; Python rejects it at auxiliary scope dispatch. E8D976BE cases are native-only, with no Python equivalence claim."
   },
@@ -109,6 +113,8 @@
       "classes": [
         {"class": "STU_96333BBE", "fields": {"m_9524A8D6": {"$": "Unreachable"}, "m_A7B12CE0": {"$": "Unreachable"}}},
         {"class": "STU_E8D976BE", "fields": {}},
+        {"class": "STU_06AB2ECE", "fields": {"m_4A5CA514": {"$": "Unreachable"}, "m_C246C415": 2}},
+        {"class": "STU_D040C3EF", "fields": {"m_4A5CA514": {"$": "STU_B5A0CAF0"}}},
         {"class": "STU_DC80F7E6", "fields": {"m_targets": {"$": "Unreachable"}}}
       ]
     }

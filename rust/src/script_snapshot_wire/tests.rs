@@ -2783,6 +2783,96 @@ fn authored_server_meter_leaves_both_wire_views_and_public_child_identity_unchan
 }
 
 #[test]
+fn view_tracker_encodes_the_current_owner_target_list() {
+    use crate::script_init::{Component, ViewTargetQuery};
+
+    struct Targets(Vec<u32>);
+    impl crate::script_init::World for Targets {
+        fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+            None
+        }
+
+        fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+            None
+        }
+
+        fn view_targets(&self, _: Site, _: &ViewTargetQuery<'_>) -> Option<Vec<u32>> {
+            Some(self.0.clone())
+        }
+    }
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/script-view-targets-v1.json"
+    ))
+    .unwrap();
+    let mut tracker = node(1, "STUStatescriptStateTrackTargets", Some(0), json!({}));
+    tracker["fields"] = fixture["input"]["field_shape"].clone();
+    let index = 607;
+    let graphs = std::sync::Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version":1,"bodies":{},"missing":[],
+                "graphs":[graph(
+                    index,
+                    vec![
+                        node(0, "STUStatescriptEntry", None,
+                             json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]]}})),
+                        tracker,
+                    ],
+                    json!([1]), json!([0]), json!([]), json!([]),
+                )]
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let mut world = Targets(serde_json::from_value(fixture["input"]["targets"].clone()).unwrap());
+    let owner = serde_json::from_value(fixture["input"]["owner"].clone()).unwrap();
+    let period: u32 = serde_json::from_value(fixture["expected"]["period_frames"].clone()).unwrap();
+    let mut component = Component::start(
+        std::sync::Arc::clone(&graphs),
+        owner,
+        Variables::new(),
+        vec![Root::new(1, index)],
+        10,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let codecs = CodecTable::from_json(CODECS).unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let before = component.snapshot().unwrap().clone();
+    world.0.clear();
+    component.advance_frame(10 + period, &mut world).unwrap();
+    let expected: Vec<(u32, i64)> =
+        serde_json::from_value(fixture["expected"]["wire_targets"].clone()).unwrap();
+    let expected = Value::Array(
+        expected
+            .into_iter()
+            .map(|(entity, age)| Value::Array(vec![Value::Entity(entity), Value::Integer(age)]))
+            .collect(),
+    );
+    let base = encoder.project(&before, View::Owner).unwrap();
+    assert_eq!(
+        base.instances[&1].states[&0].payload.get("targets"),
+        Some(&expected)
+    );
+    let next = encoder
+        .project_next(component.snapshot().unwrap(), &base)
+        .unwrap();
+    assert_eq!(
+        next.instances[&1].states[&0].payload.get("targets"),
+        Some(&Value::Array(Vec::new()))
+    );
+    assert_ne!(
+        encoder.full(&base).unwrap().as_bytes(),
+        encoder.full(&next).unwrap().as_bytes()
+    );
+    let observer = encoder.project(&before, View::Observer).unwrap();
+    assert!(observer.instances[&1].states.is_empty());
+}
+
+#[test]
 fn quick_melee_hit_list_projects_empty_hits_payload() {
     let mut melee = graph(
         0x0043,
@@ -3026,6 +3116,107 @@ fn actual_shared_ui_graph_baselines_match_python() {
             format!("{:x}", Sha256::digest(frame.as_bytes())),
             expected_delta
         );
+    }
+}
+
+#[test]
+fn emote_presentation_projects_activation_and_removal_using_authored_scope() {
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/wheel-emote-presentation-v1.json"
+    ))
+    .unwrap();
+    check_emote_presentation_projection(&fixture["rust_animation_mode"], false, true);
+    let mut resource = fixture["rust_cosmetic_resource"].clone();
+    check_emote_presentation_projection(&resource, true, true);
+    resource["ready_plug"]["links"] = json!([[1, "m_abortPlug"]]);
+    check_emote_presentation_projection(&resource, true, false);
+}
+
+fn check_emote_presentation_projection(mode: &Json, observed: bool, supported: bool) {
+    use crate::script_init::Component;
+    use std::sync::Arc;
+
+    let class = mode["class"].as_str().unwrap();
+    let graph_id = u32::try_from(mode["graph"].as_u64().unwrap()).unwrap();
+    let fields = if observed {
+        json!({
+            "m_3DE788AE":mode["ready_plug"],
+            "m_18D94B00":{"$":"client_resource_expression"},
+        })
+    } else {
+        json!({"m_4DA577AC":{"$":"STUConfigVarInt","m_value":mode["literal_mode"]}})
+    };
+    let mut state = node(1, class, Some(0), fields);
+    if observed {
+        state["remote"] = json!(0);
+    }
+    let graph = graph(
+        graph_id,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug":{"$":"Plug","links":[[1,"m_beginPlug"]],"m_FF3DAF1E":[]}}),
+            ),
+            state,
+        ],
+        json!([1]),
+        json!([0]),
+        if observed { json!([1]) } else { json!([]) },
+        json!([]),
+    );
+    let graphs = Arc::new(
+        GraphStore::from_json(
+            &serde_json::to_vec(&json!({
+                "version": 1, "graphs": [graph], "bodies": {}, "missing": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    );
+    let codecs = CodecTable::from_json(
+        &json!({"classes":{(class.trim_start_matches("STU_")):{
+            "name":class,"codec":mode["codec"],"stec":false,"status":"VERIFIED","layout":[],
+        }}})
+        .to_string(),
+    )
+    .unwrap();
+    let encoder = SnapshotEncoder::new(&graphs, &codecs);
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        ENTITY,
+        Variables::new(),
+        vec![Root::new(1, graph_id)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let snapshot = component.snapshot().unwrap();
+    if !supported {
+        assert!(matches!(
+            snapshot.diagnostics.as_slice(),
+            [Diagnostic { issue: Issue::UnsupportedState(rejected), .. }] if rejected == class
+        ));
+        assert!(snapshot.instances[&1].states.is_empty());
+        return;
+    }
+    let owner = encoder.project(snapshot, View::Owner).unwrap();
+    let state = &owner.instances[&1].states[&0];
+    assert!(state.active && state.payload.is_empty() && state.link.is_none());
+    let observer = encoder.project(snapshot, View::Observer).unwrap();
+    assert_eq!(
+        observer.instances[&1].states.get(&0),
+        observed.then_some(state)
+    );
+
+    component.debug_end_state(1, 0, &mut EmptyWorld).unwrap();
+    for view in [View::Owner, View::Observer] {
+        let ended = encoder
+            .project(component.snapshot().unwrap(), view)
+            .unwrap();
+        assert!(ended.instances[&1].states.is_empty());
     }
 }
 

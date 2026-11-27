@@ -62,7 +62,7 @@ use crate::{
 use crate::{
     game_heroes::SOLDIER,
     game_service::player_entity,
-    junkenstein_messages::DefenderMessage,
+    pve_encounter::messages::DefenderMessage,
     script_init::{Site, World},
     script_snapshot_wire::{CountdownFrame, ProjectedSnapshot},
     world::GAME_MODE_ENTITY,
@@ -73,6 +73,10 @@ use crate::{debug_geometry::DebugGeometry, game_debug::Actor};
 
 pub(crate) const MOVER_CATEGORY: u16 = 0x18;
 const OWNER_PROBE_CONTROLLER: u32 = 0xa000_0100;
+
+pub(crate) fn weapon_terrain_category(scene: &CollisionScene) -> u16 {
+    scene.weapon_terrain_category().unwrap_or(MOVER_CATEGORY)
+}
 
 fn mover_category(map: &GameMap, team: u8) -> u16 {
     mover_category_for_team(map.free_for_all, team)
@@ -117,13 +121,48 @@ type OwnerBodyFactory = dyn Fn(&Hero, OwnerBodySpawn, OwnerBodySetup) -> io::Res
     + Sync;
 
 fn practice_owner_selector(
-    factories: BTreeMap<u64, Result<PlayerBodyFactory, Arc<SceneOwnerPreparationError>>>,
+    factories: BTreeMap<
+        (u64, u64),
+        Result<Arc<PlayerBodyFactory>, Arc<SceneOwnerPreparationError>>,
+    >,
+    graphs: Arc<GraphStore>,
+    codecs: Option<Arc<CodecTable>>,
+    mode: u64,
+    pools: Arc<PoolCatalog>,
+    controller_on_fire: Option<bool>,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
 ) -> Arc<OwnerBodyFactory> {
+    let cache = Mutex::new(factories);
     Arc::new(move |hero, spawn, setup| {
-        let Some(factory) = factories.get(&hero.guid) else {
-            return Ok(None);
+        let key = (hero.guid, hero.body);
+        let entry = {
+            let mut guard = cache
+                .lock()
+                .map_err(|_| io::Error::other("owner body factory cache poisoned"))?;
+            if let Some(existing) = guard.get(&key) {
+                existing.clone()
+            } else if graphs.entity_body(hero.body).is_some() {
+                let compiled = match (codecs.as_ref(), controller_on_fire) {
+                    (Some(codecs), Some(on_fire)) => PlayerBodyFactory::from_body(
+                        Arc::clone(&graphs),
+                        Arc::clone(codecs),
+                        mode,
+                        hero,
+                        pools.hero_pools(hero.guid),
+                        on_fire,
+                    )
+                    .map(|f| Arc::new(f.with_anim_timing(anim_timing.clone())))
+                    .map_err(|source| Arc::new(SceneOwnerPreparationError::Body(Box::new(source)))),
+                    (None, _) => Err(Arc::new(SceneOwnerPreparationError::Codecs)),
+                    (_, None) => Err(Arc::new(SceneOwnerPreparationError::ControllerFlag)),
+                };
+                guard.insert(key, compiled.clone());
+                compiled
+            } else {
+                return Ok(None);
+            }
         };
-        let factory = factory
+        let factory = entry
             .as_ref()
             .map_err(|error| io::Error::new(io::ErrorKind::Unsupported, Arc::clone(error)))?;
         let runtime: Box<dyn OwnerBodyRuntime> = Box::new(factory.start_with_setup(spawn, setup)?);
@@ -132,7 +171,7 @@ fn practice_owner_selector(
 }
 
 #[derive(Debug, thiserror::Error)]
-enum SceneOwnerPreparationError {
+pub(crate) enum SceneOwnerPreparationError {
     #[error("the owner statescript codec table is unavailable")]
     Codecs,
     #[error("the controller's initial on-fire flag is unavailable")]
@@ -164,13 +203,14 @@ struct CollisionKey {
 }
 
 pub struct SceneAssets {
-    junkenstein_validation: Option<crate::junkenstein_validation::JunkensteinValidation>,
+    junkenstein_validation: Option<crate::pve_encounter::validation::JunkensteinValidation>,
     collision: PathBuf,
     junkenstein_map_world: PathBuf,
     last_collision: Mutex<Option<(CollisionKey, MapCollision)>>,
     trace_contacts: bool,
     mode_props: BTreeMap<u64, BTreeSet<u64>>,
     environment: EnvironmentCatalog,
+    ability_rules: Arc<crate::hero_ability_rules::HeroAbilityRules>,
     graphs: Arc<GraphStore>,
     codecs: Option<Arc<CodecTable>>,
     practice_owner_body: OnceLock<Option<Arc<OwnerBodyFactory>>>,
@@ -178,8 +218,9 @@ pub struct SceneAssets {
     movers: Arc<MoverCatalog>,
     hurt_volumes: Arc<HurtVolumeCatalog>,
     actor_voice: Option<Arc<ActorVoiceCatalog>>,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
     combat_voice: Arc<CombatVoiceCatalog>,
-    stats: StatsCatalog,
+    stats: Arc<StatsCatalog>,
     heroes: Arc<HeroCatalog>,
     pools: Arc<PoolCatalog>,
 }
@@ -199,7 +240,7 @@ pub(crate) use self::queries::BotQueries;
 impl SceneAssets {
     pub(crate) fn set_junkenstein_validation(
         &mut self,
-        settings: crate::junkenstein_validation::JunkensteinValidation,
+        settings: crate::pve_encounter::validation::JunkensteinValidation,
     ) {
         self.junkenstein_validation = Some(settings);
     }
@@ -214,6 +255,8 @@ impl SceneAssets {
             Err(error) => return Err(error),
         };
         let pools = Arc::new(PoolCatalog::from_graphs(&graphs)?);
+        let mut combat_voice = CombatVoiceCatalog::load(runtime.join(COMBAT_VOICE_CATALOG))?;
+        combat_voice.bind_multikill_exclusions(&graphs);
         Ok(Self {
             collision: runtime.join("collision"),
             junkenstein_map_world: runtime.join(JUNKENSTEIN_MAP_WORLD),
@@ -222,6 +265,9 @@ impl SceneAssets {
             junkenstein_validation: None,
             mode_props: read_mode_props(&data.join("collision_props_174.json"))?,
             environment: EnvironmentCatalog::load(runtime.join(MAP_ENVIRONMENT))?,
+            ability_rules: crate::hero_ability_rules::HeroAbilityRules::load(
+                data.join("hero_ability_rules_174.json"),
+            )?,
             graphs,
             codecs,
             practice_owner_body: OnceLock::new(),
@@ -229,10 +275,9 @@ impl SceneAssets {
             movers: Arc::new(MoverCatalog::load(data.join("game_movers_174.json"))?),
             hurt_volumes: Arc::new(HurtVolumeCatalog::load(&runtime.join(COMBAT_HURT_VOLUMES))?),
             actor_voice: ActorVoiceCatalog::load(&runtime.join(ACTOR_VOICE_CATALOG))?.map(Arc::new),
-            combat_voice: Arc::new(CombatVoiceCatalog::load(
-                runtime.join(COMBAT_VOICE_CATALOG),
-            )?),
-            stats: StatsCatalog::load(data.join("game_stats_174.json"))?,
+            anim_timing: crate::anim_timing::AnimationTiming::load(&data)?.map(Arc::new),
+            combat_voice: Arc::new(combat_voice),
+            stats: Arc::new(StatsCatalog::load(data.join("game_stats_174.json"))?),
             heroes: Arc::new(HeroCatalog::load(data.join("game_heroes_174.json"))?),
             pools,
         })
@@ -379,7 +424,7 @@ impl SceneAssets {
             })
             .filter(|node| node.fields["m_DA4846A5"]["$"] == "STUConfigVoiceDefinition")
             .and_then(|node| asset_guid(&node.fields["m_DA4846A5"]["m_C6C61CB0"]))
-            .filter(|&guid| guid == crate::junkenstein_voice::ENCOUNTER_VOICE_SET)
+            .filter(|&guid| guid == crate::pve_encounter::voice::ENCOUNTER_VOICE_SET)
             .ok_or_else(|| invalid("Junkenstein narrator voice-set binding is unavailable"))?;
         let npcs = match crate::npc_catalog::NpcCatalog::load(
             self.collision
@@ -462,6 +507,7 @@ impl SceneAssets {
                 || map.is_junkenstein()
                 || bots.iter().any(|bot| !bot.spawn.route.is_empty()),
         )?;
+        let breakables = Arc::new(crate::collision_scene::BreakableState::new());
         if let Some(world) = &contacts {
             for bot in bots.iter_mut().filter(|bot| !bot.spawn.route.is_empty()) {
                 let category = mover_category(&map, bot.spawn.team);
@@ -472,6 +518,7 @@ impl SceneAssets {
                     category,
                     ground_height(ground.triangles(), category),
                 );
+                bot.set_breakables(Arc::clone(&breakables));
                 if self.trace_contacts {
                     bot.enable_contact_trace();
                 }
@@ -488,14 +535,29 @@ impl SceneAssets {
         // Client presenters can read the room mode entity's authored variables.
         let variables = authored_mode_variables(&self.graphs, map.mode_guid).unwrap_or_default();
         let mode_ui = mode_presentation(&self.graphs, &variables, encounter)?;
-        let initial_board =
+        let initial_board = crate::game_stats::with_on_fire(
             self.stats
-                .component(&PlayerStats::default(), map.mode_guid, None, None);
+                .component(&PlayerStats::default(), map.mode_guid, None, None),
+            Some(0.0),
+            Some(crate::game_progression::ON_FIRE_THRESHOLD),
+            Some(false),
+        );
         let junkenstein_anchors = Arc::new(junkenstein_anchors);
         let mut simulation = RoomSimulation::new(bots).map_err(io::Error::other)?;
         simulation.set_free_for_all(map.free_for_all);
+        simulation.load_bot_target_tags(&self.graphs);
         simulation.set_combat_voice(Arc::clone(&self.combat_voice));
+        simulation.set_body_contact_sets(self.graphs.body_contact_sets());
+        simulation.set_stats_catalog(Arc::clone(&self.stats), map.mode_guid);
+        simulation.set_ability_rules(Arc::clone(&self.ability_rules));
+        simulation.enable_received_damage_feedback();
+        simulation.enable_authored_hit_feedback(1.0);
+        simulation.enable_authored_elimination_feedback();
+        simulation.set_map_guid(map.map_guid);
         simulation.set_environment(self.environment.for_map(map.map_guid));
+        if let Some(pvp) = crate::pvp_mode::PvpObjectiveRuntime::from_game_map(&map) {
+            simulation.set_pvp_objective(pvp);
+        }
         if self.graphs.uses_host_health_events() {
             simulation.enable_host_health_events();
         }
@@ -503,18 +565,20 @@ impl SceneAssets {
             simulation.enable_spatial_queries(
                 map.free_for_all,
                 Arc::clone(&combat_rays),
-                self.graphs.room_spatial_needs(),
+                self.graphs
+                    .room_spatial_needs()
+                    .max(crate::script_graph::RoomSpatialNeeds::EntityTags),
             );
+            simulation.set_breakables(Arc::clone(&breakables));
             if let Some(catalog) = &self.actor_voice {
                 simulation.enable_actor_voice(Arc::clone(catalog));
             }
-            if self.graphs.uses_spatial_actor_rays() {
-                simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
-            }
+            simulation.enable_spatial_actor_rays(Arc::clone(&self.movers));
         }
         if contacts.is_some() {
             simulation.enable_movement_contacts(map.free_for_all, Arc::clone(&self.movers));
         }
+        simulation.set_script_graphs(Arc::clone(&self.graphs), map.mode_guid);
         if let Some(codecs) = self
             .codecs
             .as_ref()
@@ -539,6 +603,7 @@ impl SceneAssets {
             combat_rays,
             combat_sweeps,
             contacts,
+            breakables,
             controller,
             mode_ui,
             junkenstein_validation: None,
@@ -581,11 +646,11 @@ impl SceneAssets {
         Ok((shared, encounter))
     }
 
-    fn map_collision(&self, map: &GameMap, contacts: bool) -> io::Result<MapCollision> {
+    fn map_collision(&self, map: &GameMap, mover_contacts: bool) -> io::Result<MapCollision> {
         let key = CollisionKey {
             map: map.map_guid,
             mode: map.mode_guid,
-            contacts,
+            contacts: mover_contacts,
         };
         let mut last = self
             .last_collision
@@ -611,34 +676,25 @@ impl SceneAssets {
         let identifiers = self.mode_props.get(&map.mode_guid).unwrap_or(&empty);
         let ground =
             Arc::new(CollisionScene::movement_probe(&cache, identifiers).map_err(invalid)?);
-        let contacts = contacts
+        let expanded = match load_combat_geometry(&path, map.map_guid, identifiers) {
+            Ok(expanded) => expanded,
+            Err(error) => {
+                eprintln!(
+                    "{} expanded combat geometry unavailable: {error}; using movement geometry",
+                    map.name
+                );
+                None
+            }
+        };
+        let movement_contacts = (mover_contacts || expanded.is_none())
             .then(|| ContactWorld::from_movement_cache(cache, identifiers).map(Arc::new))
             .transpose()
             .map_err(invalid)?;
-        let (combat_rays, combat_sweeps) =
-            match load_combat_geometry(&path, map.map_guid, identifiers) {
-                Ok(Some((rays, sweeps))) => (
-                    Arc::new(rays),
-                    match sweeps {
-                        Ok(sweeps) => Some(Arc::new(sweeps)),
-                        Err(error) => {
-                            eprintln!(
-                                "{} combat sweeps unavailable: {error}; using movement contacts",
-                                map.name
-                            );
-                            None
-                        }
-                    },
-                ),
-                Ok(None) => (Arc::clone(&ground), None),
-                Err(error) => {
-                    eprintln!(
-                        "{} combat ray cache unavailable: {error}; using movement probes",
-                        map.name
-                    );
-                    (Arc::clone(&ground), None)
-                }
-            };
+        let (combat_rays, combat_sweeps) = match expanded {
+            Some((rays, sweeps)) => (Arc::new(rays), Some(Arc::new(sweeps))),
+            None => (Arc::clone(&ground), movement_contacts.clone()),
+        };
+        let contacts = movement_contacts.filter(|_| mover_contacts);
         let collision = MapCollision {
             movement_cache,
             ground,
@@ -710,15 +766,33 @@ impl SceneAssets {
             .heroes()
             .map(|hero| {
                 (
-                    hero.guid,
-                    self.compile_owner_factory(scene, hero).map_err(Arc::new),
+                    (hero.guid, hero.body),
+                    self.compile_owner_factory(scene, hero)
+                        .map(Arc::new)
+                        .map_err(Arc::new),
                 )
             })
             .collect();
-        (!factories.is_empty()).then(|| practice_owner_selector(factories))
+        let on_fire = initial_on_fire(&scene.initial_board);
+        (!factories.is_empty()).then(|| {
+            practice_owner_selector(
+                factories,
+                Arc::clone(&self.graphs),
+                self.codecs.clone(),
+                scene.map.mode_guid,
+                Arc::clone(&self.pools),
+                on_fire,
+                self.anim_timing.clone(),
+            )
+        })
     }
 
-    fn compile_owner_factory(
+    #[cfg(test)]
+    pub(crate) fn test_actor_voice(&self) -> Option<Arc<ActorVoiceCatalog>> {
+        self.actor_voice.as_ref().map(Arc::clone)
+    }
+
+    pub(crate) fn compile_owner_factory(
         &self,
         scene: &PreparedScene,
         hero: &Hero,
@@ -737,6 +811,7 @@ impl SceneAssets {
             self.pools.hero_pools(hero.guid),
             controller_on_fire,
         )
+        .map(|factory| factory.with_anim_timing(self.anim_timing.clone()))
         .map_err(|source| SceneOwnerPreparationError::Body(Box::new(source)))
     }
 
@@ -774,7 +849,7 @@ fn load_combat_geometry(
     movement_path: &Path,
     map_guid: u64,
     identifiers: &BTreeSet<u64>,
-) -> io::Result<Option<(CollisionScene, io::Result<ContactWorld>)>> {
+) -> io::Result<Option<(CollisionScene, ContactWorld)>> {
     let file = match File::open(movement_path.with_extension("rays.col")) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -807,7 +882,7 @@ fn load_combat_geometry(
     let cache = read_ray_cache(BufReader::new(file), identity).map_err(invalid)?;
     let rays = CollisionScene::expanded_rays(&cache, identifiers, identity).map_err(invalid)?;
     let sweeps =
-        ContactWorld::from_expanded_ray_cache(cache, identifiers, identity).map_err(invalid);
+        ContactWorld::from_expanded_ray_cache(cache, identifiers, identity).map_err(invalid)?;
     Ok(Some((rays, sweeps)))
 }
 

@@ -15,6 +15,21 @@
     "links_after_enter": [[3, 0], [3, 0], null],
     "links_after_final_root_ends": [null, null, null]
   },
+  "animation_registry": {
+    "roots": [
+      {
+        "graph": 61088, "position": 27, "class": "STU_A875CA49",
+        "has_remote_slot": true, "configured": {"m_65D335ED": {"$": "STUConfigVarDynamic", "m_identifier": 105}, "m_level": 2}
+      },
+      {"graph": 61089, "position": 29, "class": "STU_43994F1B"},
+      {
+        "graph": 61090, "position": 31, "class": "STU_A875CA49",
+        "has_remote_slot": true, "configured": {"m_65D335ED": {"$": "STU_23314820", "m_value": "0x0040000000000123"}, "m_level": 1}
+      },
+      {"graph": 61091, "position": 33, "class": "STU_A875CA49", "has_remote_slot": true}
+    ],
+    "initial_links": [[3, 0], null, [4, 0], null]
+  },
   "registry_only_pair": {
     "roots": [
       {"graph": 61077, "position": 5, "class": "STU_43994F1B"},

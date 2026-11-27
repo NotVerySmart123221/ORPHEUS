@@ -75,9 +75,11 @@ fn scheduled_player_respawn_keeps_choice_and_fires_once_at_the_original_deadline
     };
     let (mut scene, mut world, dead) = respawn_scene(&viewer);
     let due = Duration::from_secs(3);
-    world.schedule_player_respawn(dead, due);
-    world.schedule_player_respawn(dead, due + Duration::from_secs(10));
-    assert_eq!(world.pending_player_respawn(), Some((dead, due)));
+    scene.simulation_mut().schedule_player_respawn(dead, due);
+    scene
+        .simulation_mut()
+        .schedule_player_respawn(dead, due + Duration::from_secs(10));
+    assert_eq!(scene.simulation().pending_player_respawn(dead), Some(due));
     world
         .advance_player_respawn(
             &mut scene,
@@ -117,7 +119,7 @@ fn scheduled_player_respawn_keeps_choice_and_fires_once_at_the_original_deadline
     );
     assert!(scene.simulation().player_body(fresh).unwrap().alive());
     assert!(scene.simulation().player_body(dead).is_none());
-    assert_eq!(world.pending_player_respawn(), None);
+    assert_eq!(scene.simulation().pending_player_respawn(fresh), None);
     world
         .advance_player_respawn(
             &mut scene,
@@ -139,7 +141,7 @@ fn a_dead_player_has_no_implicit_respawn_schedule() {
         card: &PlayerCard::default(),
     };
     let (mut scene, mut world, dead) = respawn_scene(&viewer);
-    assert_eq!(world.pending_player_respawn(), None);
+    assert_eq!(scene.simulation().pending_player_respawn(dead), None);
     world
         .advance_player_respawn(
             &mut scene,
@@ -151,7 +153,7 @@ fn a_dead_player_has_no_implicit_respawn_schedule() {
         .unwrap();
     assert_eq!(world.active_body_id(), Some(dead));
     assert!(!scene.simulation().player_body(dead).unwrap().alive());
-    assert_eq!(world.pending_player_respawn(), None);
+    assert_eq!(scene.simulation().pending_player_respawn(dead), None);
 }
 
 #[test]
@@ -172,7 +174,7 @@ fn pending_manual_hero_or_skin_choice_supersedes_the_old_respawn_plan() {
             card: &card,
         };
         let (mut scene, mut world, dead) = respawn_scene(&viewer);
-        world.schedule_player_respawn(dead, due);
+        scene.simulation_mut().schedule_player_respawn(dead, due);
         if skin_only {
             world.queue_skin(selected_hero, FIRST_TICK + 1, due);
         } else {
@@ -183,7 +185,7 @@ fn pending_manual_hero_or_skin_choice_supersedes_the_old_respawn_plan() {
             .advance_player_respawn(&mut scene, &viewer, FIRST_TICK + 1, RETAIL_QUANTA, due)
             .unwrap();
         assert_eq!(world.active_body_id(), Some(dead));
-        assert_eq!(world.pending_player_respawn(), Some((dead, due)));
+        assert_eq!(scene.simulation().pending_player_respawn(dead), Some(due));
         assert_eq!(
             world
                 .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 1)
@@ -197,7 +199,7 @@ fn pending_manual_hero_or_skin_choice_supersedes_the_old_respawn_plan() {
             (selected_hero, selected_skin)
         );
         assert!(scene.simulation().player_body(selected).unwrap().alive());
-        world.schedule_player_respawn(dead, due);
+        scene.simulation_mut().schedule_player_respawn(dead, due);
         world
             .advance_player_respawn(
                 &mut scene,
@@ -208,7 +210,7 @@ fn pending_manual_hero_or_skin_choice_supersedes_the_old_respawn_plan() {
             )
             .unwrap();
         assert_eq!(world.active_body_id(), Some(selected));
-        assert_eq!(world.pending_player_respawn(), None);
+        assert_eq!(scene.simulation().pending_player_respawn(selected), None);
     }
 }
 
@@ -222,7 +224,7 @@ fn player_respawn_waits_for_the_old_partial_command_to_finish() {
     };
     let (mut scene, mut world, dead) = respawn_scene(&viewer);
     let due = Duration::from_secs(3);
-    world.schedule_player_respawn(dead, due);
+    scene.simulation_mut().schedule_player_respawn(dead, due);
     let frame = FIRST_TICK + 4;
     world.queue_commands(frame, &[forward(frame)]);
     let (used, _) = world
@@ -240,7 +242,7 @@ fn player_respawn_waits_for_the_old_partial_command_to_finish() {
         .advance_player_respawn(&mut scene, &viewer, frame, RETAIL_QUANTA, due)
         .unwrap();
     assert_eq!(world.active_body_id(), Some(dead));
-    assert_eq!(world.pending_player_respawn(), Some((dead, due)));
+    assert_eq!(scene.simulation().pending_player_respawn(dead), Some(due));
     world
         .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 16)
         .unwrap();
@@ -248,8 +250,9 @@ fn player_respawn_waits_for_the_old_partial_command_to_finish() {
     world
         .advance_player_respawn(&mut scene, &viewer, frame + 1, RETAIL_QUANTA, due)
         .unwrap();
-    assert_ne!(world.active_body_id(), Some(dead));
-    assert_eq!(world.pending_player_respawn(), None);
+    let fresh = world.active_body_id().unwrap();
+    assert_ne!(fresh, dead);
+    assert_eq!(scene.simulation().pending_player_respawn(fresh), None);
 }
 
 #[test]
@@ -271,7 +274,7 @@ fn rejected_player_respawn_preserves_the_corpse_without_repeating_startup() {
         ))
     }));
     let due = Duration::from_secs(3);
-    world.schedule_player_respawn(dead, due);
+    scene.simulation_mut().schedule_player_respawn(dead, due);
     for tick in FIRST_TICK + 1..=FIRST_TICK + 3 {
         world
             .advance_player_respawn(&mut scene, &viewer, tick, RETAIL_QUANTA, due)
@@ -280,5 +283,120 @@ fn rejected_player_respawn_preserves_the_corpse_without_repeating_startup() {
         assert!(!scene.simulation().player_body(dead).unwrap().alive());
     }
     assert_eq!(attempts.load(Ordering::Relaxed), 1);
-    assert_eq!(world.pending_player_respawn(), None);
+    assert_eq!(scene.simulation().pending_player_respawn(dead), None);
+}
+
+#[test]
+fn player_respawn_converges_when_observer_drops_packets_across_swap() {
+    use crate::game_combat::PlayerBodyEvent;
+    use crate::game_egress::{DeliveryReport, PacketDelivery};
+
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let (mut scene, mut owner_world, dead) = respawn_scene(&viewer);
+    let mut observer = WorldDelivery::new(OWNER + 0x100);
+    observer.started = Some(FIRST_TICK);
+    observer.created.insert(OWNER + 0x100);
+
+    // Observer receives initial body creation.
+    for event in scene.simulation_mut().take_player_events() {
+        if let PlayerBodyEvent::Created { id, update, .. } = event {
+            observer.create_remote_player(id, *update);
+        }
+    }
+    let sent_init: Vec<_> = observer
+        .ready()
+        .iter()
+        .map(|ready| (ready.index, ready.tracked()))
+        .collect();
+    let (init_indices, init_records): (Vec<_>, Vec<_>) = sent_init.into_iter().unzip();
+    observer.sent(&init_indices);
+    observer.acknowledge(
+        DeliveryReport {
+            requeued_reliable: 0,
+            packets: vec![PacketDelivery {
+                sequence: 1,
+                arrived: true,
+                records: init_records,
+            }],
+        },
+        Duration::ZERO,
+    );
+    assert!(observer.created.contains(&dead.entity));
+
+    // Player dies and respawns via RoomSimulation ECS schedule.
+    let due = Duration::from_secs(3);
+    scene.simulation_mut().schedule_player_respawn(dead, due);
+    owner_world
+        .advance_player_respawn(&mut scene, &viewer, FIRST_TICK + 1, RETAIL_QUANTA, due)
+        .unwrap();
+    let fresh = owner_world.active_body_id().unwrap();
+    assert_ne!(fresh, dead);
+    let events = scene.simulation_mut().take_player_events();
+    for event in events {
+        match event {
+            PlayerBodyEvent::Created { id, update, .. } => {
+                observer.create_remote_player(id, *update);
+            }
+            PlayerBodyEvent::Retired { id, .. } => {
+                observer.retire_remote_player(id);
+            }
+            PlayerBodyEvent::ScriptHalted { .. } => {}
+        }
+    }
+
+    // Observer drops the first packet containing the retirement/creation, then catches up.
+    let first_batch: Vec<_> = observer
+        .ready()
+        .iter()
+        .map(|ready| (ready.index, ready.tracked()))
+        .collect();
+    let (drop_indices, drop_records): (Vec<_>, Vec<_>) = first_batch.into_iter().unzip();
+    observer.sent(&drop_indices);
+    observer.acknowledge(
+        DeliveryReport {
+            requeued_reliable: 0,
+            packets: vec![PacketDelivery {
+                sequence: 2,
+                arrived: false,
+                records: drop_records,
+            }],
+        },
+        Duration::from_secs(3),
+    );
+    for seq in 3..=6 {
+        let batch: Vec<_> = observer
+            .ready()
+            .iter()
+            .map(|ready| (ready.index, ready.tracked()))
+            .collect();
+        if batch.is_empty() {
+            break;
+        }
+        let (indices, records): (Vec<_>, Vec<_>) = batch.into_iter().unzip();
+        observer.sent(&indices);
+        observer.acknowledge(
+            DeliveryReport {
+                requeued_reliable: 0,
+                packets: vec![PacketDelivery {
+                    sequence: seq,
+                    arrived: true,
+                    records,
+                }],
+            },
+            Duration::from_secs(3),
+        );
+    }
+    assert!(
+        !observer.created.contains(&dead.entity),
+        "observer should retire dead body after catching up"
+    );
+    assert!(
+        observer.created.contains(&fresh.entity),
+        "observer should converge on the same fresh body {fresh:?}"
+    );
 }

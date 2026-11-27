@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "case_id": "assault-single-round",
+  "target_build": "104319",
+  "source": {"implementation": "src/ow174/game/assault.py"},
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "assembly_ends": 30,
+    "points": [
+      {"placeable": 41, "position": [0, 1, 0], "box": [0, 0, 0, 1, 0, 1, 0, 4, 2, 2], "round_seconds": 60, "capture_seconds": 12},
+      {"placeable": 42, "position": [20, 1, 0], "box": [0, 0.7071067811865476, 0, 0.7071067811865476, 20, 1, 0, 4, 2, 2], "round_seconds": 30, "capture_seconds": 12}
+    ],
+    "occupants": {
+      "attacker_a": [1, 1, [0, 1, 0]],
+      "defender_a": [2, 0, [0, 1, 0]],
+      "spectator_a": [3, 3, [0, 1, 0]],
+      "attacker_above_a": [4, 1, [0, 4, 0]],
+      "attacker_b": [5, 1, [20, 1, 3]]
+    },
+    "capture_steps": [
+      [74, ["attacker_a"]],
+      [75, ["attacker_b"]],
+      [81, ["attacker_a", "attacker_above_a", "spectator_a"]],
+      [90, ["attacker_a", "defender_a"]],
+      [100, []],
+      [108, ["attacker_a"]],
+      [120, ["attacker_a"]],
+      [132, ["attacker_b"]]
+    ],
+    "milestone_steps": [
+      [75, []],
+      [78.99, ["attacker_a"]],
+      [79, ["attacker_a"]],
+      [82.99, ["attacker_a"]],
+      [83, ["attacker_a"]],
+      [84, ["attacker_a"]],
+      [100, []],
+      [104, ["attacker_a"]]
+    ],
+    "overtime_steps": [[135, ["attacker_a", "defender_a"]], [139, []], [140, ["attacker_a"]]]
+  },
+  "presentation": {
+    "capture_segments": 3,
+    "waypoint_variable": "0x3F75",
+    "waypoint_type": "0x0030603F",
+    "waypoint_mask_bytes": [7, 63, 96, 48],
+    "positions": [[0, 0, 0], [2, 0, 0], [10, 0, 0], [11, 0, 0]],
+    "outline_candidates": [42, 43],
+    "outline": 42,
+    "hidden_overlays": [43, 44],
+    "matched_overlays": [43]
+  },
+  "expected": {
+    "waypoint_stages": [0, 0, 0, 0, 0, 1, 1, null],
+    "outline_stages": [0, 0, 0, 0, 0, 1, 1, null],
+    "milestone_steps": [
+      [0, 0, 0, 0],
+      [0, 0.3325, 0.3325, 0],
+      [0, 0.333333, 0.333333, 1],
+      [0, 0.665833, 0.665833, 1],
+      [0, 0.666667, 0.666667, 2],
+      [0, 0.75, 0.75, 2],
+      [0, 0.666667, 0.75, 2],
+      [1, 0, 0, 0]
+    ],
+    "capture_steps": [
+      ["SETUP", 0, 0, false, 75, null],
+      ["ACTIVE", 0, 0, false, 135, null],
+      ["ACTIVE", 0, 0.5, false, 135, null],
+      ["ACTIVE", 0, 0.5, true, 135, null],
+      ["ACTIVE", 0, 0.333333, false, 135, null],
+      ["ACTIVE", 1, 0, false, 165, null],
+      ["ACTIVE", 1, 0, false, 165, null],
+      ["COMPLETE", 1, 1, false, 165, 1]
+    ],
+    "overtime_steps": [[true, null], [true, null], [false, 0]]
+  }
+}

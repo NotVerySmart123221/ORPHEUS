@@ -5,7 +5,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    fs, io,
+    io,
     net::SocketAddr,
     path::Path,
     sync::{
@@ -16,6 +16,9 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(feature = "lua-debug")]
+use std::fs;
 
 use indexmap::IndexMap;
 use mio::{Events, Interest, Poll, Token, Waker, net::UdpSocket};
@@ -49,6 +52,14 @@ mod peer;
 mod room;
 mod state;
 mod worker;
+
+#[cfg(not(feature = "lua-debug"))]
+pub(crate) fn lua_debug_required() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Lua AI overrides require a build with --features lua-debug",
+    )
+}
 
 #[cfg(test)]
 mod tests;
@@ -103,6 +114,9 @@ pub struct AiPolicyStatus {
     pub active_rooms: usize,
 }
 
+pub type CareerRecorder =
+    Arc<dyn Fn(&str, &crate::game_progression::CareerMatchRecord) + Send + Sync>;
+
 pub struct GameService {
     address: SocketAddr,
     requests: mpsc::SyncSender<Request>,
@@ -136,12 +150,35 @@ enum Request {
         skin: SkinTheme,
         reply: mpsc::SyncSender<()>,
     },
+    #[cfg(feature = "lua-debug")]
     ReloadAiScript {
         source: String,
         reply: mpsc::SyncSender<io::Result<AiReloadReport>>,
     },
     AiPolicyStatus {
         reply: mpsc::SyncSender<AiPolicyStatus>,
+    },
+    SetCareerRecorder {
+        recorder: CareerRecorder,
+        reply: mpsc::SyncSender<()>,
+    },
+    #[cfg(feature = "lua-mods")]
+    SetModHost {
+        host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
+        reply: mpsc::SyncSender<()>,
+    },
+    #[cfg(feature = "lua-mods")]
+    ModChat {
+        id: MatchId,
+        connection: u32,
+        sender_name: String,
+        text: String,
+        reply: mpsc::SyncSender<Vec<String>>,
+    },
+    #[cfg(feature = "lua-mods")]
+    DrainModChat {
+        id: MatchId,
+        reply: mpsc::SyncSender<Vec<String>>,
     },
     #[cfg(any(test, feature = "inspector"))]
     Debug {
@@ -373,12 +410,53 @@ impl GameService {
         })
     }
 
+    #[cfg(feature = "lua-mods")]
+    pub fn set_mod_host(
+        &self,
+        host: Arc<std::sync::Mutex<crate::mod_script::ModHost>>,
+    ) -> io::Result<()> {
+        self.request(|reply| Request::SetModHost { host, reply })
+    }
+
+    pub fn set_career_recorder(&self, recorder: CareerRecorder) -> io::Result<()> {
+        self.request(|reply| Request::SetCareerRecorder { recorder, reply })
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn dispatch_mod_chat(
+        &self,
+        id: [u64; 2],
+        connection: u32,
+        sender_name: String,
+        text: String,
+    ) -> io::Result<Vec<String>> {
+        self.request(|reply| Request::ModChat {
+            id,
+            connection,
+            sender_name,
+            text,
+            reply,
+        })
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub fn drain_mod_chat(&self, id: [u64; 2]) -> io::Result<Vec<String>> {
+        self.request(|reply| Request::DrainModChat { id, reply })
+    }
+
+    #[cfg(feature = "lua-debug")]
     pub fn reload_ai_script(&self, source: impl Into<String>) -> io::Result<AiReloadReport> {
         let source = source.into();
         crate::ai_script::validate_ai_source_bounds(&source).map_err(io::Error::from)?;
         self.request(|reply| Request::ReloadAiScript { source, reply })?
     }
 
+    #[cfg(not(feature = "lua-debug"))]
+    pub fn reload_ai_script(&self, _source: impl Into<String>) -> io::Result<AiReloadReport> {
+        Err(lua_debug_required())
+    }
+
+    #[cfg(feature = "lua-debug")]
     pub fn reload_ai_script_file(&self, path: &Path) -> io::Result<AiReloadReport> {
         let metadata = fs::metadata(path)?;
         let max_bytes = crate::ai_script::AI_MAX_SOURCE_BYTES;
@@ -392,6 +470,11 @@ impl GameService {
         }
         let source = fs::read_to_string(path)?;
         self.reload_ai_script(source)
+    }
+
+    #[cfg(not(feature = "lua-debug"))]
+    pub fn reload_ai_script_file(&self, _path: &Path) -> io::Result<AiReloadReport> {
+        Err(lua_debug_required())
     }
 
     pub fn ai_policy_status(&self) -> io::Result<AiPolicyStatus> {
