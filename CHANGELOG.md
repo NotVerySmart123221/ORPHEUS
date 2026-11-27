@@ -4,6 +4,10 @@ This log records tested changes and their acceptance status. Entries are grouped
 
 ## Unreleased
 
+- Treat unavailable static grapple queries as misses instead of reusing the
+  previous hit. Upward scripted pulls that leave walkable support now publish
+  takeoff on the first swept pose rather than reseating on the departure floor.
+
 - Arm the authored post-pull StateScript timer so Widowmaker's grapple can
   stop through its graph and retire the line attachment after a hit. The
   miss-side bone-relative retract remains unsupported.

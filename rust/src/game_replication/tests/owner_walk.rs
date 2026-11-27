@@ -1432,6 +1432,15 @@ impl HookLane {
     }
 
     fn flavors_cache(isolate: bool, cache: CollisionCache) -> Self {
+        Self::flavors_from(isolate, cache, 0.0, [0.0; 3])
+    }
+
+    fn flavors_from(
+        isolate: bool,
+        cache: CollisionCache,
+        gravity_scale: f64,
+        start: [f64; 3],
+    ) -> Self {
         // The authored hook graph alone, under the production policy: the
         // press runs the real listener into the wait, the wait finishes and
         // begins the static trace through the room's collision scene, and
@@ -1455,11 +1464,11 @@ impl HookLane {
         let frame = 100;
         let mover = Mover::new(
             MoverSettings {
-                gravity_scale: 0.0,
+                gravity_scale,
                 ..MoverSettings::default()
             },
             Arc::new(ContactWorld::new(vec![]).unwrap()),
-            [0.0; 3],
+            start,
             0,
             0x18,
         )
@@ -1867,6 +1876,56 @@ fn prepared_hook_hit_beyond_the_authored_range_is_a_miss() {
         [0.0; 3],
         "the out-of-range miss branch must leave the owner in place"
     );
+    lane.complete();
+}
+
+#[test]
+#[ignore = "requires an authorized 104319 runtime pack at ORPHEUS_RUNTIME_DIR"]
+fn full_kit_falling_hook_then_resolved_miss_has_no_second_drive() {
+    let mut lane = HookLane::flavors_from(false, rim_cache(&[]), 1.0, [0.0, 4.0, 0.0]);
+    let pose = |lane: &HookLane| {
+        lane.scene
+            .simulation()
+            .player_body(lane.id)
+            .unwrap()
+            .mover
+            .pose()
+    };
+    lane.step(0);
+    assert!(pose(&lane).velocity[1] < 0.0);
+    let mut first_drive = None;
+    for frame in 0..100 {
+        let before = pose(&lane);
+        lane.step_aim(if frame < 3 { HOOK_PRESS } else { 0 }, 0, 0);
+        let mover = &lane.scene.simulation().player_body(lane.id).unwrap().mover;
+        if first_drive.is_none() && mover.scripted_motion_at(lane.now) {
+            let after = mover.pose();
+            assert!(before.velocity[1] < 0.0, "{before:?}");
+            assert!(after.position[2] > before.position[2], "{after:?}");
+            first_drive = lane
+                .states()
+                .into_iter()
+                .find(|s| s.move_to)
+                .map(|s| s.activation);
+        }
+    }
+    let first_drive = first_drive.expect("the descending body must pull toward the wall");
+    assert!(!lane.states().iter().any(|s| s.move_to && s.active));
+    // Start the authored trace at its lifecycle boundary. This isolates the
+    // recast from input/cooldown admission, which the other kit tests cover.
+    lane.step_aim(0, 32_768, 0);
+    let instance = lane.states_with_instance().unwrap();
+    lane.begin_listener(instance, 0);
+    for _ in 0..60 {
+        lane.step_aim(0, 32_768, 0);
+        assert!(
+            lane.states()
+                .iter()
+                .filter(|s| s.move_to)
+                .all(|s| !s.active && s.activation == first_drive)
+        );
+    }
+    assert_eq!(lane.projection_var(435), Some(Value::Bool(false)));
     lane.complete();
 }
 
@@ -2658,22 +2717,23 @@ fn full_kit_translated_oblique_hit_publishes_static_attach() {
         let snapshot = runtime.snapshot().unwrap();
         let instance_id = lane.states_with_instance().unwrap();
         let instance = &snapshot.instances[&instance_id];
-        if let Some(trace) = instance.states.get(&0).filter(|state| state.active)
-            && let StateKind::StaticTrace {
+        if let Some(trace) = instance.states.get(&0).filter(|state| state.active) {
+            if let StateKind::StaticTrace {
                 origin,
                 direction,
                 length,
                 category,
                 ..
             } = trace.kind
-        {
-            expected = Some(
-                spatial
-                    .checked_cast_ray(origin, direction, length, category)
-                    .unwrap()
-                    .expect("prepared scene has a direct hit")
-                    .point,
-            );
+            {
+                expected = Some(
+                    spatial
+                        .checked_cast_ray(origin, direction, length, category)
+                        .unwrap()
+                        .expect("prepared scene has a direct hit")
+                        .point,
+                );
+            }
         }
         if instance.states.get(&1).is_some_and(|state| state.active) {
             let point = expected.expect("the flight was observed before the pull");

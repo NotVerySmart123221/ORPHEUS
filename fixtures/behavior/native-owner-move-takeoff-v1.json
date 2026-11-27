@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "case_id": "native-owner-move-takeoff.synthetic.v1",
+  "evidence": "synthetic-native",
+  "input": {
+    "dt": 0.016,
+    "speed": 20.0,
+    "target": [3.0, 4.0, 0.0]
+  },
+  "expected": {
+    "minimum_second_feet_y": 0.5,
+    "rising_airborne_sample_bits": 5
+  }
+}

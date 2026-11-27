@@ -909,8 +909,9 @@ impl Mover {
             dt,
             command.frame,
             blockers,
-            settings.gravity_scale,
+            &settings,
             allow_arrival_settle,
+            standing_on_actor,
         )?;
         // Reference parity: the owner's correction window opens on a pose
         // whose dt-valid drive actually moved the feet, not on every frame
@@ -1030,8 +1031,9 @@ impl Mover {
         dt: f64,
         _frame: u32,
         blockers: &[CapsulePose],
-        gravity_scale: f64,
+        settings: &MoverSettings,
         allow_arrival_settle: bool,
+        standing_on_actor: bool,
     ) -> Result<(f64, bool), HullContactError> {
         let grounded = self.posture.ground() == Ground::Standing;
         self.drive_pose_moved = false;
@@ -1091,7 +1093,7 @@ impl Mover {
             (self.posture.flags & !TOUCHING) | (u32::from(movement.touching) * TOUCHING);
         // Preserve wall-ride / wall-climb vertical glide when touching a wall with
         // reduced gravity so Lúcio/Genji/Hanzo are not dragged down by wall friction.
-        if !grounded && movement.touching && gravity_scale <= 0.25 && y < 0.0 {
+        if !grounded && movement.touching && settings.gravity_scale <= 0.25 && y < 0.0 {
             y = 0.0;
         }
         let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
@@ -1202,6 +1204,42 @@ impl Mover {
             self.drive_pose_moved = self.pose.position != previous_feet;
             let applied = std::array::from_fn::<_, 3, _>(|i| capsule_end[i] - start[i]);
             [x, y, z] = applied.map(|delta| f64::from(delta / dt));
+            if grounded && self.drive_pose_moved && y > 0.0 && py > previous_feet[1] {
+                // Check the committed feet, after actor depenetration, without
+                // the standing step-down band that can reseat on the old floor.
+                let support = self.probe.probe(
+                    rays,
+                    self.body.world(),
+                    settings,
+                    ProbePose {
+                        feet: [px, py - SCRIPT_STEP, pz],
+                        velocity: [x, y, z],
+                        spring: self.posture.spring_offset(),
+                        crouched: self.posture.crouched(),
+                        airborne: true,
+                    },
+                    f64::from(dt),
+                    self.category,
+                )?;
+                // Keep upstream crown support if it still reaches the feet.
+                let crown_support = standing_on_actor
+                    && blockers.iter().any(|blocker| {
+                        let crown = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                        let radius = f64::from(blocker.radius)
+                            + if self.posture.crouched() {
+                                settings.crouch_radius
+                            } else {
+                                settings.stand_radius
+                            };
+                        (py - crown).abs() <= SCRIPT_STEP
+                            && (px - f64::from(blocker.position[0]))
+                                .hypot(pz - f64::from(blocker.position[2]))
+                                < radius
+                    });
+                if !crown_support && support.ground.is_none_or(|hit| hit.y < py - SCRIPT_STEP) {
+                    self.posture.begin_velocity_launch();
+                }
+            }
             // RAW solver feet, exactly as the reference (whose position is
             // float, not the wire grid): the drive ends when the remaining
             // distance is within the quantisation (arrival) or this pose
@@ -1317,6 +1355,141 @@ mod tests {
         assert_eq!(fixture["case_id"], "native-swept-displacement.synthetic.v1");
         assert_eq!(fixture["evidence"], "synthetic-native");
         fixture
+    }
+
+    #[test]
+    fn owner_move_takeoff_keeps_the_first_two_swept_poses() {
+        use crate::{collision_index::SceneTriangle, mover_correction::CorrectionHistory};
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-owner-move-takeoff-v1.json"
+        ))
+        .unwrap();
+        let dt = fixture["input"]["dt"].as_f64().unwrap();
+        let speed = fixture["input"]["speed"].as_f64().unwrap();
+        let target = std::array::from_fn(|i| fixture["input"]["target"][i].as_f64().unwrap());
+        let minimum_y = fixture["expected"]["minimum_second_feet_y"]
+            .as_f64()
+            .unwrap();
+        let sample_bits = fixture["expected"]["rising_airborne_sample_bits"]
+            .as_u64()
+            .unwrap();
+        let rays = TriangleIndex::new([SceneTriangle {
+            vertices: [[-10.0, 0.0, -10.0], [0.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(vec![]).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let key = MoveToKey {
+            instance: 1,
+            raw: 0,
+            activation: 1,
+            start_ms: 0,
+        };
+        mover.set_owner_move(Some((key, target, speed)));
+        let mut history = CorrectionHistory::new(1, 1);
+        let mut observed = Vec::new();
+        for frame in 1..=2 {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Command::default()
+                    },
+                    dt,
+                    |_, _| {},
+                )
+                .unwrap();
+            let pose = mover.pose();
+            let probe = mover.last_ground_probe.unwrap();
+            assert!(mover.scripted_motion_at(frame));
+            history.swept_motion(frame, 16_000);
+            assert!(history.record(pose));
+            let correction = history
+                .candidate(frame, true)
+                .unwrap()
+                .update()
+                .movement
+                .unwrap();
+            assert_eq!(correction.position, pose.position);
+            assert_eq!(correction.velocity, pose.velocity);
+            assert_eq!(correction.flags, pose.flags);
+            let sample = sample_movement_flags(&pose).unwrap();
+            eprintln!(
+                "frame={frame} pre_support={:?} feet={:?} velocity={:?} flags={:#x} sample={sample:#x}",
+                probe.hit, pose.position, pose.velocity, pose.flags
+            );
+            observed.push((probe.hit, pose, sample));
+        }
+        assert!(
+            observed[0].0.is_some(),
+            "the cast begins with real floor support"
+        );
+        assert!(
+            observed[1].1.position[1] > minimum_y,
+            "the second sweep must not reseat on the old floor"
+        );
+        assert!(
+            observed
+                .iter()
+                .all(|(_, _, sample)| u64::from(sample & 7) == sample_bits),
+            "both committed poses are rising and airborne"
+        );
+        assert!(observed[1].0.is_none());
+    }
+
+    #[test]
+    fn owner_move_up_a_supported_slope_stays_standing() {
+        use crate::collision_index::SceneTriangle;
+
+        let rays = TriangleIndex::new([SceneTriangle {
+            vertices: [[-10.0, -5.0, -10.0], [0.0, 0.0, 10.0], [10.0, 5.0, -10.0]],
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(vec![]).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let key = MoveToKey {
+            instance: 1,
+            raw: 0,
+            activation: 1,
+            start_ms: 0,
+        };
+        mover.set_owner_move(Some((key, [4.0, 2.0, 0.0], 20.0)));
+        for frame in 1..=2 {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            assert!(mover.last_ground_probe.unwrap().grounded);
+            let pose = mover.pose();
+            assert!(pose.velocity[1] > 0.0);
+            assert!((pose.position[1] - pose.position[0] * 0.5).abs() <= SCRIPT_STEP);
+            assert_eq!(sample_movement_flags(&pose).unwrap() & 7, 6);
+        }
     }
 
     #[test]
