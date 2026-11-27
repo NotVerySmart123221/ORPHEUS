@@ -6,7 +6,7 @@ ORPHEUS builds on community Overwatch 1.74 research, preservation tooling, and o
 
 - **[leafall903](https://github.com/leafall903)** — maintainer, native Rust server architecture/port, Python server & infrastructure.
 - **[zichao-zhou](https://github.com/zichao-zhou)** — Rialto PvE and McCree combat foundation, Archives/Junkenstein entrance work, and scoped Python hero contributions ([PR #16](https://github.com/leafall903/ORPHEUS/pull/16)).
-- **memcpy** (`capetalista2026@gmail.com`) — General and Match lobby text chat, tank/StateScript direction-limit and ground-wave primitives, and owner hero reselection retry.
+- **[memcpy](https://github.com/memorycpy)** — Reinhardt and Zarya hero mechanics (Barrier Field, Charge, Fire Strike, Earthshatter ground-wave, Particle Cannon, Particle/Projected Barriers, Graviton Surge), StateScript direction-limit and ground-wave primitives, General and Match lobby text chat, and owner hero reselection retry.
 - Upstream lobby, runtime, and research contributors preserved in Git history and commit trailers (`Assisted-by:`).
 
 ## Upstream Foundations & Protocol Research
@@ -28,7 +28,7 @@ ORPHEUS builds on community Overwatch 1.74 research, preservation tooling, and o
 ## Rust Runtime Dependencies
 
 - **[Bevy ECS](https://github.com/bevyengine/bevy/tree/v0.16.1/crates/bevy_ecs)** (`0.16.1`, `std` only) — room-local ECS storage for bots and projectiles.
-- **[mlua](https://github.com/mlua-rs/mlua/tree/v0.11.6)** (`0.11.6`) & **[Lua 5.4](https://www.lua.org/)** — sandboxed script host for the optional `lua-debug` override.
+- **[mlua](https://github.com/mlua-rs/mlua/tree/v0.11.6)** (`0.11.6`) & **[Lua 5.4](https://www.lua.org/)** — sandboxed script host for the `lua-mods` Workshop/Mod VM and optional `lua-debug` AI patrol override.
 - **[RustCrypto](https://github.com/RustCrypto)** (`aes-gcm`, `hmac`, `sha2`), **[getrandom](https://github.com/rust-random/getrandom)**, **[Prost](https://github.com/tokio-rs/prost)** / **[prost-reflect](https://github.com/andrewhickman/prost-reflect)**, **[Tungstenite](https://github.com/snapview/tungstenite-rs)**, **[lzma-rust2](https://github.com/hasenbanck/lzma-rust2)**, **[Mio](https://github.com/tokio-rs/mio)**, **[flate2](https://docs.rs/flate2/)**, and **[roxmltree](https://github.com/RazrFalcon/roxmltree)** — cryptography, protobuf reflection, WebSocket/UDP I/O, compression, and DragonML parsing.
 - **SplitMix64** — deterministic PRNG algorithm from [Sebastiano Vigna](https://prng.di.unimi.it/splitmix.c) for local StateScript random expressions.
 

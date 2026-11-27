@@ -85,10 +85,14 @@ input[type="number"] { width: 6.4rem; }
 input[type="checkbox"] { accent-color: var(--accent); }
 .scene { margin: .8rem 0; }
 .views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.view-3d { grid-column: 1 / -1; }
+.view-header { display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding-right: .75rem; }
 .view, .entity-panel { overflow: hidden; border: 1px solid var(--edge); border-radius: .4rem; background: var(--panel); }
 .view h2, .entity-panel h2 { padding: .65rem .75rem; }
 .view h2 .code, .entity-panel h2 .code { margin-left: .35rem; }
 canvas { display: block; background: #0e141b; width: 100%; height: clamp(14rem, 36vw, 28rem); }
+#orbit { height: clamp(18rem, 42vw, 32rem); cursor: grab; touch-action: none; }
+#orbit:active { cursor: grabbing; }
 
 .legend { gap: .55rem 1rem; margin: .7rem 0; }
 .legend span { display: flex; align-items: center; gap: .4rem; }

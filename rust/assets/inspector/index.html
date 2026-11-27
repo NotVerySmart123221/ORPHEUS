@@ -48,6 +48,13 @@
       <button id="sample-spawn" type="button">Restore spawn sample</button>
     </form>
     <div class="views">
+      <section class="view view-3d" aria-label="3D Orbit view">
+        <div class="view-header">
+          <h2>3D Orbit <span class="code">X / Y / Z · drag to rotate · wheel to zoom</span></h2>
+          <button id="reset-orbit" type="button">Reset 3D view</button>
+        </div>
+        <canvas id="orbit" role="img" aria-label="Interactive 3D perspective projection of the current scene"></canvas>
+      </section>
       <section class="view" aria-label="Top view">
         <h2>Top <span class="code">X / Z</span></h2>
         <canvas id="top" role="img" aria-label="Top-down projection of the current scene"></canvas>

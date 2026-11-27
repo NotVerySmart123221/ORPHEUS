@@ -3,7 +3,7 @@
 Contributors are welcome across Rust implementation, behavior contracts, collision and navigation research, and 104319 client testing. Check [open issues](https://github.com/leafall903/ORPHEUS/issues?q=is%3Aissue+is%3Aopen) for tasks and the [roadmap](docs/ROADMAP.md) for behaviors that still need verification.
 
 - **`rust`:** Default branch and target for native Rust contributions.
-- **`main`:** Unmaintained Python server with reference tests, launchers, and data extractors.
+- **`python`:** Archived Python reference server with reference tests, launchers, and data extractors.
 
 ---
 
@@ -16,7 +16,7 @@ git clone --branch rust https://github.com/leafall903/ORPHEUS.git
 cd ORPHEUS
 ```
 
-To inspect the Python reference, clone with `git clone --branch main https://github.com/leafall903/ORPHEUS.git`. Use `rust` as the base for Rust pull requests. [Branch guide](docs/BRANCH_TRANSITION.md)
+To inspect the Python reference, clone with `git clone --branch python https://github.com/leafall903/ORPHEUS.git`. Use `rust` as the base for Rust pull requests. [Branch guide](docs/BRANCH_TRANSITION.md)
 
 ---
 
