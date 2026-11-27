@@ -17,10 +17,13 @@ use super::{OwnerBodyPreparationError, lifecycle::PlayerBodyRuntime, unsupported
 const COMMON_CHARGE_PARENT_GRAPH: u32 = 0x004b;
 const COMMON_CHARGE_GRAPH: u32 = 0x0b8b;
 const COMMON_CHARGE_ADMISSION_VAR: u32 = 2426;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
 const COMMON_ULT_CHARGE_VAR: u32 = 342;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
 const COMMON_ULT_CAP_VAR: u32 = 338;
 const COMMON_DAMAGE_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0012;
 const COMMON_HEAL_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0044;
+#[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
 const COMMON_DIRECT_CHARGE_MESSAGE: u64 = 0x0240_0000_0000_0148;
 
 #[derive(Clone, Copy)]
@@ -320,6 +323,7 @@ impl PlayerBodyRuntime {
         Ok(())
     }
 
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
     pub(crate) fn ult_charge_percent(&self) -> f64 {
         let cap_var = Variable {
             scope: Scope::Entity,
@@ -346,6 +350,7 @@ impl PlayerBodyRuntime {
 
     /// Credit direct ultimate charge via retail `GameMessage 0x0240000000000148`
     /// or direct entity variable update (`#342` capped by `#338`).
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
     pub(crate) fn add_ult_charge_points(&mut self, points: f64) -> io::Result<()> {
         if !points.is_finite() || points == 0.0 {
             return Ok(());
@@ -380,6 +385,7 @@ impl PlayerBodyRuntime {
         self.component.run_now(&mut self.world).map_err(unsupported)
     }
 
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
     pub(crate) fn set_ult_charge_percent(&mut self, percent: f64) -> io::Result<()> {
         if !percent.is_finite() {
             return Ok(());
