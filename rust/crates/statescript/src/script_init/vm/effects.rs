@@ -2241,6 +2241,13 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .graph(id)
             .state(usize::from(key.raw))
             .expect("chase state");
+        // An explicit object/bone destination cannot be coerced to zero.
+        // Abort through the authored plugs rather than strand the chase.
+        if field(&node.fields, "m_destination").is_null()
+            && (configured(node, "m_destinationBone") || configured(node, "m_destinationObject"))
+        {
+            return self.post(id, Event::Abort(key.raw));
+        }
         let Some(destination) =
             self.evaluate(id, node, field(&node.fields, "m_destination"), Some(key))
         else {
@@ -3625,12 +3632,36 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let generic_player = self.world.admits_generic_player_runtime(site);
         let speed_config = field(&node.fields, "m_speed");
         if speed_config.is_null()
-            || (!generic_player
-                && (field(&node.fields, "m_B060F688").as_u64() != Some(0)
-                    || !field(&node.fields, "m_destinationBone").is_null()
-                    || !field(&node.fields, "m_5BEFF040").is_null()))
+            || (!generic_player && field(&node.fields, "m_B060F688").as_u64() != Some(0))
         {
             return Ok(());
+        }
+        self.register_tick(key, self.machine.now_ms);
+        self.refresh_world_move_to(key, node)
+    }
+
+    pub(in crate::script_init) fn refresh_world_move_to(
+        &mut self,
+        key: StateKey,
+        node: &Node,
+    ) -> Result<(), InitFault> {
+        // An unavailable operand must not keep driving the previous request.
+        if let Some(state) = self.state_mut(key) {
+            state.kind = StateKind::MoveTo { movement: None };
+        }
+        let speed_config = field(&node.fields, "m_speed");
+        // The optional destination slots may carry expressions whose authored
+        // none branch selects them; reject a resolved bone, not its presence.
+        for optional in ["m_destinationBone", "m_5BEFF040"] {
+            let config = field(&node.fields, optional);
+            if !config.is_null()
+                && !matches!(
+                    self.evaluate(key.instance, node, config, None),
+                    None | Some(Value::Null) | Some(Value::Integer(0)) | Some(Value::Float(0.0))
+                )
+            {
+                return Ok(());
+            }
         }
         let entity_config = field(&node.fields, "m_destinationEntity");
         let entity_dest = if entity_config.is_null() {
@@ -3663,53 +3694,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             _ => return Ok(()),
         };
         self.set_move_request(key, destination, speed);
-        if generic_player
-            && matches!(
-                self.state(key).map(|state| state.kind),
-                Some(StateKind::MoveTo { movement: Some(_) })
-            )
-        {
-            self.register_tick(key, self.machine.now_ms);
-        }
-        Ok(())
-    }
-
-    pub(in crate::script_init) fn tick_move_to(
-        &mut self,
-        key: StateKey,
-        destination: [f64; 3],
-        speed: f64,
-    ) -> Result<(), InitFault> {
-        let node = self
-            .graph(key.instance)
-            .state(usize::from(key.raw))
-            .expect("move_to state");
-        let site = self.site(key.instance, node);
-        if !self.world.admits_generic_player_runtime(site) {
-            return Ok(());
-        }
-        let started_ms = self
-            .state(key)
-            .map_or(self.machine.now_ms, |state| state.start_ms);
-        let elapsed_ms = self.machine.now_ms.saturating_sub(started_ms);
-        let grounded = self
-            .world
-            .movement_sample(site)
-            .is_some_and(|sample| sample.air_ticks == 0);
-        let arrived = self.world.position(site.entity).is_some_and(|pos| {
-            let dx = destination[0] - pos[0];
-            let dy = destination[1] - pos[1];
-            let dz = destination[2] - pos[2];
-            let hdist = dx.hypot(dz);
-            dx.hypot(dy).hypot(dz) <= 0.45
-                || (elapsed_ms >= 112
-                    && hdist <= 0.75
-                    && (dy.abs() <= 0.30 || (grounded && dy.abs() <= 0.85)))
-        });
-        let timeout_ms = ((45.0 / speed.max(4.0)) * 1000.0) as u64 + 500;
-        if arrived || elapsed_ms >= timeout_ms.clamp(650, 2600) {
-            self.post(key.instance, Event::Finish(key.raw))?;
-        }
         Ok(())
     }
 

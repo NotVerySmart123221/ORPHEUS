@@ -500,6 +500,7 @@ enum Family {
     None,
     Switch,
     DelayedSwitch,
+    Start,
     Stack,
     Anim,
     Chase,
@@ -520,7 +521,6 @@ enum Family {
     Pulser,
     SprayPlacement,
     Blink,
-    Start,
     NoneU8,
     NoneU16,
     FlaggedValue,
@@ -535,6 +535,7 @@ impl Family {
             "none" => Self::None,
             "switch" => Self::Switch,
             "two_bits" => Self::DelayedSwitch,
+            "start" => Self::Start,
             "stack" => Self::Stack,
             "anim" => Self::Anim,
             "chase" => Self::Chase,
@@ -555,7 +556,6 @@ impl Family {
             "pulser" => Self::Pulser,
             "861D9015" => Self::SprayPlacement,
             "blink" => Self::Blink,
-            "start" => Self::Start,
             "none+u8" => Self::NoneU8,
             "none+u16" => Self::NoneU16,
             "63B7ADFD" => Self::FlaggedValue,
@@ -607,6 +607,21 @@ fn project(
         Family::None | Family::Send | Family::Link => {}
         Family::Switch => {
             fields.insert("current", Value::Bool(vm.flag("current")).into());
+        }
+        Family::Start => {
+            // Owner frames store this payload's time relative to the state
+            // start (reader C95C40 / C91150); the layout reads it as a signed
+            // varint on the owner condition only. Field names follow the
+            // extraction variants of this start-parameter class.
+            if let PayloadMode::Owner { frame_time, .. } = mode {
+                let start = vm.integer("start", frame_time)?;
+                let elapsed = frame_time
+                    .checked_sub(start)
+                    .ok_or(PayloadError::TimeRange)?;
+                for name in ["t", "start"] {
+                    fields.insert(name, Value::Integer(elapsed).into());
+                }
+            }
         }
         Family::DelayedSwitch => {
             fields.insert("a", Value::Bool(vm.flag("current")).into());
@@ -661,16 +676,6 @@ fn project(
             fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
         }
         Family::Blink => {}
-        Family::Start if owner => {
-            if let PayloadMode::Owner { frame_time, .. } = mode {
-                let start = vm.integer("start", frame_time)?;
-                let elapsed = frame_time
-                    .checked_sub(start)
-                    .ok_or(PayloadError::TimeRange)?;
-                fields.insert("t", Value::Integer(elapsed).into());
-            }
-        }
-        Family::Start => {}
         Family::NoneU8 => {
             fields.insert(
                 "m_B4802CE3",
@@ -1196,6 +1201,7 @@ mod tests {
                 {"start":16003,"offset":-7,"subindex":2,"volleys":3,"counter":70}
             ],
             "anim":[{"counter":6},{"counter":9}],
+            "start":[{"start":15968},{"start":16008}],
             "chase":[
                 {"cur":1.5,"reached":false,"remaining":null,"last":null},
                 {"cur":{"vector":[1.0,-2.0,0.5]},"reached":true,"remaining":70000,"last":16005},
@@ -1261,11 +1267,43 @@ mod tests {
         assert!(table.sendable("STU_2F07848F", false));
         let mut projected: Vec<_> = table.classes().filter(|codec| codec.projected()).collect();
         projected.sort_by(|left, right| left.hash.cmp(&right.hash));
-        assert_eq!(projected.len(), 582);
+        assert_eq!(projected.len(), 583);
+        let trace = table.codec("STU_4BBC5D09").unwrap();
+        assert!(trace.projected());
+        assert!(table.sendable("STU_4BBC5D09", true));
+        // The owner frame carries the payload's time relative to the state
+        // start (32 ms here, sign plus the 0+8 form); observer frames carry
+        // no start parameter because the layout gates it on the owner bit.
+        let out = trace
+            .payload(
+                &StatePayload::from([("start".into(), Value::Integer(16000 - 32))]),
+                PayloadMode::Owner {
+                    full: false,
+                    frame_time: 16000,
+                    frame_ms: 16,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.bit_len(), 10);
+        let future = trace
+            .payload(
+                &StatePayload::from([("start".into(), Value::Integer(16000 + 8))]),
+                PayloadMode::Owner {
+                    full: false,
+                    frame_time: 16000,
+                    frame_ms: 16,
+                },
+            )
+            .unwrap();
+        assert_eq!(future.bit_len(), 10);
+        let remote = trace
+            .payload(&StatePayload::new(), PayloadMode::Remote { full: true })
+            .unwrap();
+        assert_eq!((remote.bit_len(), remote.as_bytes()), (0, &[][..]));
         let time_scale = table.codec("STU_2F07848F").unwrap();
         let aim_lock = table.codec("STU_9935FBC8").unwrap();
         let samples = samples();
-        assert_eq!(samples.len(), 19);
+        assert_eq!(samples.len(), 20);
         let modes = [
             PayloadMode::Owner {
                 full: false,
@@ -1311,10 +1349,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 1833);
+        assert_eq!(count, 1839);
         assert_eq!(
             format!("{:x}", digest.finalize()),
-            "6f316769d720476a184200555630aa4ed0b33dd9418daf524cd3019412c14955"
+            "880f14bc8ef44e8cabfe412f7a83d221fac9f54a940c4bdccfae3eb8b80775b5"
         );
     }
 }

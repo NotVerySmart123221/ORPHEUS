@@ -319,6 +319,11 @@ pub trait Context {
         None
     }
 
+    /// View pitch in degrees for the GetViewPitch operand.
+    fn pitch(&mut self, _entity: u32) -> Option<f64> {
+        None
+    }
+
     /// A position read by an authored room operand.
     fn authored_position(&mut self, entity: u32) -> Option<[f64; 3]> {
         self.position(entity)
@@ -519,6 +524,14 @@ pub trait Context {
     /// None means the native is unavailable. Some(Null) is a computed result.
     fn native(&mut self, _config: &Json) -> Option<Value> {
         None
+    }
+
+    /// The reference component policy (runtime.py `component.strict`).
+    /// Strict keeps every unresolved native a loud error; the normal
+    /// policy answers what the reference's `default_native` does: a typed
+    /// null with a warn-once log (no report, no stop).
+    fn strict(&self) -> bool {
+        true
     }
 
     /// A known native evaluator returned without writing its destination.

@@ -11,14 +11,16 @@ use crate::{
     contact_hull::HullContactError,
     contact_solver::clip_velocity,
     contact_world::ContactWorld,
-    mover_ground::{GroundProbe, ProbePose, pogo, standing_body},
+    mover_ground::{GroundProbe, NOT_GROUND, ProbePose, pogo, standing_body},
     mover_kinematics::{Ground, MotionInput, Poses, VelocityStep, poses},
     mover_modifiers::{Modifier, ModifierKey, ModifierTimeline},
     mover_posture::{
         CROUCHED, IN_AIR, JUMPED, NOT_GROUND_UNDER, Posture, PostureStep, TOUCHING, snap,
     },
     mover_settings::MoverSettings,
-    script_init::{Relocation, ScriptedMotion, SweptDisplacement, VelocityAxis},
+    script_init::{
+        MoveOutcome, MoveToKey, Relocation, ScriptedMotion, SweptDisplacement, VelocityAxis,
+    },
     world::{Movement, NO_INPUT},
 };
 
@@ -285,6 +287,13 @@ pub struct Mover {
     velocity_changes: Vec<(u32, VelocityChange)>,
     scripted_motion: Option<(u32, ScriptedMotion)>,
     scripted_motion_frame: Option<u32>,
+    owner_move: Option<(MoveToKey, [f64; 3], f64)>,
+    owner_move_result: Option<(u32, MoveToKey, MoveOutcome)>,
+    /// Whether the last pose ran the owner-move drive AND moved the pose
+    /// (reference: the owner's correction window opens on a committed,
+    /// feet-moving drive pose only — a dt-discarded or fully seated drive
+    /// is no scripted motion). Set by `move_body`, consumed by `step`.
+    drive_pose_moved: bool,
     actor_contact: bool,
     pending_ally_separation: [f64; 2],
     ball_roll_speed: Option<f64>,
@@ -324,6 +333,9 @@ impl Mover {
             velocity_changes: Vec::new(),
             scripted_motion: None,
             scripted_motion_frame: None,
+            owner_move: None,
+            owner_move_result: None,
+            drive_pose_moved: false,
             actor_contact: false,
             pending_ally_separation: [0.0; 2],
             ball_roll_speed: None,
@@ -348,6 +360,11 @@ impl Mover {
 
     pub fn pose(&self) -> Movement {
         self.pose
+    }
+
+    /// The team proxy collision category this mover queries map geometry with.
+    pub fn collision_category(&self) -> u16 {
+        self.category
     }
 
     pub(crate) fn eye_height(&self) -> f64 {
@@ -507,11 +524,13 @@ impl Mover {
         self.velocity_changes
             .retain(|(_, change)| matches!(change, VelocityChange::Impulse(_)));
         self.scripted_motion = None;
+        self.owner_move = None;
     }
 
     pub(crate) fn clear_pending_motion(&mut self) {
         self.velocity_changes.clear();
         self.scripted_motion = None;
+        self.owner_move = None;
     }
 
     pub(crate) fn has_pending_script_motion(&self) -> bool {
@@ -521,6 +540,16 @@ impl Mover {
     /// Whether this successfully completed pose moved through a script request.
     pub(crate) fn scripted_motion_at(&self, frame: u32) -> bool {
         self.scripted_motion_frame == Some(frame)
+    }
+
+    pub(crate) fn set_owner_move(&mut self, request: Option<(MoveToKey, [f64; 3], f64)>) {
+        self.owner_move = request;
+    }
+
+    pub(crate) fn owner_move_result(&self, frame: u32) -> Option<(MoveToKey, MoveOutcome)> {
+        self.owner_move_result
+            .filter(|(posed, _, _)| *posed == frame)
+            .map(|(_, key, outcome)| (key, outcome))
     }
 
     pub(crate) fn needs_owner_correction_at(&self, frame: u32) -> bool {
@@ -686,6 +715,7 @@ impl Mover {
             &[]
         };
         self.scripted_motion_frame = None;
+        self.owner_move_result = None;
         let mut scripted_motion_changed = false;
         if self
             .scripted_motion
@@ -710,6 +740,7 @@ impl Mover {
             }
         }
         let mut launched = false;
+        let mut velocity_edited = false;
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
                 let before = self.pose.velocity;
@@ -717,6 +748,7 @@ impl Mover {
                 if self.pose.velocity[1] > 0.0 && before[1] <= 0.0 {
                     launched = true;
                 }
+                velocity_edited |= self.pose.velocity != before;
                 scripted_motion_changed |=
                     !matches!(change, VelocityChange::Delta(_)) && self.pose.velocity != before;
                 false
@@ -862,6 +894,14 @@ impl Mover {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
+        // A pre-cast jump is history, not a jump request on the terminal pose.
+        let allow_arrival_settle = settings.gravity_scale > 0.0
+            && active.intent(
+                crate::mover_modifiers::JUMP_INTENT,
+                f64::from(u8::from(command.buttons & crate::commands::JUMP != 0)),
+            ) <= 0.5
+            && !velocity_edited
+            && !scripted_motion_changed;
         let (vertical, actor_contact) = self.move_body(
             rays,
             velocity,
@@ -869,8 +909,15 @@ impl Mover {
             dt,
             command.frame,
             blockers,
-            settings.gravity_scale,
+            &settings,
+            allow_arrival_settle,
+            standing_on_actor,
         )?;
+        // Reference parity: the owner's correction window opens on a pose
+        // whose dt-valid drive actually moved the feet, not on every frame
+        // with a pending request (a dt-discarded or fully-seated drive runs
+        // ordinary motion, not scripted motion).
+        scripted_motion_changed |= self.drive_pose_moved;
         self.posture.finish_fall(settings.gravity_scale, vertical);
         let pending_ally = std::mem::take(&mut self.pending_ally_separation);
         let ally_pushed = if pending_ally != [0.0; 2] {
@@ -984,9 +1031,12 @@ impl Mover {
         dt: f64,
         _frame: u32,
         blockers: &[CapsulePose],
-        gravity_scale: f64,
+        settings: &MoverSettings,
+        allow_arrival_settle: bool,
+        standing_on_actor: bool,
     ) -> Result<(f64, bool), HullContactError> {
         let grounded = self.posture.ground() == Ground::Standing;
+        self.drive_pose_moved = false;
         let [x, y, z] = velocity;
         let velocity = if grounded && (x * x + y * y) + z * z >= EPSILON {
             along_ground([x, z], normal)
@@ -996,11 +1046,38 @@ impl Mover {
         let [x, y, z] = velocity.map(|axis| axis as f32);
         let dt = dt as f32;
         let rise = self.posture.spring_speed();
-        let displacement = [
+        // Replace this pose's displacement, not the capsule solver. The
+        // measured sweep velocity seeds ordinary movement after scope exit.
+        // A drive whose whole step falls under the quantisation is dropped
+        // for this pose: the driven velocity reads the authored zero and no
+        // ending fires (reference mover.py:942-946, 215).
+        let drive = self.owner_move.filter(|(_, _, speed)| {
+            speed.is_finite() && f64::from(dt).is_finite() && *speed * f64::from(dt) >= SCRIPT_STEP
+        });
+        let [x, y, z] = if self.owner_move.is_some() && drive.is_none() {
+            [0.0, 0.0, 0.0]
+        } else {
+            [x, y, z]
+        };
+        let ordinary_displacement = [
             ((0.0 * rise + x) * dt) + 0.0,
             ((rise + y) * dt) + 0.0,
             ((0.0 * rise + z) * dt) + 0.0,
         ];
+        let start = self.body.position();
+        let previous_feet = self.pose.position;
+        let displacement = drive.map_or(ordinary_displacement, |(_, destination, speed)| {
+            let delta = std::array::from_fn::<_, 3, _>(|i| destination[i] - previous_feet[i]);
+            let length = distance(delta);
+            let step = (speed * f64::from(dt)).min(length).min(32.0);
+            delta.map(|axis| {
+                if length > 0.0 {
+                    (axis * step / length) as f32
+                } else {
+                    0.0
+                }
+            })
+        });
         let movement = self.body.move_capsule_against(displacement, dt, blockers)?;
         let mut actor_contact = movement.actor_contact;
         let [mut x, mut y, mut z] = clip_velocity([x, y, z], movement.planes).map(f64::from);
@@ -1016,7 +1093,7 @@ impl Mover {
             (self.posture.flags & !TOUCHING) | (u32::from(movement.touching) * TOUCHING);
         // Preserve wall-ride / wall-climb vertical glide when touching a wall with
         // reduced gravity so Lúcio/Genji/Hanzo are not dragged down by wall friction.
-        if !grounded && movement.touching && gravity_scale <= 0.25 && y < 0.0 {
+        if !grounded && movement.touching && settings.gravity_scale <= 0.25 && y < 0.0 {
             y = 0.0;
         }
         let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
@@ -1027,7 +1104,8 @@ impl Mover {
             .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
             .map(|plane| plane.normal.map(f64::from))
             .collect();
-        let [px, py, pz] = movement.position;
+        let capsule_end = movement.position;
+        let [px, py, pz] = capsule_end;
         let feet = f64::from(py - lift);
         let floor = rays.lowest() - ABYSS;
         let mut resolved = [f64::from(px), feet.max(floor), f64::from(pz)];
@@ -1095,7 +1173,8 @@ impl Mover {
                 }
             }
         }
-        self.pose.position = resolved.map(snap);
+        let feet_raw = resolved;
+        self.pose.position = feet_raw.map(snap);
         #[cfg(any(test, feature = "inspector"))]
         {
             let point = self.pose.position;
@@ -1116,9 +1195,111 @@ impl Mover {
         if feet < floor {
             y = 0.0;
         }
+        if let Some((key, destination, _)) = drive {
+            // The drive branch ran (dt-valid): the pose counts as scripted
+            // motion for the owner's correction window only if the drive
+            // actually moved the feet (reference: server_motion opens the
+            // window on a committed, feet-moving drive pose; a fully seated
+            // drive commits no motion).
+            self.drive_pose_moved = self.pose.position != previous_feet;
+            let applied = std::array::from_fn::<_, 3, _>(|i| capsule_end[i] - start[i]);
+            [x, y, z] = applied.map(|delta| f64::from(delta / dt));
+            if grounded && self.drive_pose_moved && y > 0.0 && py > previous_feet[1] {
+                // Check the committed feet, after actor depenetration, without
+                // the standing step-down band that can reseat on the old floor.
+                let support = self.probe.probe(
+                    rays,
+                    self.body.world(),
+                    settings,
+                    ProbePose {
+                        feet: [px, py - SCRIPT_STEP, pz],
+                        velocity: [x, y, z],
+                        spring: self.posture.spring_offset(),
+                        crouched: self.posture.crouched(),
+                        airborne: true,
+                    },
+                    f64::from(dt),
+                    self.category,
+                )?;
+                // Keep upstream crown support if it still reaches the feet.
+                let crown_support = standing_on_actor
+                    && blockers.iter().any(|blocker| {
+                        let crown = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                        let radius = f64::from(blocker.radius)
+                            + if self.posture.crouched() {
+                                settings.crouch_radius
+                            } else {
+                                settings.stand_radius
+                            };
+                        (py - crown).abs() <= SCRIPT_STEP
+                            && (px - f64::from(blocker.position[0]))
+                                .hypot(pz - f64::from(blocker.position[2]))
+                                < radius
+                    });
+                if !crown_support && support.ground.is_none_or(|hit| hit.y < py - SCRIPT_STEP) {
+                    self.posture.begin_velocity_launch();
+                }
+            }
+            // RAW solver feet, exactly as the reference (whose position is
+            // float, not the wire grid): the drive ends when the remaining
+            // distance is within the quantisation (arrival) or this pose
+            // closed less than half a quantisation of the line (geometric
+            // block). Anything that keeps closing the line — a graze along
+            // a face included — keeps the drive alive on the measured sweep
+            // velocity. The wire-grid snap stays for pose/records; measuring
+            // on it would let the half-up ratchet fake one grid tick of
+            // progress per pose on a head-on press and tunnel the capsule.
+            let delta = std::array::from_fn::<_, 3, _>(|i| destination[i] - previous_feet[i]);
+            let whole = distance(delta);
+            let remaining = distance(std::array::from_fn(|i| destination[i] - feet_raw[i]));
+            let outcome = if remaining <= SCRIPT_STEP {
+                Some(MoveOutcome::Arrived)
+            } else if whole - remaining < SCRIPT_STEP / 2.0 {
+                Some(MoveOutcome::Blocked)
+            } else {
+                None
+            };
+            self.owner_move_result = outcome.map(|outcome| (_frame, key, outcome));
+            // A world target at walkable surface height is a stop point on
+            // normal arrival. Check map support at the target AND the actual
+            // terminal feet; the pre-sweep probe does not establish either.
+            // Do not change posture or remove sideways solver motion.
+            if outcome == Some(MoveOutcome::Arrived)
+                && allow_arrival_settle
+                && whole > 0.0
+                && [destination, self.pose.position]
+                    .into_iter()
+                    .all(|[px, py, pz]| {
+                        rays.ground(px, pz, py + SCRIPT_STEP, py - SCRIPT_STEP, self.category)
+                            .is_some_and(|hit| {
+                                hit.surface & NOT_GROUND == 0
+                                    && hit.normal[1]
+                                        > self
+                                            .base
+                                            .max_slope
+                                            .to_radians()
+                                            .clamp(0.0, 1.5707845)
+                                            .cos()
+                            })
+                    })
+            {
+                let axis = delta.map(|v| v / whole);
+                let forward = (x * axis[0] + y * axis[1] + z * axis[2]).max(0.0);
+                [x, y, z] = std::array::from_fn(|i| [x, y, z][i] - axis[i] * forward);
+            }
+        }
         self.pose.velocity = [x, y, z].map(snap);
         Ok((y, actor_contact))
     }
+}
+
+/// Position quantisation, the reference mover's `STEP`
+/// (mover.py:215; engine constant 0x7FF789B77730). Scripted drives
+/// compare progress against it, not against an invented epsilon.
+const SCRIPT_STEP: f64 = 1.0 / 1024.0;
+
+fn distance(delta: [f64; 3]) -> f64 {
+    delta.into_iter().fold(0.0, f64::hypot)
 }
 
 fn along_ground([x, z]: [f64; 2], [nx, ny, nz]: [f64; 3]) -> [f64; 3] {
@@ -1174,6 +1355,313 @@ mod tests {
         assert_eq!(fixture["case_id"], "native-swept-displacement.synthetic.v1");
         assert_eq!(fixture["evidence"], "synthetic-native");
         fixture
+    }
+
+    #[test]
+    fn owner_move_takeoff_keeps_the_first_two_swept_poses() {
+        use crate::{collision_index::SceneTriangle, mover_correction::CorrectionHistory};
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/native-owner-move-takeoff-v1.json"
+        ))
+        .unwrap();
+        let dt = fixture["input"]["dt"].as_f64().unwrap();
+        let speed = fixture["input"]["speed"].as_f64().unwrap();
+        let target = std::array::from_fn(|i| fixture["input"]["target"][i].as_f64().unwrap());
+        let minimum_y = fixture["expected"]["minimum_second_feet_y"]
+            .as_f64()
+            .unwrap();
+        let sample_bits = fixture["expected"]["rising_airborne_sample_bits"]
+            .as_u64()
+            .unwrap();
+        let rays = TriangleIndex::new([SceneTriangle {
+            vertices: [[-10.0, 0.0, -10.0], [0.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(vec![]).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let key = MoveToKey {
+            instance: 1,
+            raw: 0,
+            activation: 1,
+            start_ms: 0,
+        };
+        mover.set_owner_move(Some((key, target, speed)));
+        let mut history = CorrectionHistory::new(1, 1);
+        let mut observed = Vec::new();
+        for frame in 1..=2 {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Command::default()
+                    },
+                    dt,
+                    |_, _| {},
+                )
+                .unwrap();
+            let pose = mover.pose();
+            let probe = mover.last_ground_probe.unwrap();
+            assert!(mover.scripted_motion_at(frame));
+            history.swept_motion(frame, 16_000);
+            assert!(history.record(pose));
+            let correction = history
+                .candidate(frame, true)
+                .unwrap()
+                .update()
+                .movement
+                .unwrap();
+            assert_eq!(correction.position, pose.position);
+            assert_eq!(correction.velocity, pose.velocity);
+            assert_eq!(correction.flags, pose.flags);
+            let sample = sample_movement_flags(&pose).unwrap();
+            eprintln!(
+                "frame={frame} pre_support={:?} feet={:?} velocity={:?} flags={:#x} sample={sample:#x}",
+                probe.hit, pose.position, pose.velocity, pose.flags
+            );
+            observed.push((probe.hit, pose, sample));
+        }
+        assert!(
+            observed[0].0.is_some(),
+            "the cast begins with real floor support"
+        );
+        assert!(
+            observed[1].1.position[1] > minimum_y,
+            "the second sweep must not reseat on the old floor"
+        );
+        assert!(
+            observed
+                .iter()
+                .all(|(_, _, sample)| u64::from(sample & 7) == sample_bits),
+            "both committed poses are rising and airborne"
+        );
+        assert!(observed[1].0.is_none());
+    }
+
+    #[test]
+    fn owner_move_up_a_supported_slope_stays_standing() {
+        use crate::collision_index::SceneTriangle;
+
+        let rays = TriangleIndex::new([SceneTriangle {
+            vertices: [[-10.0, -5.0, -10.0], [0.0, 0.0, 10.0], [10.0, 5.0, -10.0]],
+            mask: 0x18,
+            surface: 0,
+        }])
+        .unwrap();
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::new(ContactWorld::new(vec![]).unwrap()),
+            [0.0; 3],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let key = MoveToKey {
+            instance: 1,
+            raw: 0,
+            activation: 1,
+            start_ms: 0,
+        };
+        mover.set_owner_move(Some((key, [4.0, 2.0, 0.0], 20.0)));
+        for frame in 1..=2 {
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            assert!(mover.last_ground_probe.unwrap().grounded);
+            let pose = mover.pose();
+            assert!(pose.velocity[1] > 0.0);
+            assert!((pose.position[1] - pose.position[0] * 0.5).abs() <= SCRIPT_STEP);
+            assert_eq!(sample_movement_flags(&pose).unwrap() & 7, 6);
+        }
+    }
+
+    #[test]
+    fn owner_move_supported_arrival_only_retires_forward_drive() {
+        use crate::collision_index::SceneTriangle;
+
+        // Reduced replay of the last 104319 cast: the final pose of a
+        // diagonal upward drive reaching the height of a walkable shelf.
+        let start = [31.10546875, 12.328125, 15.21875];
+        let target = [30.985521803373274, 12.500020027160645, 15.357037517438323];
+        for (surface, buttons, initial_y, should_settle) in [
+            (0, 0, 0.0, true),
+            (0, 0, 4.0, true),
+            (0, 0, -4.0, true),
+            (1, 0, 0.0, false),
+            (0, JUMP, 0.0, false),
+        ] {
+            let rays = TriangleIndex::new([SceneTriangle {
+                vertices: [[27.0, 12.5, 14.0], [31.02, 12.5, 20.0], [31.02, 12.5, 14.0]],
+                mask: 0x18,
+                surface,
+            }])
+            .unwrap();
+            let mut mover = Mover::new(
+                MoverSettings::default(),
+                Arc::new(ContactWorld::new(vec![]).unwrap()),
+                start,
+                0,
+                0x18,
+            )
+            .unwrap();
+            mover.pose.velocity[1] = initial_y;
+            let key = MoveToKey {
+                instance: 8,
+                raw: 5,
+                activation: 1,
+                start_ms: 0,
+            };
+            mover.set_owner_move(Some((key, target, 20.0)));
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame: 1,
+                        buttons,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            assert_eq!(
+                mover.owner_move_result(1),
+                Some((key, MoveOutcome::Arrived))
+            );
+            let terminal = mover.pose();
+            mover.set_owner_move(None);
+            mover
+                .step(
+                    &rays,
+                    Command {
+                        frame: 2,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            if should_settle {
+                assert_eq!(
+                    terminal.velocity, [0.0; 3],
+                    "the arrival sweep consists entirely of drive motion"
+                );
+                assert_eq!(
+                    mover.pose().position,
+                    terminal.position,
+                    "the first free pose must stay on the shelf"
+                );
+            } else {
+                assert!(
+                    terminal.velocity[1] > 10.0,
+                    "unsupported or jump poses retain their drive carry"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a prepared 104319 Practice Range movement cache"]
+    fn practice_range_owner_move_replays_last_promoted_arrival() {
+        let root = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+        let cache =
+            read_movement_cache(File::open(root.join("collision/0688.col")).unwrap()).unwrap();
+        let ids = BTreeSet::new();
+        let scene = CollisionScene::movement_probe(&cache, &ids).unwrap();
+        let world = Arc::new(ContactWorld::from_movement_cache(cache, &ids).unwrap());
+        let target = [30.985521803373274, 12.500020027160645, 15.357037517438323];
+        let key = MoveToKey {
+            instance: 8,
+            raw: 5,
+            activation: 1,
+            start_ms: 0,
+        };
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            world,
+            [38.00390625, 2.4716796875, 7.30859375],
+            -7501,
+            0x18,
+        )
+        .unwrap();
+        mover.pose.velocity = [0.0, -4.0634765625, 0.0];
+        mover.set_owner_move(Some((key, target, 20.0)));
+        let mut arrival = None;
+        for frame in 1..=90 {
+            mover
+                .step(
+                    scene.triangles(),
+                    Command {
+                        frame,
+                        yaw: -7501,
+                        pitch: -7047,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+            if let Some((_, outcome)) = mover.owner_move_result(frame) {
+                assert_eq!(
+                    outcome,
+                    MoveOutcome::Arrived,
+                    "frame {frame}, pose {:?}",
+                    mover.pose()
+                );
+                arrival = Some(frame);
+                break;
+            }
+        }
+        let frame = arrival.expect("drive must reach the live target");
+        let at = mover.pose();
+        mover.set_owner_move(None);
+        for frame in frame + 1..=frame + 60 {
+            mover
+                .step(
+                    scene.triangles(),
+                    Command {
+                        frame,
+                        yaw: -7501,
+                        pitch: -7047,
+                        ..Command::default()
+                    },
+                    0.016,
+                    |_, _| {},
+                )
+                .unwrap();
+        }
+        let settled = mover.pose();
+        println!(
+            "terminal frame={frame} feet={:?} velocity={:?}; settled feet={:?} velocity={:?}",
+            at.position, at.velocity, settled.position, settled.velocity
+        );
+        assert!(
+            distance(at.velocity) <= SCRIPT_STEP,
+            "drive carry at arrival: {:?}",
+            at.velocity
+        );
+        assert!(
+            distance(std::array::from_fn(|i| settled.position[i] - at.position[i])) <= SCRIPT_STEP
+        );
+        assert_eq!(settled.velocity, [0.0; 3]);
+        assert_eq!(mover.posture.ground(), Ground::Standing);
     }
 
     #[test]
@@ -1922,6 +2410,137 @@ mod tests {
         assert_eq!(sample_movement_flags(&pose), Some(1 | (1 << 3) | (1 << 4)));
         pose.flags |= 0x80;
         assert_eq!(sample_movement_flags(&pose), None);
+    }
+
+    #[test]
+    fn scripted_drive_endings_follow_the_reference_threshold_rule() {
+        // Reviewer (1) + (3) on the mover alone. The production loop feeds
+        // the drive from the live state each pose (`stage_scripted_motion`)
+        // and drops it once a terminal was consumed; the mover itself keeps
+        // no self-clearing state. Rules mirrored from `_move_to`
+        // (mover.py:215, 942-946, 1502-1536): a pose that keeps closing the
+        // line — a graze along a face included — keeps the drive, only a
+        // pose that closes less than half a quantisation ends it (Blocked,
+        // routed and plug-tested in `move_to.rs`), arrival within the
+        // quantisation ends it (Arrived), and a drive too slow to cover one
+        // quantisation this pose is dropped without an ending, velocity
+        // zeroed. The reviewer's "stalled near an obstruction without
+        // terminal" hypothesis is REFUTED for the graze: the old
+        // `1 mm / 10 %` shortfall rule called the FIRST grazing pose
+        // Blocked (measured before this rule change: every pull against
+        // sloped geometry aborted at once), and the climb below now ends in
+        // a single Arrived after sliding the whole face. A head-on press
+        // against a single flat quad behaves fixture-dependently in this
+        // port (skin creep / one-sided winding); that regime is closed on
+        // the authored graph side (gate Wait / scope exit / kill) and its
+        // solver-level forensics is a separate concern from the drive rule.
+        use crate::{
+            collision_cache::{Mesh, Triangle},
+            contact_mesh::ContactMesh,
+            contact_world::{StaticGeometry, StaticShape},
+        };
+        let step = MoveToKey {
+            instance: 1,
+            raw: 0,
+            activation: 1,
+            start_ms: 0,
+        };
+        // A 30-degree slope under the feet rising toward -y: a drive into
+        // it grazes upward and reaches the destination above the edge.
+        let wall = Mesh {
+            vertices: vec![
+                [-20.0, -10.0, 7.77],
+                [-20.0, 10.0, -3.77],
+                [20.0, -10.0, 7.77],
+                [20.0, 10.0, -3.77],
+            ],
+            triangles: vec![
+                Triangle {
+                    corners: [0, 1, 2],
+                    wings: [-1, 3, -1],
+                    mask: 0x18,
+                    surface: 0,
+                },
+                Triangle {
+                    corners: [3, 2, 1],
+                    wings: [-1, 0, -1],
+                    mask: 0x18,
+                    surface: 0,
+                },
+            ],
+        };
+        let mesh = ContactMesh::new(wall, [1.0; 3], u16::MAX).unwrap();
+        let shape = StaticShape::new(StaticGeometry::Mesh(Arc::new(mesh)), None).unwrap();
+        let world = Arc::new(ContactWorld::new(vec![shape]).unwrap());
+        let rays = TriangleIndex::new([]).unwrap();
+        let neutral = || Command {
+            frame: 9,
+            ..Command::default()
+        };
+        let mut mover = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&world),
+            [0.0, -9.4, 7.4],
+            0,
+            0x18,
+        )
+        .unwrap();
+        let destination = [0.0, -6.0, 12.0];
+        mover.set_owner_move(Some((step, destination, 8.0)));
+        let mut endings = Vec::new();
+        for _ in 0..400 {
+            mover.step(&rays, neutral(), 0.025, |_, _| {}).unwrap();
+            // Reviewer (1) follow-up: each moved drive pose marks the frame
+            // as scripted motion for the owner's correction window.
+            assert!(mover.scripted_motion_at(9));
+            if let Some((_, outcome)) = mover.owner_move_result(9) {
+                endings.push(outcome);
+                // The live state ends; staging re-derives None from now on.
+                mover.set_owner_move(None);
+                break;
+            }
+        }
+        assert_eq!(
+            endings,
+            vec![MoveOutcome::Arrived],
+            "grazing keeps driving to the destination, pose {:?}",
+            mover.pose.position
+        );
+        assert!(
+            mover.pose.position[2] > 11.0,
+            "the graze climbed over the face, pose {:?}",
+            mover.pose.position
+        );
+        // Degenerate pose: a drive too slow to cover a quantisation step
+        // drops without an ending; the driven velocity reads zero (there is
+        // no fractional world-target progress kept between poses).
+        let mut slow = Mover::new(
+            MoverSettings::default(),
+            Arc::clone(&world),
+            [0.0, -9.4, 7.4],
+            0,
+            0x18,
+        )
+        .unwrap();
+        slow.set_owner_move(Some((step, destination, 0.0001)));
+        slow.step(&rays, neutral(), 0.025, |_, _| {}).unwrap();
+        assert_eq!(
+            slow.owner_move_result(9),
+            None,
+            "no ending on a dropped drive"
+        );
+        assert_eq!(
+            slow.pose.velocity,
+            [0.0, 0.0, 0.0],
+            "the drop zeroes the driven velocity"
+        );
+        // The dropped drive is ordinary motion, not scripted motion: the
+        // owner's correction window must not open on this frame (the
+        // pre-fix `owner_move.is_some()` marked it anyway).
+        assert!(
+            !slow.scripted_motion_at(9),
+            "a dt-discarded drive must not mark a scripted-motion frame"
+        );
     }
 
     #[test]

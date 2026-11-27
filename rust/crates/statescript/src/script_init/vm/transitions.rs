@@ -140,6 +140,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     }
                     Some(StateKind::Switch { .. }) => self.post(id, Event::Reevaluate(raw))?,
                     Some(StateKind::Shockwave { .. }) => self.tick_shockwave(key)?,
+                    Some(StateKind::StaticTrace { .. }) => self.tick_static_trace(key)?,
+                    Some(StateKind::MoveTo { .. }) => {
+                        let node = self.graph(id).state(usize::from(raw)).expect("move to");
+                        self.refresh_world_move_to(key, node)?;
+                    }
                     Some(StateKind::ModifyHealth) => {
                         let node = self
                             .graph(id)
@@ -250,11 +255,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             .state(usize::from(raw))
                             .expect("kinematics control state");
                         self.tick_kinematics_control(key, node, mode)?;
-                    }
-                    Some(StateKind::MoveTo {
-                        movement: Some((destination, speed)),
-                    }) => {
-                        self.tick_move_to(key, destination, speed)?;
                     }
                     Some(StateKind::EntityStatus { mode }) => {
                         let node = self
@@ -689,6 +689,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             return Ok(());
         };
         let kind = state.kind;
+        if matches!(kind, StateKind::StaticTrace { .. }) && parameter == 1 {
+            return self.tick_static_trace(key);
+        }
         if let StateKind::Interval {
             period_frames,
             next_frame: Some(next),
@@ -705,7 +708,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .expect("active timer state");
         if parameter == 1
             && (matches!(kind, StateKind::Wait | StateKind::RecallRewind)
-                || (kind == StateKind::Plain && parent_owned_graph_duration(node).is_some()))
+                || (kind == StateKind::Plain
+                    && (parent_owned_graph_duration(node).is_some()
+                        || crate::script_init::shapes::timed_position_duration(node).is_some())))
         {
             self.post(key.instance, Event::Finish(key.raw))?;
         }

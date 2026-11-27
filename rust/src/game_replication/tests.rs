@@ -30,6 +30,7 @@ mod owner_model;
 mod owner_reselection;
 mod owner_swept_motion;
 mod owner_synchronous_fault;
+mod owner_walk;
 mod player_respawn;
 pub(crate) mod practice_observation;
 mod wheel_input;
@@ -1265,6 +1266,16 @@ struct SyntheticOwner {
 }
 
 impl OwnerBodyRuntime for SyntheticOwner {
+    fn begin_state(
+        &mut self,
+        _instance: u16,
+        _raw: u16,
+    ) -> Result<(), crate::script_init::InitFault> {
+        // This probe runtime carries no state table; a lifecycle begin is
+        // a loud error rather than a silent no-op.
+        Err(crate::script_init::InitFault::InvalidRoot(_instance))
+    }
+
     fn receive_applied_damage(&mut self, _: crate::game_combat::AppliedDamage) -> io::Result<()> {
         Ok(())
     }

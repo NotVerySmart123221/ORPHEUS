@@ -1,5 +1,109 @@
 use super::*;
 
+#[test]
+fn timed_position_finishes_once_and_rearm_cannot_inherit_old_deadline() {
+    let spec: Json = serde_json::from_str(include_str!(
+        "../../../../../../fixtures/behavior/timed-position-state-v1.json"
+    ))
+    .unwrap();
+    let message = |pos, guid, input| {
+        node(
+            pos,
+            "STUStatescriptEntryGameMessage",
+            None,
+            json!({
+                "m_gameMessage": {"m_gameMessage": guid},
+                "m_outPlug": plug(&[(3, input)], &[]),
+            }),
+        )
+    };
+    let mut timed = node(
+        3,
+        "STU_1F5ED928",
+        Some(1),
+        json!({
+            "m_A2287776": 0, "m_AED90719": 0,
+            "m_F198FD3A": {"$":"STU_1CCEA5F7", "links":[]},
+            "m_710CF237": {"$":"STUConfigVarFloat", "m_value":spec["duration_seconds"]},
+            "m_03AD31B9": {"$":"STU_919FD47C", "m_expression":{}, "m_configVars":[]},
+            "m_onEndPlug": plug(&[(2,"m_inPlug")], &[]),
+        }),
+    );
+    timed["fields"]["m_ADEB6E05"] = json!(0);
+    let g = graph(
+        271,
+        vec![
+            message(0, "0x0240000000000081", "m_beginPlug"),
+            message(1, "0x0240000000000082", ABORT_PLUG),
+            node(
+                2,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({
+                    "m_out_Var": var(706, false),
+                    "m_value": {"$":"STU_919FD47C", "m_expression": {
+                        "m_opcodes":[8,0,6,0,23,0],
+                        "m_dynamicVars":[var(706, false)], "m_D99EF254":[1],
+                    }},
+                }),
+            ),
+            timed,
+            node(4, "STUStatescriptStateWait", Some(0), json!({})),
+        ],
+        json!([4, 3]),
+        json!([0, 1]),
+    );
+    let mut c = Component::start(
+        Arc::new(store(vec![g])),
+        17,
+        Variables::new(),
+        vec![Root::new(23, 271)],
+        1,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let send = |c: &mut Component, message| {
+        assert_eq!(c.queue_message(23, message, Variables::new()).unwrap(), 1);
+        c.run_now(&mut EmptyWorld).unwrap();
+    };
+    fn snapshot(c: &Component) -> &Snapshot {
+        c.snapshot().unwrap()
+    }
+    let start = 0x0240_0000_0000_0081;
+    send(&mut c, start);
+    let original_due = c.now_ms() + 48;
+    assert_eq!(snapshot(&c).pending_timers[&23][0].due_ms, original_due);
+    c.advance_frame(1, &mut EmptyWorld).unwrap();
+    send(&mut c, start + 1);
+    assert!(snapshot(&c).pending_timers.is_empty());
+    assert!(!snapshot(&c).instances[&23].states[&1].active);
+    assert_eq!(
+        snapshot(&c).instances[&23].variables[&706],
+        Value::Float(1.0)
+    );
+    send(&mut c, start);
+    let due = c.now_ms() + 48;
+    assert_eq!(snapshot(&c).pending_timers[&23][0].due_ms, due);
+    let activation = snapshot(&c).instances[&23].states[&1].activation;
+    for frame in 2..=8 {
+        c.advance_frame(frame, &mut EmptyWorld).unwrap();
+        assert_eq!(
+            snapshot(&c).instances[&23].states[&1].active,
+            c.now_ms() < due
+        );
+        assert_eq!(
+            snapshot(&c).instances[&23].states[&1].activation,
+            activation
+        );
+    }
+    assert!(snapshot(&c).pending_timers.is_empty());
+    assert_eq!(
+        snapshot(&c).instances[&23].variables[&706],
+        Value::Float(2.0)
+    );
+}
+
 fn recent_input_fixture() -> Component {
     let entries =
         [(1, "m_beginPlug"), (2, "m_F4DD996D"), (3, ABORT_PLUG)].map(|(position, input)| {
@@ -1880,17 +1984,22 @@ fn effect_action_continues_its_output_without_server_state() {
     assert!(snapshot.instances[&1].variables.is_empty());
     assert!(snapshot.instances[&1].states.is_empty());
 
-    for (graph_id, position, rejected) in [(42, 1, true), (0x01c7, 74, false)] {
+    // The reference dispatches the effect action through the presentation
+    // handler for every placement: only selected locations additionally
+    // replicate frame-action variables (server-side a no-op), and the
+    // handler then always continues m_outPlug with the caller. The dynamic
+    // operand and the data-flow rows never gate the continuation, so the
+    // state-bound variant behaves like every other placement.
+    for (graph_id, position) in [(42, 1), (0x01c7, 74)] {
         let snapshot = run(graph_id, position, var(9, true));
-        assert!(snapshot.variables.is_empty());
-        assert_eq!(snapshot.diagnostics.len(), 1);
-        let diagnostic = &snapshot.diagnostics[0];
-        assert_eq!(diagnostic.site.node, Some(position));
-        assert_eq!(diagnostic.registration_rejected, rejected);
+        assert!(snapshot.initialization_complete());
+        assert!(snapshot.diagnostics.is_empty());
         assert_eq!(
-            diagnostic.issue,
-            Issue::UnsupportedAction("STUStatescriptActionEffect".into())
+            snapshot.variables,
+            Variables::from([(100, Value::Bool(true))])
         );
+        assert!(snapshot.instances[&1].variables.is_empty());
+        assert!(snapshot.instances[&1].states.is_empty());
     }
 }
 

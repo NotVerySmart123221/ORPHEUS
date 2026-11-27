@@ -584,7 +584,7 @@ fn valid_output_plug(plug: &Value) -> bool {
             .is_some_and(|links| links.iter().all(|link| decode_link(link).is_some()))
 }
 
-fn decode_link(link: &Value) -> Option<(Option<u16>, &str)> {
+pub(crate) fn decode_link(link: &Value) -> Option<(Option<u16>, &str)> {
     let pair = link.as_array()?;
     let position = match pair.first()? {
         Value::Null => None,
@@ -642,13 +642,67 @@ impl WireSlots {
     }
 }
 
+/// A subgraph box item (STUStatescriptSubGraph / STUGraphContainer)
+/// extracted from `m_items`. States point at their box through the
+/// `m_0B1AA8CA: {"item": position}` field, so an item reference with no
+/// entry here is a broken bundle. The reference extractor records the
+/// class tag only; the optional `links` carry the box's begin edges and
+/// make a taken edge into the box route through it (a tag-only box keeps
+/// the missing-node report, because the launch semantics were dropped at
+/// extraction).
+#[derive(Debug, Clone)]
+pub struct Container {
+    pub class: String,
+    /// Raw plug links (same encoding as any plug's `links` array), or empty.
+    pub links: Vec<Value>,
+}
+
+struct ContainerVisitor;
+
+impl<'de> serde::de::Visitor<'de> for ContainerVisitor {
+    type Value = Container;
+    fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a container class tag or a container with begin links")
+    }
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Container, E> {
+        Ok(Container {
+            class: v.to_owned(),
+            links: Vec::new(),
+        })
+    }
+    fn visit_map<M>(self, mut map: M) -> Result<Container, M::Error>
+    where
+        M: serde::de::MapAccess<'de>,
+    {
+        let mut class = None;
+        let mut links = Vec::new();
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "class" => class = Some(map.next_value::<String>()?),
+                "links" => links = map.next_value::<Vec<Value>>()?,
+                other => return Err(serde::de::Error::unknown_field(other, &["class", "links"])),
+            }
+        }
+        Ok(Container {
+            class: class.ok_or_else(|| serde::de::Error::missing_field("class"))?,
+            links,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Container {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(ContainerVisitor)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Graph {
     pub index: u32,
     pub header: Header,
     pub fields: Value,
     pub items: u16,
-    pub containers: BTreeMap<u16, String>,
+    pub containers: BTreeMap<u16, Container>,
     pub nodes: Vec<Node>,
     #[serde(rename = "unknown_nodes")]
     pub unknown_rids: Vec<u16>,
@@ -1273,6 +1327,11 @@ impl Graph {
         self.nodes.get((*self.by_rid.get(usize::from(rid))?)?)
     }
 
+    /// The subgraph box declared at this `m_items` position.
+    pub fn container(&self, pos: u16) -> Option<&Container> {
+        self.containers.get(&pos)
+    }
+
     pub fn state(&self, index: usize) -> Option<&Node> {
         self.node((*self.states.get(index)?)?)
     }
@@ -1337,8 +1396,13 @@ impl Graph {
             .position(|(_, entry)| entry.0 == Some(var))
     }
 
+    /// Unresolved plug links and broken state-group item references.
+    /// Unresolved null links and links to declared containers are valid and
+    /// do not appear in this report; a `{"item":N}` reference with no declared
+    /// container at that item position is a broken bundle (the reference
+    /// extractor emits the form only for entries it recorded as containers).
     fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {
-        self.nodes.iter().flat_map(move |node| {
+        let plug_links = self.nodes.iter().flat_map(move |node| {
             node.plugs().into_iter().flat_map(move |(path, plug)| {
                 raw_plug_links(plug)
                     .enumerate()
@@ -1357,7 +1421,24 @@ impl Graph {
                         })
                     })
             })
-        })
+        });
+        let item_refs = self.nodes.iter().flat_map(move |node| {
+            let mut found = Vec::new();
+            collect_item_refs(&node.fields, "", &mut found);
+            found.into_iter().filter_map(move |(path, target)| {
+                if self.containers.contains_key(&target) {
+                    return None;
+                }
+                Some(DanglingLink {
+                    graph: self.index,
+                    source: node.pos,
+                    plug: path,
+                    link_index: 0,
+                    target,
+                })
+            })
+        });
+        plug_links.chain(item_refs)
     }
 
     pub fn graph_refs(&self) -> BTreeSet<u64> {
@@ -2240,7 +2321,8 @@ impl GraphStore {
                 requirements.actor_rays |= view_track
                     .as_ref()
                     .is_some_and(|track| view_sight_profiles.contains_key(&track.profile));
-                if node.declares_health_change_action()
+                if node.class == "STU_4BBC5D09"
+                    || node.declares_health_change_action()
                     || node.declares_room_message_action()
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
@@ -2378,7 +2460,8 @@ impl GraphStore {
     }
 
     /// Inspect local graph structure on demand. Unresolved null links and links
-    /// to declared containers are valid and do not appear in this report.
+    /// to declared containers are valid and do not appear in this report;
+    /// state-group `{"item":N}` references must name a declared container.
     pub fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {
         self.graphs.values().flat_map(Graph::dangling_links)
     }
@@ -2583,6 +2666,42 @@ pub fn field_at<'a>(fields: &'a Value, path: &str) -> Option<&'a Value> {
         }
     }
     Some(value)
+}
+
+/// Collects every exact `{"item":N}` object (a state-group box reference) in
+/// a node's fields, keyed by its field path.
+fn collect_item_refs(value: &Value, path: &str, out: &mut Vec<(String, u16)>) {
+    match value {
+        Value::Object(fields)
+            if fields.len() == 1
+                && fields
+                    .get("item")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .is_some() =>
+        {
+            out.push((
+                path.to_owned(),
+                u16::try_from(fields["item"].as_u64().unwrap_or_default()).unwrap_or_default(),
+            ));
+        }
+        Value::Object(fields) => {
+            for (key, item) in fields {
+                let name = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                collect_item_refs(item, &name, out);
+            }
+        }
+        Value::Array(values) => {
+            for (index, item) in values.iter().enumerate() {
+                collect_item_refs(item, &format!("{path}[{index}]"), out);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_plugs<'a>(value: &'a Value, path: &str, out: &mut BTreeMap<String, &'a Value>) {

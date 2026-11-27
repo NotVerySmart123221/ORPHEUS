@@ -9,6 +9,7 @@ pub(super) struct StepBuffers<'a> {
 }
 
 pub(super) fn stage_scripted_motion(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
+    mover.set_owner_move(runtime.owner_move());
     if mover.has_pending_script_motion() {
         return;
     }

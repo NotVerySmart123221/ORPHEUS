@@ -3539,6 +3539,8 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
+        collision_category: 0x08,
+        mover_settings: Default::default(),
         scripted_motion: None,
         voice_variant_counter: 0,
         voice_cooldowns: Default::default(),
@@ -4900,6 +4902,8 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
+            collision_category: 0x08,
+            mover_settings: Default::default(),
             scripted_motion: None,
             voice_variant_counter: 0,
             voice_cooldowns: Default::default(),
@@ -5088,6 +5092,8 @@ fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
     let frame = room.spatial_frame();
 
     let mut world = BodyWorld {
+        collision_category: 0,
+        mover_settings: Default::default(),
         spatial_frame: frame,
         team_member_counts: None,
         room_activity: None,
@@ -5401,6 +5407,7 @@ fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
                 spatial_frame: room.spatial_frame(),
                 team_member_counts: Some(TeamMemberCounts::from_teams(false, [0])),
                 room_activity: Some(scene.owner_room_activity()),
+                mover_settings: Default::default(),
             },
         ) {
             Ok(p) => p,

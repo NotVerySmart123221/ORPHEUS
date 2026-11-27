@@ -676,7 +676,12 @@ pub(super) fn is_static_map_explosion(graph: &Graph, node: &Node, state: u16) ->
     let literal_number = |config| native_integer_operand(config) || explosion_float(config);
     let number = |config| literal_number(config) || native_expression_operand(config);
     visibility_matches
-        && field(fields, "m_86CE02DE").as_u64() == Some(1)
+        // The impulse flag is an authored byte (class default 1). Roadhog's
+        // extracted map explosions carry 1, the hook-attached variants carry
+        // 0, and both classes of node die on a host without dynamic map
+        // bodies exactly the same way, so the world probe — not the flag —
+        // decides the no-op. Accept either authored value.
+        && matches!(field(fields, "m_86CE02DE").as_u64(), Some(0) | Some(1))
         && field(fields, "m_A2287776").as_u64() == Some(0)
         && field(fields, "m_AED90719").as_u64() == Some(0)
         && ["m_17E9238F", "m_4A518273", "m_falloff"]
@@ -734,6 +739,46 @@ fn explosion_sync_matches(graph: &Graph, fields: &Json) -> bool {
                         })
                 })
             }))
+}
+
+/// The hook pull's timed state shape: a server-run, non-networked state with
+/// base lifecycle only — the prepared codec marks the class VERIFIED with no
+/// bytes. Its authored operands are the duration float and an expression
+/// position (entity/bone/point); the event list and the finish and subgraph
+/// plugs are empty. Only the duration drives the server lifecycle; the
+/// position operand does not imply server movement.
+pub(super) fn timed_position_duration(node: &Node) -> Option<&Json> {
+    let fields = &node.fields;
+    let duration = field(fields, "m_710CF237");
+    (node.class == "STU_1F5ED928"
+        && node.is_state()
+        && node.runs_on_server()
+        && node.remote == -1
+        && field(fields, "m_priority").is_null()
+        && field(fields, "m_BF5B22B7").is_null()
+        && field(fields, "m_8BF03679").is_null()
+        && field(fields, "m_4F8F2F3F").is_null()
+        && field(fields, "m_stateGroup").is_null()
+        && field(fields, "m_transitionPlug").is_null()
+        && field(fields, "m_A2287776").as_u64() == Some(0)
+        && field(fields, "m_AED90719").as_u64() == Some(0)
+        && field(fields, "m_ADEB6E05").as_u64() == Some(0)
+        && explosion_float(duration)
+        && field(fields, "m_03AD31B9").get("$").and_then(Json::as_str) == Some("STU_919FD47C")
+        && field(fields, "m_03AD31B9")
+            .get("m_expression")
+            .is_some_and(Json::is_object)
+        && field(fields, "m_03AD31B9")
+            .get("m_configVars")
+            .is_some_and(Json::is_array)
+        && field(fields, "m_F198FD3A").get("$").and_then(Json::as_str) == Some("STU_1CCEA5F7")
+        && field(fields, "m_F198FD3A")
+            .get("links")
+            .is_some_and(|links| links.as_array().is_some_and(Vec::is_empty))
+        && node.links("m_beginPlug").next().is_none()
+        && node.links("m_onFinishedPlug").next().is_none()
+        && node.links("m_subgraphPlug").next().is_none())
+    .then_some(duration)
 }
 
 fn explosion_position(config: &Json) -> bool {

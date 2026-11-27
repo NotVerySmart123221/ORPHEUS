@@ -2,6 +2,7 @@
 
 mod charge;
 mod lifecycle;
+mod owner_walk;
 mod world;
 
 #[cfg(test)]
@@ -56,6 +57,9 @@ pub(crate) struct OwnerBodySetup {
     pub team_member_counts: Option<TeamMemberCounts>,
     pub spatial_frame: Option<Arc<RoomSpatialFrame>>,
     pub room_activity: Option<OwnerRoomActivity>,
+    /// The body's mover values: the hook promotion measures the lip with
+    /// these and no other numbers.
+    pub mover_settings: crate::mover_settings::MoverSettings,
 }
 
 pub(crate) struct PlayerBodyFactory {
@@ -69,6 +73,10 @@ pub(crate) struct PlayerBodyFactory {
     pools: Option<HealthPools>,
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
+    /// The reference component policy (`Component.strict`); the owner
+    /// stream may be prepared under the normal policy (see
+    /// `script_expr::Context::strict`).
+    strict: bool,
     charge_route: charge::ChargeRoute,
     anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
 }
@@ -187,9 +195,28 @@ impl PlayerBodyFactory {
             pools,
             target_tags,
             controller_on_fire,
+            // The reference production default: `Component.__init__` keeps
+            // the compatibility (normal) policy, and strict is the opt-in
+            // for mission reconstruction. The owner stream follows the
+            // reference production policy; harnesses that must fail loud
+            // opt in with `with_strict(true)`.
+            strict: false,
             charge_route,
             anim_timing: None,
         })
+    }
+
+    /// Chooses the reference component policy for the owner stream: `strict`
+    /// true keeps unresolved natives and unmodeled state classes loud reports
+    /// (the reference mission-reconstruction opt-in); `strict` false (the
+    /// reference production default, `Component.__init__`) applies its
+    /// fallbacks: typed-null natives and plain base lifecycle. See
+    /// `script_expr::Context::strict`. Test lanes pin either side; the
+    /// production stream uses the reference default.
+    #[cfg(test)]
+    pub(crate) fn with_strict(mut self, strict: bool) -> Self {
+        self.strict = strict;
+        self
     }
 
     pub(crate) fn with_anim_timing(
@@ -229,7 +256,11 @@ impl PlayerBodyFactory {
         controller_on_fire: bool,
         probe: (OwnerBodySpawn, OwnerBodySetup),
     ) -> Result<Self, OwnerBodyPreparationError> {
-        let factory = Self::from_body(graphs, codecs, mode, hero, pools, controller_on_fire)?;
+        // Test preparation exercises the reference's strict reconstruction
+        // mode; lanes that want the production policy build their factory
+        // from `from_body` directly and opt in explicitly.
+        let factory = Self::from_body(graphs, codecs, mode, hero, pools, controller_on_fire)?
+            .with_strict(true);
         factory.probe_startup(probe.0, probe.1)?;
         Ok(factory)
     }
@@ -305,6 +336,10 @@ impl PlayerBodyFactory {
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
+            // Filled from the mover on the first posed step; the trace can
+            // only launch from a commanded button edge.
+            collision_category: 0,
+            mover_settings: setup.mover_settings,
             voice_variant_counter: 0,
             voice_cooldowns: Default::default(),
             pet_positions: Default::default(),
@@ -316,14 +351,14 @@ impl PlayerBodyFactory {
             active_auras: Default::default(),
             ball_roll_speed: None,
         };
-        let mut component = Component::start_with_public_schema(
+        let mut component = Component::start_with_public_schema_policy(
             Arc::clone(&self.graphs),
             spawn.entity,
             self.variables.clone(),
             self.roots.clone(),
             spawn.frame,
             &mut world,
-            MAX_INIT_WORK,
+            (MAX_INIT_WORK, self.strict),
         )
         .map_err(OwnerBodyStartupError::VmInitialize)?;
         component

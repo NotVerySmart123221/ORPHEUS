@@ -22,8 +22,8 @@ use super::{
     HostHealthContext, MAX_PENDING_EVENTS, RoomMessage,
     shapes::stored,
     types::{
-        InitFault, PendingTimer, RandomCheckpoint, ReportedShot, Snapshot, SpawnSearchKey,
-        StackBinding, StateKind,
+        InitFault, MoveOutcome, MoveToKey, PendingTimer, RandomCheckpoint, ReportedShot, Snapshot,
+        SpawnSearchKey, StackBinding, StateKind,
     },
 };
 
@@ -248,6 +248,10 @@ pub(super) enum Event {
         key: SpawnSearchKey,
         positions: Vec<[f64; 3]>,
     },
+    MoveResult {
+        key: MoveToKey,
+        outcome: MoveOutcome,
+    },
     Message {
         position: u16,
         sender: Option<u32>,
@@ -275,6 +279,7 @@ impl Event {
     pub(super) fn state(&self) -> Option<u16> {
         match *self {
             Self::SpawnResult { key, .. } => Some(key.raw),
+            Self::MoveResult { key, .. } => Some(key.raw),
             Self::LogicalButtonBranch { state, .. } => Some(state),
             Self::ObserveSample { raw, .. } => Some(raw),
             Self::Entry(_)
@@ -302,6 +307,11 @@ const _: () = assert!(SPLITMIX_STEP.wrapping_mul(SPLITMIX_STEP_INVERSE) == 1);
 
 pub(super) struct Machine {
     pub(super) public_schemas: bool,
+    /// The reference component policy (runtime.py `Component.strict`).
+    /// Strict keeps unresolved natives and unmodeled state classes loud;
+    /// the normal policy mirrors the reference fallbacks (typed null, base
+    /// state lifecycle). See `script_expr::Context::strict`.
+    pub(super) strict: bool,
     pub(super) code_states: Vec<StateKey>,
     pub(super) code_pending: [Vec<u64>; 2],
     pub(super) code_observers: Vec<(u64, Option<u64>)>,
@@ -346,6 +356,7 @@ impl Clone for Machine {
     fn clone(&self) -> Self {
         Self {
             public_schemas: self.public_schemas,
+            strict: self.strict,
             code_states: self.code_states.clone(),
             code_pending: self.code_pending.clone(),
             code_observers: self.code_observers.clone(),
@@ -438,6 +449,7 @@ impl Machine {
                 resolved_bindings: IndexMap::new(),
                 frame_actions: Default::default(),
                 diagnostics: Vec::new(),
+                strict: true,
                 #[cfg(feature = "node-observations")]
                 node_observations: Default::default(),
             },
@@ -476,6 +488,7 @@ impl Machine {
             disabled_start_entries: HashSet::new(),
             cooldown_scale: 1.0,
             public_schemas: false,
+            strict: true,
         })
     }
 

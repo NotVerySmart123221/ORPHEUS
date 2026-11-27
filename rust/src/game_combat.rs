@@ -825,6 +825,24 @@ impl RoomSpatialFrame {
         result
     }
 
+    pub(crate) fn profiled_static_ray(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        max_distance: f64,
+        category: u16,
+    ) -> Option<Option<crate::script_expr::SpatialRayHit>> {
+        self.ground
+            .checked_cast_ray(origin, direction, max_distance, category)
+            .map(|hit| {
+                hit.map(|hit| crate::script_expr::SpatialRayHit {
+                    distance: hit.distance,
+                    point: hit.point,
+                    normal: hit.normal,
+                })
+            })
+    }
+
     pub(crate) fn actor_ray_cast(
         &self,
         site: crate::script_init::Site,

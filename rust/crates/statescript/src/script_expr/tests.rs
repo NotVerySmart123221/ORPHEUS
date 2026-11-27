@@ -4353,6 +4353,134 @@ fn ray_cast_distinguishes_hits_misses_invalid_inputs_and_unavailable_geometry() 
     assert!(host.calls.is_empty());
 }
 
+/// Reference-parity host for the component policy (runtime.py 685..693 and
+/// 1295..1307): with `strict` false every unresolved native lands on the
+/// `default_native` warn-and-null path; with `strict` true every one of
+/// them is a report. The tag data and filter flags stay absent either way,
+/// exactly like a body whose components never arrived.
+#[derive(Clone, Copy)]
+struct PolicyHost {
+    strict: bool,
+}
+
+impl PolicyHost {
+    fn evaluate(&self, config: &Json) -> Result<Value, EvalError> {
+        let mut host = *self;
+        crate::script_expr::evaluate(config, &mut host)
+    }
+}
+
+impl Context for PolicyHost {
+    fn strict(&self) -> bool {
+        self.strict
+    }
+    fn owner(&mut self) -> Value {
+        Value::Entity(123)
+    }
+    fn has_target_tag(&mut self, _entity: u32, _tag: u64) -> Option<bool> {
+        None
+    }
+    fn entity_filter_flags(&mut self, _entity: u32) -> Option<u64> {
+        None
+    }
+}
+
+/// The four authored operand shapes pinned from the real 104319 report
+/// sites (bare tutorial predicate, bare mode-entity reader, owner target-tag
+/// query with the authored guid string, owner filter with the full any-mask
+/// and one excluded state tag). Positions and identifiers carry no meaning
+/// here; only the shapes do.
+fn policy_probe_queries() -> [(&'static str, Json); 4] {
+    [
+        (
+            "tutorial predicate",
+            json!({"$":"STU_A77AC2AC","m_EE729DCB":0}),
+        ),
+        (
+            "mode entity reader",
+            json!({"$":"STU_A3DEF368","m_EE729DCB":0}),
+        ),
+        (
+            "owner target tag",
+            json!({"$":"STU_25ECB55F","m_EE729DCB":0,
+            "m_88B0050A":"0x0D60000000000042",
+            "m_entity":{"$":"STU_B5A0CAF0","m_EE729DCB":0}}),
+        ),
+        (
+            "owner entity filter",
+            json!({"$":"STU_AC829876","m_EE729DCB":0,
+            "m_entity":{"$":"STU_B5A0CAF0","m_EE729DCB":0},
+            "m_filter":{"$":"STUConfigVarFilter","m_93FA1642":null,
+                "m_84065FD1":1073741823,"m_1E14CCA8":0,"m_4EA686DB":0,
+                "m_27CF71D5":0,"m_66747E7D":0,"m_89831602":0,"m_condition":null,
+                "m_9C7BD8B8":{"$":"STU_357DABBB","m_resourceKey":null,"m_EE729DCB":0,
+                    "m_7D7C86A1":null},
+                "m_B486603E":null,
+                "m_8B2A4DF3":{"$":"STU_357DABBB","m_resourceKey":null,"m_EE729DCB":0,
+                    "m_7D7C86A1":"0x0D60000000000069"},
+                "m_F61726FE":null,"m_B40362FC":null,"m_EE729DCB":0}}),
+        ),
+    ]
+}
+
+#[test]
+fn the_normal_policy_answers_unresolved_natives_as_typed_null() {
+    for (label, query) in policy_probe_queries() {
+        assert_eq!(
+            PolicyHost { strict: false }.evaluate(&query),
+            Ok(Value::Null),
+            "{label} must land on the reference default_native null"
+        );
+    }
+}
+
+#[test]
+fn the_strict_policy_keeps_every_unresolved_native_a_report() {
+    for (label, query) in policy_probe_queries() {
+        let class = class(&query).unwrap_or_default();
+        assert!(
+            matches!(
+                PolicyHost { strict: true }.evaluate(&query),
+                Err(EvalError::UnsupportedConfig(ref rejected)) if rejected == class
+            ),
+            "{label} must stay loud under the strict policy: {:?}",
+            PolicyHost { strict: true }.evaluate(&query)
+        );
+    }
+}
+
+#[test]
+fn the_normal_policy_nulls_the_tag_query_but_keeps_a_resolved_answer() {
+    // The tag query answers null only while the component is absent; a body
+    // that does carry its (empty) tag set keeps answering the boolean, in
+    // both policies (scene.py 1674..1677 reads the list, not the policy).
+    struct Tagged(PolicyHost, bool);
+    impl Context for Tagged {
+        fn strict(&self) -> bool {
+            self.0.strict
+        }
+        fn owner(&mut self) -> Value {
+            Value::Entity(123)
+        }
+        fn has_target_tag(&mut self, _entity: u32, tag: u64) -> Option<bool> {
+            Some(self.1 && tag == 0x0d60_0000_0000_0042)
+        }
+    }
+    let query = json!({"$":"STU_25ECB55F","m_EE729DCB":0,
+        "m_88B0050A":"0x0D60000000000042",
+        "m_entity":{"$":"STU_B5A0CAF0","m_EE729DCB":0}});
+    for strict in [false, true] {
+        for (present, answer) in [(true, true), (false, false)] {
+            let mut host = Tagged(PolicyHost { strict }, present);
+            assert_eq!(
+                crate::script_expr::evaluate(&query, &mut host),
+                Ok(Value::Bool(answer)),
+                "resolved tag data answers the boolean under both policies (strict {strict})"
+            );
+        }
+    }
+}
+
 #[test]
 fn track_b2_config_vars_evaluate_generically() {
     struct Host;
