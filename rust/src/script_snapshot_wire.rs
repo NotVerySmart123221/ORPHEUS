@@ -73,6 +73,8 @@ impl FrozenVolley {
 }
 
 impl ProjectedSnapshot {
+    const PRACTICE_NAMEPLATE: u32 = 0x0d24;
+
     pub fn entity(&self) -> u32 {
         self.entity
     }
@@ -103,23 +105,25 @@ impl ProjectedSnapshot {
         self
     }
 
-    #[cfg(test)]
     pub(crate) fn has_graph(&self, graph: u32) -> bool {
         self.instances
             .values()
             .any(|instance| instance.graph == graph)
     }
 
+    pub(crate) fn has_practice_nameplate(&self) -> bool {
+        self.has_graph(Self::PRACTICE_NAMEPLATE)
+    }
+
     /// Introduce a Practice Range nameplate after the viewer has acknowledged
     /// both the mode HUD and its body-script parent. The introducing delta
     /// changes only the deferred subtree.
     pub(crate) fn stage_practice_nameplates(&mut self, base: Option<&Self>, can_introduce: bool) {
-        const PRACTICE_NAMEPLATE: u32 = 0x0d24;
         let mut unseen: BTreeSet<_> = self
             .instances
             .iter()
             .filter_map(|(&id, instance)| {
-                (instance.graph == PRACTICE_NAMEPLATE
+                (instance.graph == Self::PRACTICE_NAMEPLATE
                     && base.is_none_or(|base| !base.instances.contains_key(&id)))
                 .then_some(id)
             })
@@ -189,6 +193,15 @@ impl ProjectedSnapshot {
         }
     }
 
+    pub(crate) fn active_spray(&self, instance: u16, state: u16) -> Option<(u64, u64)> {
+        let owner = self.instances.get(&instance)?;
+        let state = owner.states.get(&state)?;
+        match state.payload.get("unlock") {
+            Some(Value::Asset(unlock)) if state.active => Some((owner.start_ms, *unlock)),
+            _ => None,
+        }
+    }
+
     /// The activation counter and absolute start in milliseconds from this frame.
     pub fn volley_identity(&self, instance: u16, state: u16) -> Option<(u16, u64)> {
         self.instances
@@ -199,10 +212,20 @@ impl ProjectedSnapshot {
             .map(|volley| volley.identity)
     }
 
+    #[cfg(test)]
     pub(crate) fn freeze_volley(
         &self,
         event: ShotEvent,
         presentation: Vec<(Variable, Value)>,
+    ) -> Option<FrozenVolley> {
+        self.freeze_volley_with_states(event, presentation, &[])
+    }
+
+    pub(crate) fn freeze_volley_with_states(
+        &self,
+        event: ShotEvent,
+        presentation: Vec<(Variable, Value)>,
+        presentation_states: &[u16],
     ) -> Option<FrozenVolley> {
         let instance = self.instances.get(&event.instance)?;
         let state = instance.states.get(&event.raw_state)?;
@@ -217,6 +240,23 @@ impl ProjectedSnapshot {
         let Value::Integer(count) = state.payload.get("volleys")? else {
             return None;
         };
+        let mut extra_states = Vec::new();
+        for &raw in presentation_states {
+            if raw == event.raw_state {
+                continue;
+            }
+            if !extra_states.iter().any(|(existing, _)| *existing == raw) {
+                extra_states.push((
+                    raw,
+                    ProjectedState {
+                        active: true,
+                        payload: StatePayload::new(),
+                        link: None,
+                        volley: None,
+                    },
+                ));
+            }
+        }
         Some(FrozenVolley {
             event,
             parent: instance.parent,
@@ -230,6 +270,7 @@ impl ProjectedSnapshot {
                             && self.entity_exclusions.contains(&variable.id))
                 })
                 .collect(),
+            extra_states,
         })
     }
 
@@ -247,12 +288,15 @@ impl ProjectedSnapshot {
             instance
                 .states
                 .insert(volley.event.raw_state, volley.state.clone());
+            for (raw, extra) in &volley.extra_states {
+                instance.states.insert(*raw, extra.clone());
+            }
             for (variable, value) in &volley.presentation {
-                let values = match variable.scope {
-                    Scope::Entity => &mut self.variables.values,
-                    Scope::Instance => &mut instance.variables.values,
+                let variables = match variable.scope {
+                    Scope::Entity => &mut self.variables,
+                    Scope::Instance => &mut instance.variables,
                 };
-                values.insert(variable.id, value.clone());
+                variables.seed_value(variable.id, value.clone());
             }
             true
         } else {
@@ -270,13 +314,28 @@ impl ProjectedSnapshot {
                     instance.graph == event.graph && instance.parent == volley.parent
                 })
                 .is_some_and(|instance| {
-                    instance.states.get(&event.raw_state) == Some(&volley.state)
+                    let state_matches = if self.view == View::Owner {
+                        instance.states.get(&event.raw_state).is_some_and(|s| {
+                            s.active == volley.state.active
+                                && s.volley.map(|v| v.identity)
+                                    == volley.state.volley.map(|v| v.identity)
+                                && s.payload.get("volleys") == volley.state.payload.get("volleys")
+                        })
+                    } else {
+                        instance.states.get(&event.raw_state) == Some(&volley.state)
+                    };
+                    state_matches
+                        && volley
+                            .extra_states
+                            .iter()
+                            .all(|(raw, extra)| instance.states.get(raw) == Some(extra))
                         && volley.presentation.iter().all(|(variable, value)| {
-                            let values = match variable.scope {
-                                Scope::Entity => &self.variables.values,
-                                Scope::Instance => &instance.variables.values,
+                            let variables = match variable.scope {
+                                Scope::Entity => &self.variables,
+                                Scope::Instance => &instance.variables,
                             };
-                            values.get(&variable.id) == Some(value)
+                            variables.values.get(&variable.id) == Some(value)
+                                && !variables.bindings.contains_key(&variable.id)
                         })
                 })
     }
@@ -287,6 +346,8 @@ impl ProjectedSnapshot {
         chunk: u32,
         frame: u32,
         changes: &BTreeSet<crate::script_stream::ChangeKey>,
+        detailed: bool,
+        playtest: bool,
     ) {
         use crate::script_expr::Scope;
         use crate::script_stream::ChangeKey;
@@ -310,12 +371,19 @@ impl ProjectedSnapshot {
                         _ => None,
                     }
                 });
-                if sent_state || written_ammo.is_some() {
+                if detailed && (sent_state || written_ammo.is_some()) {
                     let (counter, start_ms) = volley.identity;
                     let introduced = changes.contains(&ChangeKey::VolleyIntroduction(id, raw));
                     crate::owner_trace::record(format_args!(
                         "owner-volley delta body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} sent_state={sent_state} active={} counter={counter} start_ms={start_ms} introduced={introduced} written_ammo={written_ammo:?}",
                         self.entity, state.active
+                    ));
+                }
+                if let Some(ammo) = written_ammo.filter(|_| playtest) {
+                    let (counter, start_ms) = volley.identity;
+                    crate::owner_trace::playtest(format_args!(
+                        "owner-ammo body={:08x} chunk={chunk} frame={frame} instance={id} state={raw} active={} counter={counter} start_ms={start_ms} sent_ammo={ammo}",
+                        self.entity, state.active,
                     ));
                 }
             }
@@ -353,11 +421,13 @@ pub(crate) struct FrozenVolley {
     parent: Option<(u16, u16)>,
     state: ProjectedState,
     presentation: Vec<(Variable, Value)>,
+    extra_states: Vec<(u16, ProjectedState)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ProjectedInstance {
     pub(super) graph: u32,
+    pub(super) start_ms: u64,
     pub(super) parent: Option<(u16, u16)>,
     pub(super) variables: ProjectedVariables,
     pub(super) states: BTreeMap<u16, ProjectedState>,

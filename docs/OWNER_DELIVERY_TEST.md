@@ -15,6 +15,12 @@ Check the original client separately for on-screen appearance.
 
 Keep local captures out of Git. The bounded writer reports any dropped rows.
 
+For combat audio, match a settled hit to the presentation queue by target
+and event order. The `combat effect emitted` row identifies the authored asset, VM
+frame, body and action serial. Match the body and serial to a subsequent
+`combat owner action acknowledged` row. The original client's recording
+provides the playback evidence.
+
 ## Owner loss and arrival
 
 Run the opt-in test with a prepared target-tagged 104319 Practice Range runtime
@@ -126,9 +132,15 @@ cargo test --locked -p orpheus --lib stock_practice_owner_rifle_batched_tap_deli
 
 The probe submits adjacent press and release commands in one input batch.
 It checks the posed shot and the acknowledged owner projection after the
-batch. An inactive volley and lower ammunition in the final projection are
-compatible with an earlier shot on the batch's press frame. The probe
-cannot verify first-person animation, which the client draws locally.
+batch. It also sends the next tap as separate press and release packets
+and drops the press packet. The active volley carries the pre-shot value
+for prediction. The release carries the lower authoritative value without
+emitting a second shot. The probe does not render the original HUD.
+
+An Inspector build with bounded playtest capture records `owner-ammo`
+rows when an owner packet writes an authored volley's ammo variable.
+Each row includes the command frame, volley activation, active flag, and
+wire value. High-frequency owner tracing is optional for this capture.
 
 The prepared `stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round`
 probe covers the next rifle round falling exactly on a missing command
@@ -149,3 +161,37 @@ rows show the sent activation, its active flag, and explicitly written
 ammunition. Delivery rows show whether the transport acknowledged each
 chunk. Record when the animation fails so the relevant rows can be matched
 to the same tap.
+
+For a railing or moving target, compare shots through an opening and
+into an adjacent solid surface. The Inspector's player hitscan entries
+include the origin and endpoint. A world hit includes the collision
+mask, surface flags, normal and cache source. `expanded` identifies
+the weapon ray cache. `movement` identifies the movement geometry
+fallback. `cache_source` identifies a core mesh, hull, or map placement.
+Placement hits report the cache placement index, model index and mode group.
+Actor hits carry the target entity.
+
+For a training-bot shot that appears to pass through an actor, the playtest
+capture records `npc-projectile event=ended` with the shooter, terminal point,
+direct contact entity, and flight time. Match the contact against the room's
+damage settlement. A missing direct contact can be a terrain impact or an
+expiry. The separate failure record identifies a rejected collision query.
+
+The observer packet regression also places walking bots behind reliable
+traffic in a tight packet budget. Each peer resumes after the last remote
+movement it sent, so later bots still get their velocity and throttle updates.
+The original client still needs to render the return stride in a playtest.
+
+For the prepared 104319 Practice Range cache, the main mesh has 51,276
+triangles in the movement cache and 312,867 in the expanded cache. The
+current weapon query category (`0x18`) selects the same 51,276 main-mesh
+triangles in both, with identical vertices and masks. Expanded cache
+admission alone therefore does not explain a different result at a gap
+in that mesh. Check the source of the specific blocked shot and the
+retail weapon category before changing the filter.
+
+Expanded sweeps use the union of each placed mesh's face categories
+for admission, then filter the individual faces. This matches the
+point-ray category lookup. The prepared Practice Range and Kanezaka
+caches each contain a placed mesh with face category bits absent from
+the proxy mask. Movement contacts still use the movement proxy filter.

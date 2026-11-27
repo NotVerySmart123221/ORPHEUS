@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "case_id": "hostile-capsule-glance.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "Repeated small moves along the edge of an admitted upright capsule."
+  },
+  "input": {
+    "actor_origin": [0.0, 0.0, 0.0],
+    "mover_origin": [-0.3, 0.0, 0.998],
+    "displacement": [0.03, 0.0, 0.0],
+    "step_seconds": 0.008,
+    "steps": 20
+  },
+  "expected": {
+    "minimum_axis_distance": 1.0,
+    "contact_detected": true,
+    "final_x_above": 0.25
+  }
+}

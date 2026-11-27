@@ -21,9 +21,9 @@ use crate::{
     },
     game_controller::ControllerFrame,
     game_egress::{DeliveryReport, FrameRecords, GameEgress, RecordSource, SendError, SentFrame},
-    game_heroes::{CASSIDY, Hero, SOLDIER},
+    game_heroes::Hero,
     game_messages::Message,
-    game_parameters::{ClientGameMessage, ClientWheelAction, HeroSelectRequest},
+    game_parameters::{ClientGameMessage, ClientWheelAction, ClientWheelUse, HeroSelectRequest},
     game_projectiles::{OwnerProjectiles, ProjectileDelivery, ProjectileLeases, ProjectileToken},
     match_scene::{
         PlayerAppearance, Possession, bot_controller_create, bot_controller_possession, team_bit,
@@ -93,6 +93,7 @@ struct Body {
 struct BotControllerState {
     created: bool,
     possessed: Option<u32>,
+    possessed_acked: Option<u32>,
 }
 
 /// A running owner VM and the authored data used to encode its snapshots.
@@ -105,8 +106,9 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_applied_damage(
         &mut self,
-        _damage: crate::game_combat::AppliedDamage,
-    ) -> io::Result<()> {
+        damage: crate::game_combat::AppliedDamage,
+    ) -> io::Result<()>;
+    fn receive_applied_heal(&mut self, _source: u32, _target: u32, _amount: f64) -> io::Result<()> {
         Ok(())
     }
     fn take_velocity_changes(&mut self) -> Vec<(u32, crate::mover::VelocityChange)> {
@@ -120,12 +122,22 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_room_message(
         &mut self,
-        _sender: u32,
-        _message: RoomMessage,
+        sender: u32,
+        message: RoomMessage,
+    ) -> Result<usize, InitFault>;
+    fn set_wheel_cosmetics(&mut self, _cosmetics: crate::match_scene::WheelCosmetics) {}
+    fn queue_wheel_selection(
+        &mut self,
+        _action: ClientWheelAction,
+        _command_frame: Option<u32>,
     ) -> Result<usize, InitFault> {
         Ok(0)
     }
-    fn queue_local_message(&mut self, _message: RoomMessage) -> Result<usize, InitFault> {
+    fn queue_wheel_use(
+        &mut self,
+        _report: ClientWheelUse,
+        _sent_instance_start: Option<u64>,
+    ) -> Result<usize, InitFault> {
         Ok(0)
     }
     fn wheel_actions_available(&self) -> bool {
@@ -133,26 +145,34 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     }
     fn receive_host_event(
         &mut self,
-        _event: HostEvent,
-        _context: HostHealthContext,
-    ) -> Result<usize, InitFault> {
-        Ok(0)
-    }
+        event: HostEvent,
+        context: HostHealthContext,
+    ) -> Result<usize, InitFault>;
+    fn receive_authored_hit_feedback(
+        &mut self,
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault>;
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        target: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault>;
     fn set_spatial_frame(&mut self, _frame: Arc<crate::game_combat::RoomSpatialFrame>) {}
     fn set_defenders(&mut self, _defenders: Arc<[u32]>) {}
     fn set_team_member_counts(&mut self, _counts: crate::game_instance::TeamMemberCounts) {}
-    fn take_sightings(&mut self) -> Vec<crate::junkenstein_messages::DefenderSighting> {
+    fn take_sightings(&mut self) -> Vec<crate::pve_encounter::messages::DefenderSighting> {
         Vec::new()
     }
     fn receive_sighting(
         &mut self,
-        _message: crate::junkenstein_messages::DefenderSighting,
+        _message: crate::pve_encounter::messages::DefenderSighting,
     ) -> io::Result<()> {
         Ok(())
     }
     fn receive_defender_message(
         &mut self,
-        _message: crate::junkenstein_messages::DefenderMessage,
+        _message: crate::pve_encounter::messages::DefenderMessage,
     ) -> io::Result<usize> {
         Ok(0)
     }
@@ -163,6 +183,60 @@ pub(crate) trait OwnerBodyRuntime: Send + Sync {
     fn authored_facing(&self) -> Option<[i32; 2]> {
         None
     }
+
+    fn move_request(&self) -> Option<([f64; 3], f64)> {
+        None
+    }
+
+    fn ball_roll_speed(&self) -> Option<f64> {
+        None
+    }
+
+    fn take_body_swap(&mut self) -> Option<u64> {
+        None
+    }
+
+    fn deflect_state(&self) -> Option<crate::script_init::DeflectState> {
+        None
+    }
+
+    /// `(outgoing_damage, incoming_damage, outgoing_heal, incoming_heal, cc_immune)`
+    fn combat_modifiers(&self) -> (f64, f64, f64, f64, bool) {
+        (1.0, 1.0, 1.0, 1.0, false)
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn set_ult_charge_scale(&mut self, _scale: f64) {}
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn set_cooldown_scale(&mut self, _scale: f64) {}
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn ult_charge_percent(&self) -> f64 {
+        0.0
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn add_ult_charge_points(&mut self, _points: f64) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn set_ult_charge_percent(&mut self, _percent: f64) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn reset_all_cooldowns(&mut self) -> io::Result<usize> {
+        Ok(0)
+    }
+
+    #[cfg_attr(not(feature = "lua-mods"), allow(dead_code))]
+    fn is_emoting(&self) -> bool {
+        false
+    }
+
+    fn set_on_fire(&mut self, _active: bool) {}
 
     fn has_deadeye(&self) -> bool {
         false
@@ -300,6 +374,7 @@ pub(crate) struct WorldDelivery {
     queued: Vec<Arc<Record>>,
     created: HashSet<u32>,
     bots: HashMap<u32, BotLifetime>,
+    pending_respawn_presentation: HashSet<u32>,
     bot_controllers: HashMap<u32, BotControllerState>,
     health_updates: HashMap<u32, u64>,
     health_revision: u64,
@@ -319,7 +394,6 @@ pub(crate) struct WorldDelivery {
     encounter_outcome_queued: bool,
     select_open: bool,
     body: Option<Body>,
-    player_respawn: Option<(BodyId, Duration)>,
     bound: Option<BodyId>,
     generation: u64,
     bodies: HashMap<u32, (u64, Lifetime)>,
@@ -332,8 +406,10 @@ pub(crate) struct WorldDelivery {
     projectile_destroys: HashMap<u32, (BodyId, ProjectileToken)>,
     biotic_views: BTreeMap<u32, BioticView>,
     scene_views: BTreeMap<u32, BodyStream<ProjectedSnapshot>>,
+    retiring_nameplate_chunks: HashSet<(u32, u32)>,
     observed_projectiles: observed_projectiles::ObservedProjectiles,
     bot_chunk_waited: bool,
+    last_sent_remote_movement: Option<u32>,
     gate: Option<u32>,
     next_biotic_view: u32,
 }

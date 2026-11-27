@@ -15,7 +15,7 @@ mod knockback_tests;
 use crate::{
     collision_index::IndexError,
     game_clock::TICK_PERIOD,
-    game_hitscan::{HitDefinition, HurtPose, Impact, TargetPose},
+    game_hitscan::{HitDefinition, HitTargetPolicy, HurtPose, Impact, ImpactGeometry, TargetPose},
     game_projectiles::authored_number,
     script_expr::EvalError,
     script_graph::Node,
@@ -63,11 +63,27 @@ impl ProjectileBallistics {
         node: &Node,
         evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
     ) -> Result<Option<Self>, EvalError> {
-        Self::from_fields(&node.fields, evaluate)
+        Self::from_fields_with_critical(&node.fields, 1.0, evaluate)
+    }
+
+    pub(crate) fn from_authored_with_critical(
+        node: &Node,
+        default_critical: f64,
+        evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        Self::from_fields_with_critical(&node.fields, default_critical, evaluate)
     }
 
     pub(crate) fn from_fields(
         fields: &Json,
+        evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+    ) -> Result<Option<Self>, EvalError> {
+        Self::from_fields_with_critical(fields, 1.0, evaluate)
+    }
+
+    fn from_fields_with_critical(
+        fields: &Json,
+        default_critical: f64,
         mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
     ) -> Result<Option<Self>, EvalError> {
         let field = |path| crate::script_graph::field_at(fields, path);
@@ -95,8 +111,11 @@ impl ProjectileBallistics {
             None => None,
         };
         let radius = authored_number(field("m_6396149F.m_57DAE1B5"), 0.0, &mut evaluate)?;
+        let ally_radius = authored_number(field("m_6396149F.m_71A4B759"), 0.0, &mut evaluate)?;
         let radius = if radius.is_finite() && radius > 0.0 {
             radius
+        } else if ally_radius.is_finite() && ally_radius > 0.0 {
+            ally_radius
         } else {
             0.0
         };
@@ -107,8 +126,9 @@ impl ProjectileBallistics {
         if !terrain_radius.is_finite() || terrain_radius < 0.0 {
             return Err(EvalError::MalformedConfig("projectile terrain radius"));
         }
-        let direct = HitDefinition::from_authored(
+        let direct = HitDefinition::from_authored_with_critical(
             field("m_6396149F").unwrap_or(&Json::Null),
+            default_critical,
             &mut evaluate,
         )?;
         let config = field("m_D2D11CE9").unwrap_or(&Json::Null);
@@ -126,10 +146,15 @@ impl ProjectileBallistics {
             rings.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
             let scale = authored_number(config.get("m_8A3E3883"), 0.0, &mut evaluate)?;
             let self_knockback = &config["m_49F60FB8"];
-            let self_knockback_scale = if self_knockback.as_bool() == Some(true)
+            let self_knockback_enabled = self_knockback.as_bool() == Some(true)
                 || self_knockback.as_u64() == Some(1)
-            {
-                authored_number(config.get("m_2FE97560"), 0.0, &mut evaluate).unwrap_or(0.0) as f32
+                || (!self_knockback.is_null()
+                    && self_knockback.is_object()
+                    && evaluate(self_knockback)
+                        .ok()
+                        .is_some_and(|v| crate::script_expr::truthy(&v)));
+            let self_knockback_scale = if self_knockback_enabled {
+                authored_number(config.get("m_2FE97560"), 1.0, &mut evaluate).unwrap_or(1.0) as f32
             } else {
                 0.0
             };
@@ -270,6 +295,13 @@ impl Blast {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct StuckState {
+    anchor: Option<(u32, Vec3)>,
+    splash_origin: Vec3,
+    remaining: f64,
+}
+
 pub struct ProjectileFlight {
     ballistics: ProjectileBallistics,
     position: Vec3,
@@ -283,6 +315,15 @@ pub struct ProjectileFlight {
     gravity: f32,
     velocity: Vec3,
     terrain_rebounds: u32,
+    post_bounce_fuse: Option<f64>,
+    sticky_delay: Option<f64>,
+    stuck: Option<StuckState>,
+    direct_effect: Option<u64>,
+    blast_effect: Option<u64>,
+    piercing: bool,
+    hit_actors: Vec<u32>,
+    piercing_impacts: Vec<Impact>,
+    target_policy: HitTargetPolicy,
 }
 
 #[derive(Debug, PartialEq)]
@@ -308,6 +349,89 @@ impl ProjectileFlight {
             .blast
             .as_ref()
             .is_some_and(Blast::affects_shooter)
+    }
+
+    pub(crate) fn target_policy(&self) -> HitTargetPolicy {
+        self.target_policy
+    }
+
+    pub(crate) fn with_target_policy(mut self, policy: HitTargetPolicy) -> Self {
+        self.target_policy = policy;
+        self
+    }
+
+    pub(crate) fn with_piercing(mut self, piercing: bool) -> Self {
+        self.piercing = piercing;
+        self
+    }
+
+    pub(crate) fn with_post_bounce_fuse(mut self, fuse: Option<f64>) -> Self {
+        self.post_bounce_fuse = fuse.filter(|f| f.is_finite() && *f > 0.0);
+        if self.post_bounce_fuse.is_some() && self.ballistics.blast.is_some() {
+            self.expiry_blast = true;
+        }
+        self
+    }
+
+    pub(crate) fn with_sticky_delay(mut self, delay: Option<f64>) -> Self {
+        self.sticky_delay = delay.filter(|d| d.is_finite() && *d > 0.0);
+        self
+    }
+
+    pub(crate) fn with_effects(
+        mut self,
+        direct_effect: Option<u64>,
+        blast_effect: Option<u64>,
+    ) -> Self {
+        self.direct_effect = direct_effect;
+        self.blast_effect = blast_effect;
+        self
+    }
+
+    pub(crate) fn position(&self) -> Vec3 {
+        self.position
+    }
+
+    pub(crate) fn velocity(&self) -> Vec3 {
+        self.velocity
+    }
+
+    pub(crate) fn is_piercing(&self) -> bool {
+        self.piercing
+    }
+
+    pub(crate) fn barrier_impact_damage(&self) -> f64 {
+        let direct = self
+            .ballistics
+            .direct
+            .map_or(0.0, |h| h.damage_at(self.distance_travelled, false));
+        let blast = self
+            .ballistics
+            .blast
+            .as_ref()
+            .map_or(0.0, |b| b.hit.damage_at(0.0, false));
+        direct.max(blast)
+    }
+
+    pub(crate) fn direct_effect(&self) -> Option<u64> {
+        self.direct_effect
+    }
+
+    pub(crate) fn blast_effect(&self) -> Option<u64> {
+        self.blast_effect
+    }
+
+    pub(crate) fn drain_piercing_impacts(&mut self) -> Vec<Impact> {
+        std::mem::take(&mut self.piercing_impacts)
+    }
+
+    pub(crate) fn blast_radius(&self) -> f64 {
+        self.ballistics
+            .blast
+            .as_ref()
+            .and_then(|blast| blast.rings.last().map(|&(radius, _)| radius))
+            .filter(|radius| radius.is_finite() && *radius > 0.0)
+            .unwrap_or(0.0)
     }
 
     pub fn new(
@@ -346,6 +470,15 @@ impl ProjectileFlight {
             expiry_blast,
             gravity: 0.0,
             terrain_rebounds: 0,
+            post_bounce_fuse: None,
+            sticky_delay: None,
+            stuck: None,
+            direct_effect: None,
+            blast_effect: None,
+            piercing: false,
+            hit_actors: Vec::new(),
+            piercing_impacts: Vec::new(),
+            target_policy: HitTargetPolicy::default(),
         })
     }
 
@@ -371,7 +504,7 @@ impl ProjectileFlight {
         })
     }
 
-    pub(crate) fn advance_combat<T: Copy + Into<HurtPose>>(
+    pub(crate) fn advance_combat<T: Clone + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
@@ -393,7 +526,7 @@ impl ProjectileFlight {
         )
     }
 
-    fn advance_with_wall<T: Copy + Into<HurtPose>>(
+    fn advance_with_wall<T: Clone + Into<HurtPose>>(
         &mut self,
         tick: u32,
         targets: &[(u32, T)],
@@ -409,6 +542,39 @@ impl ProjectileFlight {
         }
         let seconds = TICK_PERIOD.as_secs_f64();
         self.last_tick = Some(tick);
+        if let Some(mut stuck) = self.stuck {
+            let dt = f64::from(elapsed) * seconds;
+            if let Some((anchor_entity, offset)) = stuck.anchor {
+                if let Some((_, pose)) = targets.iter().find(|(e, _)| *e == anchor_entity) {
+                    let feet = pose.clone().into().feet();
+                    self.position = [
+                        feet[0] + offset[0],
+                        feet[1] + offset[1],
+                        feet[2] + offset[2],
+                    ];
+                    stuck.splash_origin = self.position;
+                }
+            }
+            self.travelled += dt;
+            stuck.remaining -= dt;
+            if stuck.remaining <= 0.0 {
+                self.stuck = None;
+                let impacts = self.splash(
+                    stuck.splash_origin,
+                    self.position,
+                    targets,
+                    shooter,
+                    &mut wall,
+                )?;
+                return Ok(Some(self.finish(
+                    impacts,
+                    false,
+                    stuck.anchor.map(|(entity, _)| entity),
+                )));
+            }
+            self.stuck = Some(stuck);
+            return Ok(None);
+        }
         let kinetic = self.gravity != 0.0 || self.ballistics.terrain_rebound.is_some();
         let steps = if kinetic { elapsed } else { 1 };
         let step_time = if kinetic {
@@ -431,8 +597,11 @@ impl ProjectileFlight {
                 if kinetic && speed > EPSILON {
                     self.direction = velocity.map(|axis| axis / speed);
                 }
-                match self.advance_segment(duration, speed, targets, shooter, &mut wall)? {
+                match self.advance_segment(duration, speed, targets, shooter.clone(), &mut wall)? {
                     Segment::Complete => {
+                        if self.stuck.is_some() {
+                            return Ok(None);
+                        }
                         self.velocity = velocity;
                         break;
                     }
@@ -444,7 +613,7 @@ impl ProjectileFlight {
         Ok(None)
     }
 
-    fn advance_segment<T: Copy + Into<HurtPose>>(
+    fn advance_segment<T: Clone + Into<HurtPose>>(
         &mut self,
         duration: f64,
         speed: f64,
@@ -459,14 +628,18 @@ impl ProjectileFlight {
             .map(|range| (range - self.distance_travelled).max(0.0));
         let reach = range_left.map_or(step, |range| step.min(range));
         let mut closest = None;
-        for &(entity, target) in targets {
-            if let Some((distance, head)) =
-                target
-                    .into()
-                    .contact(self.position, self.direction, reach, self.ballistics.radius)
-            {
-                if closest.is_none_or(|(best, _)| distance < best) {
-                    closest = Some((distance, Some((entity, head))));
+        if !self.piercing {
+            for (entity, target) in targets {
+                if let Some(contact) = target.clone().into().contact(
+                    self.position,
+                    self.direction,
+                    reach,
+                    self.ballistics.radius,
+                ) {
+                    let distance = contact.hit.distance;
+                    if closest.as_ref().is_none_or(|(best, _)| distance < *best) {
+                        closest = Some((distance, Some((*entity, contact))));
+                    }
                 }
             }
         }
@@ -478,8 +651,46 @@ impl ProjectileFlight {
         )?
         .filter(|hit| {
             (0.0..=reach).contains(&hit.distance)
-                && closest.is_none_or(|(best, _)| hit.distance < best)
+                && closest
+                    .as_ref()
+                    .is_none_or(|(best, _)| hit.distance < *best)
         });
+        if self.piercing {
+            let actor_limit = wall_hit.map_or(reach, |hit| hit.distance);
+            if let Some(direct) = self.ballistics.direct.filter(|hit| hit.amount > 0.0) {
+                for &(entity, ref target) in targets {
+                    if self.hit_actors.contains(&entity) {
+                        continue;
+                    }
+                    if let Some(contact) = target.clone().into().contact(
+                        self.position,
+                        self.direction,
+                        actor_limit,
+                        self.ballistics.radius,
+                    ) {
+                        let distance = contact.hit.distance;
+                        let point = along(self.position, self.direction, distance);
+                        let critical = contact.head && direct.critical > 1.0;
+                        self.hit_actors.push(entity);
+                        self.piercing_impacts.push(Impact {
+                            tags: direct.tags,
+                            entity,
+                            distance,
+                            damage: direct.damage_at(self.distance_travelled + distance, critical),
+                            critical,
+                            loadout: direct.loadout,
+                            impulse: None,
+                            geometry: Some(ImpactGeometry::Direct {
+                                origin: self.position,
+                                point: contact.point_on_body(point),
+                                direction: self.direction,
+                                normal: contact.hit.normal,
+                            }),
+                        });
+                    }
+                }
+            }
+        }
         if let Some(hit) = wall_hit {
             closest = Some((hit.distance, None));
         }
@@ -522,28 +733,88 @@ impl ProjectileFlight {
                 gravity_step(self.velocity, self.gravity, spent)
             };
             self.velocity = rebound.reflect(incident, normal);
-            self.position = along(point, normal, REBOUND_SEPARATION);
+            let separation = if self.ballistics.terrain_radius > 0.0 {
+                f64::from(self.ballistics.terrain_radius) + REBOUND_SEPARATION
+            } else {
+                REBOUND_SEPARATION
+            };
+            self.position = along(point, normal, separation);
             self.terrain_rebounds += 1;
             self.distance_travelled += distance;
             self.travelled += spent;
             self.remaining -= spent;
+            if self.terrain_rebounds == 1 {
+                if let Some(fuse) = self.post_bounce_fuse {
+                    self.remaining = self.remaining.min(fuse);
+                    self.expiry_blast = true;
+                }
+            }
             return Ok(Segment::Rebounded(spent.min(duration)));
         }
         let mut impacts = Vec::new();
-        if let (Some((entity, head)), Some(direct)) = (
-            target,
+        if let (Some((entity, contact)), Some(direct)) = (
+            target.as_ref(),
             self.ballistics.direct.filter(|hit| hit.amount > 0.0),
         ) {
-            let critical = head && direct.critical > 1.0;
+            let critical = contact.head && direct.critical > 1.0;
             impacts.push(Impact {
                 tags: direct.tags,
-                entity,
+                entity: *entity,
                 distance,
                 damage: direct.damage_at(self.distance_travelled + distance, critical),
                 critical,
                 loadout: direct.loadout,
                 impulse: None,
+                geometry: Some(ImpactGeometry::Direct {
+                    origin: self.position,
+                    point: contact.point_on_body(point),
+                    direction: self.direction,
+                    normal: contact.hit.normal,
+                }),
             });
+        }
+        if let Some(delay) = self
+            .sticky_delay
+            .filter(|_| self.ballistics.blast.is_some())
+        {
+            // Sticky projectile (e.g. Echo Sticky Bombs `m_12654E6E`): apply direct
+            // impact immediately, adhere to the contacted target or world surface,
+            // and detonate splash after the authored fuse delay.
+            self.piercing_impacts.extend(impacts);
+            let anchor = target.as_ref().and_then(|(entity, _)| {
+                targets
+                    .iter()
+                    .find(|(e, _)| *e == *entity)
+                    .map(|(_, pose)| {
+                        let feet = pose.clone().into().feet();
+                        (
+                            *entity,
+                            [point[0] - feet[0], point[1] - feet[1], point[2] - feet[2]],
+                        )
+                    })
+            });
+            let splash_origin = match wall_hit {
+                Some(WallContact {
+                    normal: Some(normal),
+                    ..
+                }) => along(point, normal, SURFACE_RAY_OFFSET),
+                Some(_) => along(
+                    self.position,
+                    self.direction,
+                    (distance - DISTANCE_ONLY_RAY_OFFSET).max(0.0),
+                ),
+                None => point,
+            };
+            self.position = point;
+            self.velocity = [0.0; 3];
+            self.distance_travelled += distance;
+            self.travelled += spent;
+            self.stuck = Some(StuckState {
+                anchor,
+                splash_origin,
+                remaining: delay,
+            });
+            return Ok(Segment::Complete);
         }
         let origin = match wall_hit {
             // Offset perpendicular to the hit surface. At a glancing angle an
@@ -570,7 +841,7 @@ impl ProjectileFlight {
         )))
     }
 
-    fn splash<T: Copy + Into<HurtPose>>(
+    fn splash<T: Clone + Into<HurtPose>>(
         &self,
         point: Vec3,
         origin: Vec3,
@@ -587,7 +858,7 @@ impl ProjectileFlight {
         {
             let targets = targets
                 .iter()
-                .map(|&(entity, pose)| (entity, pose.into(), 1.0, 1.0));
+                .map(|(entity, pose)| (*entity, pose.clone().into(), 1.0, 1.0));
             let shooter = shooter
                 .filter(|_| blast.affects_shooter())
                 .map(|(entity, pose)| {
@@ -634,6 +905,7 @@ impl ProjectileFlight {
                     critical: false,
                     loadout: blast.hit.loadout,
                     impulse,
+                    geometry: Some(ImpactGeometry::Blast { origin: point }),
                 });
             }
         }
@@ -653,36 +925,40 @@ impl ProjectileFlight {
     }
 }
 
-/// A direct single shot uses the sampled command pose for the first two
-/// literal aim slots, as in the reference server's posed weapon path.
+/// A direct single shot uses the sampled command pose with any authored lift bias.
 pub(crate) fn posed_projectile_direction(
     node: &Node,
     direction: Vec3,
     mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
 ) -> Option<Vec3> {
     let launch = node.field("m_5EC1EB38").filter(|config| !config.is_null());
-    let direct = launch.is_some_and(|config| config["$"] == "STU_239B571E");
-    if launch.is_some() && !direct {
+    let kind = launch.and_then(|config| config["$"].as_str());
+    if launch.is_some() && !matches!(kind, Some("STU_239B571E" | "STU_613BDDB0" | "STU_1145C42E")) {
         return None;
     }
     if let Some(aim) = node.field("m_aimID").filter(|config| !config.is_null()) {
-        if !direct
-            || aim["$"] != "STUConfigVarInt"
-            || !matches!(aim["m_value"].as_i64(), Some(0 | 1))
-        {
+        // Retail 1.74 weapons use aim channels 0..=3 (0/1 primary/alt, 2 thrown abilities
+        // such as Biotic Grenade/Graviton/Barrier/Lamp, 3 secondary ability aim).
+        if !matches!(evaluate(aim).ok()?, Value::Integer(0..=3)) {
             return None;
         }
     }
-    match launch
-        .map(|config| &config["m_22CE7F30"])
-        .filter(|lift| !lift.is_null())
-    {
-        Some(lift) => lifted_direction(
-            direction,
-            crate::script_expr::to_float(&evaluate(lift).ok()?),
-        ),
-        None => Some(direction),
+    direct_projectile_direction(launch.unwrap_or(&Json::Null), direction, evaluate)
+}
+
+pub(crate) fn direct_projectile_direction(
+    launch: &Json,
+    direction: Vec3,
+    mut evaluate: impl FnMut(&Json) -> Result<Value, EvalError>,
+) -> Option<Vec3> {
+    let lift = &launch["m_22CE7F30"];
+    if lift.is_null() {
+        return Some(direction);
     }
+    lifted_direction(
+        direction,
+        crate::script_expr::to_float(&evaluate(lift).ok()?),
+    )
 }
 
 /// Native launch bias: float32 add to Y followed by normalization.
@@ -725,6 +1001,10 @@ pub(crate) fn authored_gravity(
         .ok_or(EvalError::MalformedConfig("projectile motion list"))?;
     let mut gravity = 0.0f32;
     for motion in motions {
+        if motion["$"] == "STU_7A5DFFF8" {
+            // Non-gravity speed/acceleration curve; gravity remains unaffected.
+            continue;
+        }
         if motion["$"] != "STU_E1A5B579" {
             return Err(EvalError::UnsupportedConfig(
                 "projectile motion class".into(),
@@ -840,6 +1120,7 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
+            let segment_origin = flight.position;
             let end = flight
                 .advance(20, &targets, |_, _, _| Ok(None))
                 .unwrap()
@@ -850,7 +1131,40 @@ mod tests {
                 panic!("expected one direct projectile impact");
             };
             assert!((impact.damage - case.damage).abs() < EPSILON);
+            assert_eq!(
+                impact.geometry,
+                Some(ImpactGeometry::Direct {
+                    origin: segment_origin,
+                    point: end.point,
+                    direction: [0.0, 0.0, 1.0],
+                    normal: [0.0, 0.0, -1.0],
+                })
+            );
         }
+    }
+
+    #[test]
+    fn expanded_projectile_records_the_target_surface_separately_from_the_sweep_centre() {
+        let profile = ProjectileBallistics {
+            radius: 0.25,
+            ..helix()
+        };
+        let mut flight =
+            ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(10)).unwrap();
+        let end = flight
+            .advance(15, &[(1, target(0.0, 3.0))], |_, _, _| Ok(None))
+            .unwrap()
+            .unwrap();
+        assert_eq!(end.point, [0.0, 1.0, 2.25]);
+        assert_eq!(
+            end.impacts[0].geometry,
+            Some(ImpactGeometry::Direct {
+                origin: [0.0, 1.0, 0.0],
+                point: [0.0, 1.0, 2.5],
+                direction: [0.0, 0.0, 1.0],
+                normal: [0.0, 0.0, -1.0],
+            })
+        );
     }
 
     #[test]
@@ -1398,6 +1712,10 @@ mod tests {
             };
             assert_eq!(near.entity, 1);
             assert_eq!(near.damage, input["damage"].as_f64().unwrap());
+            assert_eq!(
+                near.geometry,
+                Some(ImpactGeometry::Blast { origin: end.point })
+            );
             let [x, y, z] = near.impulse.unwrap();
             assert_eq!(x, side * input["horizontal_impulse"].as_f64().unwrap());
             assert_eq!(y, input["upward_impulse"].as_f64().unwrap());
@@ -1432,21 +1750,26 @@ mod tests {
             let mut flight =
                 ProjectileFlight::new(profile, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], None).unwrap();
             flight
-                .advance_with_wall(1, &targets, Some(shooter), |_, direction, reach, _| {
-                    if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
-                        Ok(Some(WallContact {
-                            distance: 0.75,
-                            normal: None,
-                        }))
-                    } else if obstructed && direction[2] < -0.9 {
-                        Ok(Some(WallContact {
-                            distance: reach / 2.0,
-                            normal: None,
-                        }))
-                    } else {
-                        Ok(None)
-                    }
-                })
+                .advance_with_wall(
+                    1,
+                    &targets,
+                    Some(shooter.clone()),
+                    |_, direction, reach, _| {
+                        if direction == [0.0, 0.0, 1.0] && reach >= 0.75 {
+                            Ok(Some(WallContact {
+                                distance: 0.75,
+                                normal: None,
+                            }))
+                        } else if obstructed && direction[2] < -0.9 {
+                            Ok(Some(WallContact {
+                                distance: reach / 2.0,
+                                normal: None,
+                            }))
+                        } else {
+                            Ok(None)
+                        }
+                    },
+                )
                 .unwrap()
                 .unwrap()
         };
@@ -1523,5 +1846,83 @@ mod tests {
         assert!(!end.expired);
         assert_eq!(end.impacts.len(), 1);
         assert_eq!((end.impacts[0].entity, end.impacts[0].damage), (1, 40.0));
+    }
+
+    #[test]
+    fn piercing_projectile_hits_multiple_aligned_targets_until_wall() {
+        let fields = serde_json::json!({
+            "m_projectileSpeed": 25.0,
+            "m_projectileLifetime": 2.0,
+            "m_6396149F": {
+                "m_57DAE1B5": 0.4,
+                "m_0A5ED456": 1,
+                "m_modifyHealth": {
+                    "m_amount": 100.0
+                }
+            }
+        });
+        let authored = ProjectileBallistics::from_fields(&fields, |config| {
+            Ok(config.as_f64().map_or(Value::Null, Value::Float))
+        })
+        .unwrap()
+        .unwrap();
+        let targets = [(1, target(0.0, 2.0)), (2, target(0.0, 4.0))];
+        let mut flight =
+            ProjectileFlight::new(authored, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], Some(100))
+                .unwrap()
+                .with_piercing(true);
+        let mut hit_entities = Vec::new();
+        let mut wall_hit = None;
+        for tick in 101..=130 {
+            let end = flight
+                .advance(tick, &targets, |origin, dir, reach| {
+                    let wall_z = 6.0;
+                    if dir[2] > 0.0 && origin[2] <= wall_z && origin[2] + dir[2] * reach >= wall_z {
+                        Ok(Some((wall_z - origin[2]) / dir[2]))
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .unwrap();
+            for impact in flight.drain_piercing_impacts() {
+                hit_entities.push((impact.entity, impact.damage));
+            }
+            if let Some(end) = end {
+                wall_hit = Some(end);
+                break;
+            }
+        }
+        assert_eq!(hit_entities, vec![(1, 100.0), (2, 100.0)]);
+        let end = wall_hit.expect("piercing projectile terminates at wall");
+        assert!(!end.expired);
+        assert!(end.impact);
+        assert_eq!(end.contact, None);
+    }
+
+    #[test]
+    fn hit_target_policy_distinguishes_enemy_pure_heal_and_dual_team_volleys() {
+        use crate::game_hitscan::HitTargetPolicy;
+        // Standard enemy-only volley (default)
+        let enemy = HitTargetPolicy::from_authored(&serde_json::json!({}));
+        assert!(!enemy.healing && !enemy.affects_allies && enemy.affects_enemies);
+        // Pure healing volley (e.g. Baptiste RMB / Moira spray): m_93CDFD2F = 0
+        let pure_heal = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_modifyHealth": { "m_93CDFD2F": 0 }
+        }));
+        assert!(pure_heal.healing && pure_heal.affects_allies && !pure_heal.affects_enemies);
+        // Dual ally-heal + enemy-damage volley (e.g. Ana Rifle / Biotic Grenade)
+        let dual = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_09528B11": 1,
+            "m_50C84E9E": 1,
+            "m_3E7A533D": 1
+        }));
+        assert!(!dual.healing && dual.affects_allies && dual.affects_enemies);
+        // Ashe / Wrecking Ball m_09528B11=1 with m_50C84E9E=0 is NOT healing
+        let non_heal = HitTargetPolicy::from_authored(&serde_json::json!({
+            "m_09528B11": 1,
+            "m_50C84E9E": 0,
+            "m_3E7A533D": 1
+        }));
+        assert!(!non_heal.healing && !non_heal.affects_allies && non_heal.affects_enemies);
     }
 }

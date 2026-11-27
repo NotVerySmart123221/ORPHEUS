@@ -158,6 +158,60 @@ impl Node {
             .collect()
     }
 
+    pub(crate) fn contact_effect_resource(&self) -> Option<u64> {
+        let fields = &self.fields;
+        let resource = &fields["m_contactSet"];
+        if self.class != "STU_23A00A53"
+            || !self.is_networked()
+            || self.remote < 0
+            || !native_shape(&fields["m_63CB0D07"], "STU_B5A0CAF0", None)
+            || resource["$"] != "STUConfigVarContactSet"
+            || !native_fields(resource, &["m_contactSet", "m_resourceKey"])
+            || !resource["m_resourceKey"].is_null()
+            || !(fields["m_6A3C1510"].is_null() || fields["m_6A3C1510"].as_u64() == Some(0))
+            || !fields["m_ignoreEntities"].is_null()
+        {
+            return None;
+        }
+        let target = dynamic(&fields["m_53FCEDBF"]).ok()??;
+        if target.scope != Scope::Instance || !self.frame_action_variables()?.contains(&target) {
+            return None;
+        }
+        asset_guid(&resource["m_contactSet"])
+            .filter(|&guid| guid >> 48 == 0x0120 && guid & 0x0000_ffff_ffff_ffff != 0)
+    }
+
+    pub(crate) fn tracks_ground_contact(&self) -> bool {
+        let f = &self.fields;
+        let segment = &f["m_F5732403"];
+        let filter = &f["m_filter"];
+        let target = &f["m_target"];
+        let configured_fields = |config: &Value, supported: &[&str]| {
+            config.as_object().is_some_and(|fields| {
+                fields.iter().all(|(name, value)| {
+                    name == "$"
+                        || supported.contains(&name.as_str())
+                        || value.is_null()
+                        || value.as_u64() == Some(0)
+                })
+            })
+        };
+        self.class == "STUStatescriptStateTrackRay"
+            && segment["$"] == "STU_9E9028E6"
+            && native_shape(&f["m_3BC31C57"], "STU_8CBDD81C", Some("m_entity"))
+            && native_shape(&f["m_3BC31C57"]["m_entity"], "STU_B5A0CAF0", None)
+            && filter["$"] == "STUConfigVarFilter"
+            && configured_fields(filter, &["m_C1903771"])
+            && asset_guid(&filter["m_C1903771"]["m_C1903771"]) == Some(0x0690_0000_0000_002c)
+            && f["m_57DAE1B5"].is_null()
+            && f["m_ignoreEntities"].is_null()
+            && target["$"] == "STU_404DE6D3"
+            && configured_fields(target, &["m_5ED803CF", "m_7BA44A69"])
+            && ["m_5ED803CF", "m_7BA44A69"]
+                .into_iter()
+                .all(|name| crate::script_expr::lvalue(&target[name]).is_ok_and(|v| v.is_some()))
+    }
+
     pub fn is_state(&self) -> bool {
         self.state_behavior.is_some() || self.fields.get("m_2BBEEAB8").is_some_and(truthy)
     }
@@ -1362,6 +1416,10 @@ impl Body {
     pub fn model_hardpoints(&self, skin: u64) -> Option<Arc<BTreeSet<u64>>> {
         self.model_hardpoints.get(&skin).cloned()
     }
+
+    pub fn has_model_hardpoints(&self) -> bool {
+        !self.model_hardpoints.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2187,7 +2245,9 @@ impl GraphStore {
                     || node.declares_room_cue_action()
                     || node.directed_numeric_parameter().is_some()
                     || node.tracks_room_actor_identity()
+                    || node.contact_effect_resource().is_some()
                     || view_track.is_some()
+                    || node.class == "STU_861D9015"
                 {
                     requirements.needs = requirements.needs.max(RoomSpatialNeeds::Queries);
                 }
@@ -2258,6 +2318,12 @@ impl GraphStore {
             .is_some_and(|rows| !rows.is_empty())
     }
 
+    pub fn has_asset_category_entry(&self, asset: u64) -> bool {
+        self.asset_categories
+            .as_ref()
+            .is_some_and(|rows| rows.contains_key(&asset))
+    }
+
     /// Whether any server graph uses the room's living body snapshot.
     pub fn uses_room_spatial_frame(&self) -> bool {
         self.room_spatial_needs != RoomSpatialNeeds::None
@@ -2290,6 +2356,27 @@ impl GraphStore {
         self.projected_message_topics.contains(&id)
     }
 
+    /// Whether any loaded graph declares a server-executed receiver for `topic`.
+    pub fn has_server_message_receiver(&self, topic: u64) -> bool {
+        self.graphs.values().any(|graph| {
+            graph.nodes.iter().any(|node| {
+                node.runs_on_server()
+                    && matches!(
+                        node.class.as_str(),
+                        "STUStatescriptEntryGameMessage" | "STUStatescriptStateGameMessageEntry"
+                    )
+                    && node.game_message_id() == Some(topic)
+            })
+        })
+    }
+
+    /// Whether the graph exists and every node in it executes only on the client.
+    pub fn is_client_only_graph(&self, index: u32) -> bool {
+        self.graphs.get(&index).is_some_and(|graph| {
+            !graph.nodes.is_empty() && graph.nodes.iter().all(|n| !n.runs_on_server())
+        })
+    }
+
     /// Inspect local graph structure on demand. Unresolved null links and links
     /// to declared containers are valid and do not appear in this report.
     pub fn dangling_links(&self) -> impl Iterator<Item = DanglingLink> + '_ {
@@ -2306,6 +2393,50 @@ impl GraphStore {
 
     pub fn entity_body(&self, guid: u64) -> Option<&Body> {
         self.entities.get(&guid)
+    }
+
+    /// Extract the authored `0x0120...` contact-set index from a body or entity's graph schema entries (`0x0D800000000002A3`).
+    pub fn body_contact_set(&self, body_guid: u64) -> Option<u16> {
+        let body = self
+            .bodies
+            .get(&body_guid)
+            .or_else(|| self.entities.get(&body_guid))?;
+        for binding in body.graphs.iter().chain(body.server_graphs.iter()) {
+            let Some(entries) = &binding.sync else {
+                continue;
+            };
+            for entry in entries {
+                if entry.get("m_0D09D2D9").and_then(Value::as_str) != Some("0x0D800000000002A3") {
+                    continue;
+                }
+                let Some(val) = entry.get("m_value") else {
+                    continue;
+                };
+                if val.get("$").and_then(Value::as_str) != Some("STUConfigVarContactSet") {
+                    continue;
+                }
+                if let Some(guid) = val
+                    .get("m_contactSet")
+                    .and_then(Value::as_str)
+                    .and_then(parse_guid)
+                {
+                    let index = (guid & 0xffff) as u16;
+                    if index != 0 {
+                        return Some(index);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    pub fn body_contact_sets(&self) -> BTreeMap<u64, u16> {
+        self.bodies
+            .keys()
+            .chain(self.entities.keys())
+            .copied()
+            .filter_map(|guid| self.body_contact_set(guid).map(|cs| (guid, cs)))
+            .collect()
     }
 
     pub fn enemy_pair(&self, hero: u64) -> Option<EnemyPair> {
@@ -2792,6 +2923,45 @@ mod tests {
                 io::ErrorKind::InvalidData
             );
         }
+    }
+
+    #[test]
+    fn body_contact_set_extracts_authored_index_or_returns_none() {
+        let mut data = fixture();
+        data["bodies"]["0x0400000000000001"] = json!({
+            "hero": null, "name": "Human", "manager": null, "weapons": [],
+            "graphs": [{
+                "graph": 42,
+                "m_1EB5A024": [{
+                    "$": "STUStatescriptSchemaEntry",
+                    "m_0D09D2D9": "0x0D800000000002A3",
+                    "m_value": {"$": "STUConfigVarContactSet", "m_contactSet": "0x01200000000005EE"}
+                }],
+                "m_75408640": 0
+            }]
+        });
+        data["bodies"]["0x0400000000000002"] = json!({
+            "hero": null, "name": "Omnic", "manager": null, "weapons": [],
+            "graphs": [{
+                "graph": 42,
+                "m_1EB5A024": [{
+                    "$": "STUStatescriptSchemaEntry",
+                    "m_0D09D2D9": "0x0D800000000002A3",
+                    "m_value": {"$": "STUConfigVarContactSet", "m_contactSet": "0x01200000000000D5"}
+                }],
+                "m_75408640": 0
+            }]
+        });
+        let catalog = GraphStore::from_json(data.to_string().as_bytes()).unwrap();
+        assert_eq!(
+            catalog.body_contact_set(0x0400_0000_0000_0001),
+            Some(0x05ee)
+        );
+        assert_eq!(
+            catalog.body_contact_set(0x0400_0000_0000_0002),
+            Some(0x00d5)
+        );
+        assert_eq!(catalog.body_contact_set(0x0400_0000_0000_0099), None);
     }
 
     #[test]

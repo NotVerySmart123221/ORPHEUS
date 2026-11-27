@@ -3,7 +3,8 @@
 use super::*;
 
 pub struct PreparedScene {
-    pub(super) junkenstein_validation: Option<crate::junkenstein_validation::JunkensteinValidation>,
+    pub(super) junkenstein_validation:
+        Option<crate::pve_encounter::validation::JunkensteinValidation>,
     pub(super) map: GameMap,
     #[cfg(any(test, feature = "inspector"))]
     pub(super) movement_cache: String,
@@ -11,6 +12,7 @@ pub struct PreparedScene {
     pub(super) combat_rays: Arc<CollisionScene>,
     pub(super) combat_sweeps: Option<Arc<ContactWorld>>,
     pub(super) contacts: Option<Arc<ContactWorld>>,
+    pub(super) breakables: Arc<crate::collision_scene::BreakableState>,
     pub(super) controller: Controller,
     pub(super) mode_ui: BitWriter,
     pub(super) initial_board: Component,
@@ -42,6 +44,11 @@ impl PreparedScene {
             StatsCatalog::default().component(&stats, scene.map.mode_guid, None, None);
         scene.heroes = Arc::new(heroes);
         scene
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_combat_rays(&self) -> Arc<CollisionScene> {
+        Arc::clone(&self.combat_rays)
     }
 
     #[cfg(test)]
@@ -87,6 +94,7 @@ impl PreparedScene {
             placements: vec![],
         };
         let ground = Arc::new(CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap());
+        let breakables = Arc::new(crate::collision_scene::BreakableState::new());
         Self {
             junkenstein_validation: None,
             map: GameMap::practice_range(),
@@ -96,6 +104,7 @@ impl PreparedScene {
             combat_sweeps: None,
             ground,
             contacts: None,
+            breakables,
             controller: Controller::fixture_for_test(),
             mode_ui: BitWriter::new(),
             initial_board: Component {
@@ -142,7 +151,7 @@ impl PreparedScene {
     #[cfg(test)]
     pub(crate) fn take_encounter_voice_requests(
         &mut self,
-    ) -> Vec<crate::junkenstein_voice::VoiceRequest> {
+    ) -> Vec<crate::pve_encounter::voice::VoiceRequest> {
         self.simulation.take_encounter_voice_requests()
     }
     pub fn map(&self) -> &GameMap {
@@ -185,20 +194,32 @@ impl PreparedScene {
             .spawn_point(team, 0)
             .ok_or_else(|| invalid("no spawn for the selected hero"))?;
         let yaw = (yaw * 65536.0 / 360.0).round_ties_even() as i32;
+        self.player_spawn_mover_at(body, team, position, yaw)
+    }
+
+    pub(crate) fn player_spawn_mover_at(
+        &self,
+        body: u64,
+        team: u8,
+        position: [f64; 3],
+        yaw: i32,
+    ) -> io::Result<Mover> {
         let contacts = self.contacts.as_ref().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::Unsupported,
                 "the scene has no native player collision",
             )
         })?;
-        Mover::new(
+        let mut mover = Mover::new(
             *self.movers.for_body(Some(body)),
             Arc::clone(contacts),
             position,
             yaw,
             mover_category(&self.map, team),
         )
-        .map_err(invalid)
+        .map_err(invalid)?;
+        mover.set_breakables(Arc::clone(&self.breakables));
+        Ok(mover)
     }
 
     pub(crate) fn owner_body_runtime(
@@ -237,6 +258,16 @@ impl PreparedScene {
 
     pub fn heroes(&self) -> &HeroCatalog {
         &self.heroes
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn heroes_arc(&self) -> Arc<HeroCatalog> {
+        Arc::clone(&self.heroes)
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn combat_rays_arc(&self) -> Arc<CollisionScene> {
+        Arc::clone(&self.combat_rays)
     }
 
     pub fn pools(&self) -> &PoolCatalog {
@@ -475,8 +506,10 @@ impl PreparedScene {
     }
 
     pub(crate) fn bot_simulation(&mut self) -> (&mut RoomSimulation, BotQueries<'_>) {
-        self.simulation
-            .set_cassidy_protected(self.protects_cassidy(Some(crate::game_heroes::CASSIDY)));
+        let protected = self
+            .protects_cassidy(Some(crate::game_heroes::CASSIDY))
+            .then_some(crate::game_heroes::CASSIDY);
+        self.simulation.set_protected_hero(protected);
         (
             &mut self.simulation,
             BotQueries::new(
@@ -486,6 +519,7 @@ impl PreparedScene {
                 self.contacts.as_ref(),
             )
             .with_combat_geometry(&self.combat_rays, self.combat_sweeps.as_ref())
+            .with_breakables(&self.breakables)
             .with_hurt_volumes(&self.hurt_volumes),
         )
     }
@@ -508,17 +542,19 @@ impl PreparedScene {
         tick: u32,
         patrol: &PatrolScript,
     ) -> Result<(), CombatError> {
-        self.simulation.prepare_movement_frame(tick)?;
+        self.simulation.prepare_npc_movement_frame(tick)?;
         let contacts = self.simulation.movement_contact_frame();
         let floor = self.ground.triangles();
         let map = &self.map;
         let movers = &self.movers;
         let world = self.contacts.as_ref();
+        let queries = BotQueries::new(map.free_for_all, movers, &self.ground, world)
+            .with_breakables(&self.breakables);
         self.simulation.for_each_body_mut(|bot| {
             let combat_motion = bot.has_combat_motion();
             if let Some(contacts) = contacts
                 .as_ref()
-                .filter(|_| bot.patrol_active() || combat_motion)
+                .filter(|_| bot.patrol_active() || combat_motion || bot.has_anchor_return())
             {
                 contacts.stage_bot(bot, tick);
             }
@@ -528,11 +564,13 @@ impl PreparedScene {
                 let settings = movers.for_body(Some(bot.spawn.body));
                 if let Some(world) = world.filter(|_| !bot.has_collision()) {
                     bot.attach_collision(settings, Arc::clone(world), category, &mut ground);
+                    bot.set_breakables(Arc::clone(&self.breakables));
                 }
                 if bot.step_combat_motion(tick, settings, &mut ground) {
                     return;
                 }
             }
+            queries.rejoin_patrol(bot, tick, category);
             if let Err(error) = bot.step(tick, patrol, ground) {
                 eprintln!(
                     "Patrol for bot {:08x} stopped at frame {tick}: {error}",

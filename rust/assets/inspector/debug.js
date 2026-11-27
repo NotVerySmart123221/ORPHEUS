@@ -17,6 +17,9 @@ const stepButton = byId("room-step");
 const controlStatus = byId("room-control-status");
 const layers = ["triangles", "proxies", "actors", "physics", "navigation"].map(byId);
 const vmEntitySelect = byId("vm-entity");
+const orbitCanvas = byId("orbit");
+const resetOrbitButton = byId("reset-orbit");
+const orbitState = { yaw: -0.65, pitch: 0.52, zoom: 1.0, dragging: false, lastX: 0, lastY: 0 };
 const views = [
   { canvas: byId("top"), vertical: 2, up: false },
   { canvas: byId("side"), vertical: 1, up: true },
@@ -248,6 +251,7 @@ function render() {
   renderActors(actors);
   renderScripts(room);
   renderScriptRaySamples(room);
+  renderOrbitView(orbitCanvas, sample, room);
   for (const view of views) {
     renderView(view, sample, room);
   }
@@ -761,6 +765,197 @@ function drawGrid(ctx, { min, max, vertical, scale, x, y }) {
   ctx.fillText(step + " m grid", left + 5, top + 13);
 }
 
+function renderOrbitView(canvas, sample, room) {
+  if (!canvas) {
+    return;
+  }
+  const { clientWidth: width, clientHeight: height } = canvas;
+  if (width === 0 || height === 0) {
+    return;
+  }
+  const pixelRatio = Math.min(window.devicePixelRatio, 2);
+  const rasterWidth = Math.round(width * pixelRatio);
+  const rasterHeight = Math.round(height * pixelRatio);
+  if (canvas.width !== rasterWidth || canvas.height !== rasterHeight) {
+    canvas.width = rasterWidth;
+    canvas.height = rasterHeight;
+  }
+
+  const actors = room?.actors ?? [];
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const volume = sample?.origin_source === "requested-center" ? sample.bounds : undefined;
+  const positionedActors = actors.filter(({ position }) => position.every((value, axis) =>
+    Number.isFinite(value) && (!volume || (volume.min[axis] <= value && value <= volume.max[axis]))));
+  const { min, max } = sample?.bounds ?? actorBounds(positionedActors);
+  const center = [
+    (min[0] + max[0]) / 2,
+    (min[1] + max[1]) / 2,
+    (min[2] + max[2]) / 2,
+  ];
+  const span = Math.max(
+    4,
+    Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]),
+  );
+  const cosYaw = Math.cos(orbitState.yaw);
+  const sinYaw = Math.sin(orbitState.yaw);
+  const cosPitch = Math.cos(orbitState.pitch);
+  const sinPitch = Math.sin(orbitState.pitch);
+  const camDist = span * 1.45 / orbitState.zoom;
+  const focal = Math.min(width, height) * 0.92;
+  const finitePoint = (point) => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
+
+  const project3D = (point) => {
+    const dx = point[0] - center[0];
+    const dy = point[1] - center[1];
+    const dz = point[2] - center[2];
+    const x1 = dx * cosYaw - dz * sinYaw;
+    const z1 = dx * sinYaw + dz * cosYaw;
+    const y2 = dy * cosPitch - z1 * sinPitch;
+    const z2 = dy * sinPitch + z1 * cosPitch;
+    const depth = Math.max(1.0, camDist + z2);
+    const factor = focal / depth;
+    return [width / 2 + x1 * factor, height / 2 - y2 * factor, depth];
+  };
+  const project = (point) => {
+    const [px, py] = project3D(point);
+    return [px, py];
+  };
+
+  // 3D floor grid on min Y plane
+  const step = Math.pow(10, Math.ceil(Math.log10(span / 12)));
+  ctx.beginPath();
+  ctx.strokeStyle = color("edge");
+  ctx.globalAlpha = 0.7;
+  for (let gx = Math.ceil(min[0] / step) * step; gx <= max[0]; gx += step) {
+    ctx.moveTo(...project([gx, min[1], min[2]]));
+    ctx.lineTo(...project([gx, min[1], max[2]]));
+  }
+  for (let gz = Math.ceil(min[2] / step) * step; gz <= max[2]; gz += step) {
+    ctx.moveTo(...project([min[0], min[1], gz]));
+    ctx.lineTo(...project([max[0], min[1], gz]));
+  }
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  if (sample && layers[0].checked) {
+    ctx.beginPath();
+    for (const { vertices } of sample.triangles) {
+      ctx.moveTo(...project(vertices[0]));
+      ctx.lineTo(...project(vertices[1]));
+      ctx.lineTo(...project(vertices[2]));
+      ctx.closePath();
+    }
+    ctx.strokeStyle = color("triangle");
+    ctx.globalAlpha = 0.45;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  if (sample && layers[1].checked) {
+    ctx.strokeStyle = color("proxy");
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    const boxEdges = [
+      [0, 1], [1, 2], [2, 3], [3, 0],
+      [4, 5], [5, 6], [6, 7], [7, 4],
+      [0, 4], [1, 5], [2, 6], [3, 7],
+    ];
+    for (const bound of sample.proxies) {
+      const [x0, y0, z0] = bound.min;
+      const [x1, y1, z1] = bound.max;
+      const corners = [
+        [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1],
+        [x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1],
+      ].map(project);
+      for (const [a, b] of boxEdges) {
+        ctx.moveTo(corners[a][0], corners[a][1]);
+        ctx.lineTo(corners[b][0], corners[b][1]);
+      }
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  if (room?.navigation && layers[4].checked) {
+    for (const route of room.navigation.routes ?? []) {
+      if (route.waypoints?.length) {
+        ctx.strokeStyle = color("route");
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        let started = false;
+        for (const pt of route.waypoints) {
+          if (!finitePoint(pt)) continue;
+          const [px, py] = project(pt);
+          if (!started) {
+            ctx.moveTo(px, py);
+            started = true;
+          } else {
+            ctx.lineTo(px, py);
+          }
+        }
+        if (started) ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  if (room?.physics && layers[3].checked) {
+    for (const ray of Array.isArray(room.physics.rays) ? room.physics.rays : []) {
+      if (!finitePoint(ray?.origin) || !finitePoint(ray.end)) continue;
+      const appearance = rayAppearance(ray);
+      const tint = color(appearance.color);
+      ctx.strokeStyle = tint;
+      ctx.fillStyle = tint;
+      ctx.setLineDash(appearance.dash);
+      const [sx, sy] = project(ray.origin);
+      const [ex, ey] = project(ray.end);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc(ex, ey, 2.8, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+
+  if (layers[2].checked) {
+    ctx.font = "12px monospace";
+    const sorted = positionedActors
+      .map((actor) => ({ actor, proj: project3D(actor.position) }))
+      .sort((a, b) => b.proj[2] - a.proj[2]);
+    for (const { actor, proj: [fx, fy] } of sorted) {
+      const [hx, hy] = project([actor.position[0], actor.position[1] + 1.8, actor.position[2]]);
+      const tint = color(actor.alive ? (actor.kind === "player" ? "player" : "bot") : "dead");
+      ctx.strokeStyle = tint;
+      ctx.fillStyle = tint;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      ctx.lineTo(hx, hy);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(hx, hy, 4, 0, 2 * Math.PI);
+      if (actor.alive) ctx.fill();
+      else ctx.stroke();
+      ctx.fillText(String(actor.entity), hx + 7, hy - 5);
+    }
+  }
+
+  ctx.font = "11px monospace";
+  ctx.fillStyle = color("muted");
+  ctx.fillText(
+    step + " m floor grid · zoom " + orbitState.zoom.toFixed(2) + "x",
+    10,
+    16,
+  );
+}
+
 function setCenterInputs(center) {
   center.forEach((value, axis) => {
     centerInputs[axis].value = String(value);
@@ -839,12 +1034,55 @@ vmEntitySelect.addEventListener("change", render);
 for (const layer of layers) {
   layer.addEventListener("change", render);
 }
+if (orbitCanvas) {
+  orbitCanvas.addEventListener("pointerdown", (event) => {
+    orbitState.dragging = true;
+    orbitState.lastX = event.clientX;
+    orbitState.lastY = event.clientY;
+    orbitCanvas.setPointerCapture(event.pointerId);
+  });
+  orbitCanvas.addEventListener("pointermove", (event) => {
+    if (!orbitState.dragging) return;
+    const dx = event.clientX - orbitState.lastX;
+    const dy = event.clientY - orbitState.lastY;
+    orbitState.lastX = event.clientX;
+    orbitState.lastY = event.clientY;
+    orbitState.yaw += dx * 0.008;
+    orbitState.pitch = Math.max(-1.45, Math.min(1.45, orbitState.pitch + dy * 0.008));
+    const room = selectedRoom();
+    renderOrbitView(orbitCanvas, matchingGeometry(room), room);
+  });
+  const stopOrbit = () => { orbitState.dragging = false; };
+  orbitCanvas.addEventListener("pointerup", stopOrbit);
+  orbitCanvas.addEventListener("pointercancel", stopOrbit);
+  orbitCanvas.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+    orbitState.zoom = Math.max(0.35, Math.min(4.5, orbitState.zoom * factor));
+    const room = selectedRoom();
+    renderOrbitView(orbitCanvas, matchingGeometry(room), room);
+  }, { passive: false });
+}
+if (resetOrbitButton) {
+  resetOrbitButton.addEventListener("click", () => {
+    orbitState.yaw = -0.65;
+    orbitState.pitch = 0.52;
+    orbitState.zoom = 1.0;
+    const room = selectedRoom();
+    renderOrbitView(orbitCanvas, matchingGeometry(room), room);
+  });
+}
 const resize = new ResizeObserver(() => {
   const room = selectedRoom();
+  const sample = matchingGeometry(room);
+  renderOrbitView(orbitCanvas, sample, room);
   for (const view of views) {
-    renderView(view, matchingGeometry(room), room);
+    renderView(view, sample, room);
   }
 });
+if (orbitCanvas) {
+  resize.observe(orbitCanvas);
+}
 for (const { canvas } of views) {
   resize.observe(canvas);
 }

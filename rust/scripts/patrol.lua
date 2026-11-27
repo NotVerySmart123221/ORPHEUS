@@ -1,4 +1,4 @@
--- ORPHEUS patrol policy on the bounded AI think() ABI (v2).
+-- Example ORPHEUS Lua debug override on the bounded AI think() ABI (v2).
 -- Route slots are zero-based indexes into the map's authored hint sequence.
 return {
     abi = 2,

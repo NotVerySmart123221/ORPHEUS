@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "case_id": "player.health-presentation.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "damage": 75,
+    "heal": 25,
+    "lethal_damage": 200
+  },
+  "expected": {
+    "initial": 200,
+    "after_damage": 125,
+    "after_heal": 150,
+    "after_death": 0,
+    "maximum": 200
+  }
+}

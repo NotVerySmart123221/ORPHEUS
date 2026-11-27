@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-barrier-health-scale-v1",
+  "source": {"basis": "Build 104319 reference evaluator for the barrier health ruleset operand."},
+  "evidence": "rust-headless-synthetic",
+  "input": {"rule": 9547, "values": [null, 0, 1.25, false]},
+  "expected": [1.0, 0.0, 1.25, "malformed"]
+}

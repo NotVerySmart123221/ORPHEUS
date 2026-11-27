@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "case_id": "respawn-weapon-visibility.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "source": {
+    "basis": "The observer's weapon target and hostile movement blocker follow the same create and respawn presentation acknowledgments."
+  },
+  "input": {
+    "retired": 3221225472,
+    "replacement": 3221225473,
+    "first_tick": 100
+  },
+  "expected": {
+    "weapon_target_before_create_ack": false,
+    "weapon_target_after_create_ack": false,
+    "weapon_target_after_animation_loss": false,
+    "weapon_target_after_animation_ack": true
+  }
+}

@@ -5,7 +5,7 @@ use crate::{
     game_content::{JUNKENSTEIN_MAP, JunkensteinCard, MapCatalog},
     game_egress::{DeliveryReport, PacketDelivery, RecordSource},
     game_parameters::{CLIENT_GAME_MESSAGE, PICK_HERO},
-    junkenstein_validation::JunkensteinValidation,
+    pve_encounter::validation::JunkensteinValidation,
     scene_assets::SceneAssets,
     script_enemy::EnemyDamage,
 };

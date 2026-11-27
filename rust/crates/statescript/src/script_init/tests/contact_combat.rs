@@ -200,3 +200,145 @@ fn authored_contact_damage_uses_the_linked_volume_once_per_activation() {
         );
     }
 }
+
+#[derive(Default)]
+struct ContactEffects(Vec<(u64, Vec<u32>)>);
+
+impl World for ContactEffects {
+    fn entity_variable(&mut self, _: u32, _: u32) -> Option<Value> {
+        None
+    }
+    fn position(&mut self, _: u32) -> Option<[f64; 3]> {
+        None
+    }
+    fn emit_contact_effect(
+        &mut self,
+        site: Site,
+        source: u32,
+        resource: u64,
+        targets: &[u32],
+    ) -> bool {
+        assert_eq!(site.entity, OWNER);
+        assert_eq!(source, OWNER);
+        self.0.push((resource, targets.to_vec()));
+        true
+    }
+}
+
+#[test]
+fn contact_effect_uses_the_authored_resource_and_reacts_to_target_changes() {
+    let data: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/script-contact-effect-v1.json"
+    )))
+    .unwrap();
+    let input = &data["input"];
+    let initial: Vec<u32> = serde_json::from_value(input["initial_targets"].clone()).unwrap();
+    let changed: Vec<u32> = serde_json::from_value(input["changed_targets"].clone()).unwrap();
+    let authored_targets =
+        |ids: &[u32]| Value::Array(ids.iter().copied().map(Value::Entity).collect());
+    for placement in input["placements"].as_array().unwrap() {
+        let index = placement["graph"].as_u64().unwrap() as u32;
+        let position = placement["node"].as_u64().unwrap() as u16;
+        let resource = crate::script_graph::asset_guid(&placement["contact_set"]).unwrap();
+        let mut effect = node(
+            position,
+            "STU_23A00A53",
+            Some(0),
+            json!({
+                "m_53FCEDBF":var(345, false),
+                "m_63CB0D07":{"$":"STU_B5A0CAF0"},
+                "m_contactSet":{"$":"STUConfigVarContactSet","m_contactSet":placement["contact_set"]},
+                "m_BF5B22B7":[{"$":"STUStatescriptRemoteSyncVar","m_0D09D2D9":"0x0D80000000000159","m_56341592":0}],
+            }),
+        );
+        effect["remote"] = json!(0);
+        let mut unsynced = effect.clone();
+        unsynced["fields"]["m_BF5B22B7"] = json!([]);
+        let graph_with = |node: Json| {
+            let mut authored = graph(index, vec![node], json!([position]), json!([]));
+            authored["items"] = json!(position + 1);
+            authored["remote"] = json!([position]);
+            Arc::new(store(vec![authored]))
+        };
+        assert!(!graph_with(unsynced).uses_room_spatial_frame());
+        let graphs = graph_with(effect);
+        assert!(graphs.uses_room_spatial_frame());
+        let mut world = ContactEffects::default();
+        let mut component = Component::start(
+            graphs,
+            OWNER,
+            Variables::new(),
+            vec![Root::listener(1, index, None)],
+            7,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        component
+            .set_instance_variable(1, 345, authored_targets(&initial), &mut world)
+            .unwrap();
+        let key = StateKey {
+            instance: 1,
+            raw: 0,
+        };
+        component.run(&mut world, |vm| vm.begin(key, 0)).unwrap();
+        component
+            .set_instance_variable(1, 345, authored_targets(&changed), &mut world)
+            .unwrap();
+        component.run_now(&mut world).unwrap();
+        assert_eq!(
+            world.0,
+            [(resource, initial.clone()), (resource, changed.clone())]
+        );
+        component
+            .run(&mut world, |vm| vm.end(key, false, 0))
+            .unwrap();
+        component
+            .set_instance_variable(1, 345, authored_targets(&initial), &mut world)
+            .unwrap();
+        component.run_now(&mut world).unwrap();
+        assert_eq!(world.0.len(), 2);
+        assert!(component.snapshot().unwrap().initialization_complete());
+    }
+}
+
+#[test]
+#[ignore = "requires the prepared 104319 Junkenstein graphs"]
+fn prepared_contact_effect_accepts_distinct_104319_contact_sets() {
+    let runtime = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
+    for (index, position, asset) in [
+        (0x0c89, 49, 0x0120_0000_0000_0015),
+        (0x01c8, 28, 0x0120_0000_0000_017d),
+    ] {
+        let graph = graphs.graph(index).unwrap();
+        let node = graph.node(position).unwrap();
+        assert_eq!(node.contact_effect_resource(), Some(asset));
+        let raw = node.state.unwrap();
+        let target = crate::script_expr::dynamic(node.field("m_53FCEDBF").unwrap())
+            .unwrap()
+            .unwrap();
+        let mut world = ContactEffects::default();
+        let mut component = Component::start(
+            Arc::clone(&graphs),
+            OWNER,
+            Variables::new(),
+            vec![Root::listener(1, index, None)],
+            7,
+            &mut world,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        component
+            .set_instance_variable(
+                1,
+                target.id,
+                Value::Array(vec![Value::Entity(TARGET)]),
+                &mut world,
+            )
+            .unwrap();
+        component.begin_state(1, raw, &mut world).unwrap();
+        assert_eq!(world.0, [(asset, vec![TARGET])]);
+    }
+}

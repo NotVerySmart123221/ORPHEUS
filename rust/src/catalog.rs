@@ -34,6 +34,9 @@ pub struct ItemDb {
     pub hero_names: IndexMap<u64, String>,
     pub hero_classes: IndexMap<u64, Option<String>>,
     pub(crate) npc_heroes: Vec<u64>,
+    pub(crate) wheel_voice_effects: HashMap<u64, u64>,
+    pub(crate) emote_aliases: HashMap<u64, u64>,
+    pub(crate) emote_blend_trees: HashMap<u64, u64>,
     team_skin_pairs: HashMap<u64, u64>,
 }
 
@@ -127,6 +130,23 @@ fn invalid_guid(kind: &str, value: &str) -> io::Error {
     )
 }
 
+fn load_unlock_assets(path: &Path, asset_type: u16) -> io::Result<HashMap<u64, u64>> {
+    let rows: HashMap<String, String> = read_optional(path)?;
+    let parse = |text: &str, kind: u64| {
+        crate::runtime::format::parse_guid(text)
+            .filter(|&id| id >> 48 == kind && id & 0x0000_ffff_ffff_ffff != 0)
+            .ok_or_else(|| invalid_guid("unlock asset", text))
+    };
+    rows.into_iter()
+        .map(|(unlock, asset)| {
+            Ok((
+                parse(&unlock, 0x0250)?,
+                parse(&asset, u64::from(asset_type))?,
+            ))
+        })
+        .collect()
+}
+
 impl ItemDb {
     /// Load the catalog JSON files from a prepared runtime's data directory.
     pub fn load(data_dir: &Path) -> io::Result<Self> {
@@ -136,7 +156,18 @@ impl ItemDb {
             read_optional(&data_dir.join("extracted_items.json"))?;
         let general: RawGroups = read_optional(&data_dir.join("extracted_general_unlocks.json"))?;
 
-        let mut catalog = Self::default();
+        let mut catalog = Self {
+            wheel_voice_effects: load_unlock_assets(
+                &data_dir.join("voice_effects_174.json"),
+                0x0300,
+            )?,
+            emote_aliases: load_unlock_assets(&data_dir.join("emote_aliases_174.json"), 0x0c80)?,
+            emote_blend_trees: load_unlock_assets(
+                &data_dir.join("emote_blend_trees_174.json"),
+                0x0040,
+            )?,
+            ..Self::default()
+        };
         for (guid, hero) in heroes {
             let Some(name) = hero.name.filter(|name| !name.is_empty()) else {
                 continue;

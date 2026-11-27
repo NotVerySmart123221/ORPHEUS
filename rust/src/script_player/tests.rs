@@ -289,7 +289,7 @@ fn cassidy_junkenstein_rules_enable_fan_without_changing_other_hero_defaults() {
     assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
     assert_eq!(world.ruleset(0x290b), None);
     world.hero = SOLDIER;
-    assert_eq!(world.ruleset(0x290c), None);
+    assert_eq!(world.ruleset(0x290c), Some(Value::Bool(true)));
     world.hero = CASSIDY;
     world.mode = PRACTICE_RANGE_MODE;
     assert_eq!(world.ruleset(0x290c), None);
@@ -487,7 +487,7 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
                 .unwrap(),
         )
     };
-    let (mut factory, spawn) = fixture_body_factory();
+    let (_, spawn) = fixture_body_factory();
     let damage = AppliedDamage {
         source: spawn.entity,
         amount: 1.0,
@@ -503,62 +503,99 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
     };
     let admission =
         |runtime: &PlayerBodyRuntime| runtime.snapshot().unwrap().variables.get(&2426).cloned();
-    let require_live_graph = |runtime: &mut PlayerBodyRuntime| {
-        assert!(
-            runtime
-                .receive_applied_damage(damage.clone())
-                .unwrap_err()
-                .to_string()
-                .contains("authored common charge graph")
-        );
+
+    // A body without a mounted 0x004B/0x0B8B common charge root does not bind charge.
+    let (plain_factory, _) = fixture_body_factory();
+    let mut plain = plain_factory.start(spawn).unwrap();
+    assert_eq!(admission(&plain), None);
+    plain.receive_applied_damage(damage.clone()).unwrap();
+
+    // A body mounting the retail common charge root (0x004B) binds data-driven charge
+    // for every hero and mode (encounter-gated in Junkenstein, regular-admitted elsewhere).
+    let make_common_factory = |mode: u64, hero_guid: u64| {
+        let body = 0x0400_0000_0000_0002;
+        let hero = Hero {
+            guid: hero_guid,
+            name: "CommonChargeFixture".into(),
+            role: "Damage".into(),
+            body,
+        };
+        let empty_graph = |index: u32| {
+            serde_json::json!({
+                "index": index, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+                "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+                "header": {"m_nodesBitCount":4, "m_statesBitCount":4,
+                    "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4}
+            })
+        };
+        let bundle = serde_json::json!({
+            "version": 1, "missing": [],
+            "graphs": [empty_graph(42), empty_graph(0x004b), empty_graph(0x0ca5)],
+            "bodies": {
+                format!("0x{body:016X}"): {
+                    "hero": format!("0x{hero_guid:016X}"),
+                    "name": "CommonChargeFixture",
+                    "graphs": [{"graph": 0x004b, "m_75408640": 0}],
+                    "manager": 42,
+                    "weapons": [null, 42]
+                }
+            }
+        });
+        let graphs =
+            Arc::new(GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap());
+        let codecs = Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap());
+        PlayerBodyFactory::prepare(
+            graphs,
+            codecs,
+            mode,
+            &hero,
+            None,
+            false,
+            (spawn, OwnerBodySetup::default()),
+        )
+        .unwrap()
     };
-    for (mode, hero, admitted) in [
+
+    for (mode, hero, require_encounter) in [
         (JUNKENSTEIN_REVENGE, CASSIDY, true),
         (JUNKENSTEIN_ENDLESS, CASSIDY, true),
-        (JUNKENSTEIN_REVENGE, SOLDIER, false),
+        (JUNKENSTEIN_REVENGE, SOLDIER, true),
         (PRACTICE_RANGE_MODE, CASSIDY, false),
+        (PRACTICE_RANGE_MODE, SOLDIER, false),
     ] {
-        factory.mode = mode;
-        factory.hero = hero;
+        let factory = make_common_factory(mode, hero);
         let mut runtime = factory.start(spawn).unwrap();
         assert_eq!(runtime.world.room_activity, None);
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("bootstrap"))
-        );
-        if admitted {
-            require_live_graph(&mut runtime);
-            let mut inactive = factory
-                .start_with_setup(
-                    spawn,
-                    OwnerBodySetup {
-                        room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
-                        ..OwnerBodySetup::default()
-                    },
-                )
-                .unwrap();
-            assert_eq!(admission(&inactive), Some(projected("bootstrap")));
-            inactive.receive_applied_damage(damage.clone()).unwrap();
+        assert_eq!(admission(&runtime), Some(projected("bootstrap")));
+        runtime.receive_applied_damage(damage.clone()).unwrap();
+
+        let mut inactive = factory
+            .start_with_setup(
+                spawn,
+                OwnerBodySetup {
+                    room_activity: Some(OwnerRoomActivity::Encounter { active: false }),
+                    ..OwnerBodySetup::default()
+                },
+            )
+            .unwrap();
+        let expected_inactive = if require_encounter {
+            projected("bootstrap")
         } else {
-            runtime.receive_applied_damage(damage.clone()).unwrap();
-        }
+            projected("inactive_room")
+        };
+        assert_eq!(admission(&inactive), Some(expected_inactive));
+        inactive.receive_applied_damage(damage.clone()).unwrap();
 
         runtime.set_encounter_active(true).unwrap();
         assert_eq!(
             runtime.world.room_activity,
-            admitted.then_some(OwnerRoomActivity::Encounter { active: true })
+            Some(OwnerRoomActivity::Encounter { active: true })
         );
         runtime.set_room_activity(OwnerRoomActivity::Encounter { active: false });
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("bootstrap"))
-        );
+        assert_eq!(admission(&runtime), Some(projected("bootstrap")));
         runtime.receive_applied_damage(damage.clone()).unwrap();
         runtime.set_encounter_active(false).unwrap();
-        assert_eq!(
-            admission(&runtime),
-            admitted.then(|| projected("inactive_room"))
-        );
+        assert_eq!(admission(&runtime), Some(projected("inactive_room")));
 
         runtime.set_room_activity(OwnerRoomActivity::Regular);
         runtime.set_encounter_active(false).unwrap();
@@ -566,27 +603,27 @@ fn charge_admission_preserves_profile_scope_and_requires_a_live_instance_for_cre
             runtime.world.room_activity,
             Some(OwnerRoomActivity::Regular)
         );
+        assert_eq!(admission(&runtime), Some(Value::Bool(!require_encounter)));
         runtime.receive_applied_damage(damage.clone()).unwrap();
 
-        if admitted {
-            runtime.set_encounter_active(true).unwrap();
-            require_live_graph(&mut runtime);
-            let outcome = runtime.receive_damage(
-                contract["input"]["lethal_damage"].as_f64().unwrap(),
-                Death {
-                    time: 0.0,
-                    frame: spawn.frame,
-                    killer: damage.target_facts.target,
-                },
-            );
-            assert!(outcome.killed);
-            assert_eq!(admission(&runtime), Some(projected("after_death")));
-            assert_eq!(
-                runtime.world.room_activity,
-                Some(OwnerRoomActivity::Encounter { active: true })
-            );
-            runtime.receive_applied_damage(damage.clone()).unwrap();
-        }
+        runtime.set_encounter_active(true).unwrap();
+        let outcome = runtime.receive_damage(
+            contract["input"]["lethal_damage"].as_f64().unwrap(),
+            Death {
+                time: 0.0,
+                frame: spawn.frame,
+                killer: damage.target_facts.target,
+            },
+        );
+        assert!(outcome.killed);
+        assert_eq!(admission(&runtime), Some(projected("after_death")));
+        let expected_activity = if require_encounter {
+            Some(OwnerRoomActivity::Encounter { active: true })
+        } else {
+            Some(OwnerRoomActivity::Regular)
+        };
+        assert_eq!(runtime.world.room_activity, expected_activity);
+        runtime.receive_applied_damage(damage.clone()).unwrap();
     }
 }
 
@@ -684,6 +721,17 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         Err(OwnerBodyPreparationError::AuthoredChargeRoot(0x0ca5))
     ));
 
+    bundle["graphs"].as_array_mut().unwrap().push(json!({
+        "index": 0x004b, "items": 0, "nodes": [], "states": [], "entries": [], "remote": [],
+        "sync_vars": [], "containers": {}, "unknown_nodes": [], "fields": {},
+        "header": {
+            "m_nodesBitCount":4, "m_statesBitCount":4, "m_remoteSyncNodesBitCount":4, "m_syncVarsBitCount":4
+        }
+    }));
+    bundle["bodies"][BODY]["graphs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"graph": 0x004b, "m_75408640": 0}));
     bundle["bodies"][BODY]
         .as_object_mut()
         .unwrap()
@@ -708,13 +756,7 @@ fn declared_charge_root_uses_settled_health_events_without_legacy_credit() {
         Value::Bool(true)
     );
     authored.receive_applied_damage(damage.clone()).unwrap();
-    assert!(
-        compatibility
-            .receive_applied_damage(damage)
-            .unwrap_err()
-            .to_string()
-            .contains("authored common charge graph")
-    );
+    compatibility.receive_applied_damage(damage).unwrap();
     assert_eq!(
         authored
             .receive_host_event(
@@ -855,7 +897,7 @@ fn roll_velocity_bridge_preserves_sampled_delta_and_rejects_foreign_owners() {
     assert!(
         !runtime
             .world
-            .edit_velocity(site, 10, Value::Float(5.5), true)
+            .edit_velocity(site, 10, Value::Float(-1.0), true)
     );
     let cap = Site {
         node: Some(17),
@@ -1373,6 +1415,62 @@ fn health_queries_read_the_authoritative_vitals() {
             .unwrap();
         assert_eq!(evaluate(&mut runtime, &current), expected);
     }
+}
+
+#[test]
+fn settled_player_pools_update_the_owner_health_projection() {
+    use crate::{
+        script_init::{HUD_HEALTH, HUD_MAX_HEALTH, OWNER_HEALTH},
+        script_snapshot_wire::View,
+        vitals::Death,
+    };
+
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/player-health-presentation-v1.json"
+    ))
+    .unwrap();
+    let input = |key: &str| contract["input"][key].as_f64().unwrap();
+    let expected = |key: &str| Value::Float(contract["expected"][key].as_f64().unwrap());
+    let (factory, spawn) = fixture_body_factory();
+    let mut body = factory.start(spawn).unwrap();
+    let source = Death {
+        time: 0.0,
+        frame: spawn.frame,
+        killer: spawn.entity + 1,
+    };
+    let assert_health = |body: &PlayerBodyRuntime, stage| {
+        let snapshot = body.snapshot().unwrap();
+        assert_eq!(
+            snapshot.variables.get(&OWNER_HEALTH),
+            Some(&expected(stage))
+        );
+        let owner = body.encoder().project(snapshot, View::Owner).unwrap();
+        assert_eq!(
+            owner.entity_variables().get(&HUD_HEALTH),
+            Some(&expected(stage))
+        );
+        assert_eq!(
+            owner.entity_variables().get(&HUD_MAX_HEALTH),
+            Some(&expected("maximum"))
+        );
+    };
+
+    assert_health(&body, "initial");
+    assert_eq!(
+        body.receive_damage(input("damage"), source).dealt,
+        input("damage")
+    );
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_damage");
+
+    assert_eq!(body.heal(input("heal")), input("heal"));
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_heal");
+
+    assert!(body.receive_damage(input("lethal_damage"), source).killed);
+    assert!(body.take_health_update().is_some());
+    assert_health(&body, "after_death");
+    assert!(body.take_health_update().is_none());
 }
 
 #[test]
@@ -3236,6 +3334,121 @@ fn impact_spawn_uses_declared_resources_on_a_relocated_volley() {
 }
 
 #[test]
+fn player_volley_projects_each_authored_ring_pellet_once() {
+    use serde_json::json;
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/player-pellet-rings-v1.json"
+    ))
+    .unwrap();
+    let rings: Vec<(f64, usize)> = serde_json::from_value(fixture["rings"].clone()).unwrap();
+    let cone = fixture["cone_degrees"].as_f64().unwrap();
+    let count = fixture["pellets"].as_u64().unwrap() as usize;
+    let damage = fixture["damage_per_pellet"].as_f64().unwrap();
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    let mut fields = json!({
+        "m_A17BE89B": 1, "m_numShotsPerSecond": 1, "m_FEC435C6": 100,
+        "m_6396149F": {"m_modifyHealth": {"m_amount": damage}},
+        "m_numProjectilesPerShot": count,
+        "m_5EC1EB38": {
+            "$": "STU_613BDDB0",
+            "m_spread": cone,
+            "m_0D30E40C": rings.iter().map(|&(radius, count)| json!({
+                "m_6425FFB9": radius, "m_B19BD35D": count
+            })).collect::<Vec<_>>()
+        }
+    });
+    let mut runtime = fixture_volley_factory(29, false, fields.clone())
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert_eq!(shots.len(), count);
+    let mut directions = BTreeSet::new();
+    for (shot, radius) in shots.into_iter().zip(
+        rings
+            .iter()
+            .flat_map(|&(radius, count)| std::iter::repeat_n(radius, count)),
+    ) {
+        let PosedShot::Hitscan(shot) = shot else {
+            panic!("expected a hitscan pellet");
+        };
+        assert_eq!(shot.source, spawn.entity);
+        assert_eq!(shot.shot_frame, fire.frame);
+        assert_eq!(shot.hit.amount, damage);
+        assert!((shot.direction[2] - (cone * radius).to_radians().cos()).abs() < 1e-6);
+        directions.insert(shot.direction.map(f64::to_bits));
+    }
+    assert_eq!(directions.len(), count);
+    assert!(runtime.take_shots(Some(fire), &mover).is_empty());
+
+    fields["m_numProjectilesPerShot"] = json!(count + 1);
+    let mut invalid = fixture_volley_factory(29, false, fields)
+        .start(spawn)
+        .unwrap();
+    invalid.advance(fire, &mover, BodyStep::Posed).unwrap();
+    assert!(invalid.take_shots(Some(fire), &mover).is_empty());
+}
+
+#[test]
+fn player_volley_projects_each_uniform_cone_pellet_from_one_report() {
+    use serde_json::json;
+
+    let (_, spawn) = fixture_body_factory();
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let fire = Command {
+        frame: spawn.frame + 1,
+        buttons: crate::commands::SECONDARY,
+        ..Command::default()
+    };
+    let fields = json!({
+        "m_A17BE89B": 1, "m_numShotsPerSecond": 1, "m_FEC435C6": 100,
+        "m_6396149F": {"m_modifyHealth": {"m_amount": 4}},
+        "m_numProjectilesPerShot": 2,
+        "m_5EC1EB38": {"$": "STU_239B571E", "m_7F0FED02": 6, "m_429A6C85": 6}
+    });
+    let mut runtime = fixture_volley_factory(29, false, fields)
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert_eq!(shots.len(), 2);
+    let mut directions = BTreeSet::new();
+    for shot in shots {
+        let PosedShot::Hitscan(shot) = shot else {
+            panic!("expected a hitscan pellet");
+        };
+        assert_eq!(shot.source, spawn.entity);
+        assert_eq!(shot.shot_frame, fire.frame);
+        assert_eq!(shot.hit.amount, 4.0);
+        assert!(shot.direction[2] >= 6.0_f64.to_radians().cos() - 1e-6);
+        directions.insert(shot.direction.map(f64::to_bits));
+    }
+    assert_eq!(directions.len(), 2);
+    assert!(runtime.take_shots(Some(fire), &mover).is_empty());
+}
+
+#[test]
 fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
     use serde_json::json;
 
@@ -3254,7 +3467,6 @@ fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
         ..Command::default()
     };
     for (field, value) in [
-        ("m_45271E8C", json!(false)),
         ("m_projectileMotions", json!([{"$":"STU_E1A5B579"}])),
         ("m_numProjectilesPerShot", json!(2)),
         ("m_6396149F", json!({"m_modifyHealth":{"m_amount":-1.0}})),
@@ -3267,6 +3479,19 @@ fn unsupported_projectile_modes_do_not_become_hitscan_or_straight_damage() {
         runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
         assert!(runtime.take_shots(Some(fire), &mover).is_empty(), "{field}");
     }
+    // Unpredicted projectiles emit server-authoritative Projectile shots (never hitscan).
+    let mut unpredicted = fixture_projectile_fields(40.0);
+    unpredicted["m_45271E8C"] = json!(false);
+    let mut runtime = fixture_volley_factory(29, true, unpredicted)
+        .start(spawn)
+        .unwrap();
+    runtime.advance(fire, &mover, BodyStep::Posed).unwrap();
+    let shots = runtime.take_shots(Some(fire), &mover);
+    assert!(
+        matches!(shots.as_slice(), [PosedShot::Projectile(p)] if !p.predicted),
+        "expected unpredicted projectile shot, got {} shots",
+        shots.len()
+    );
 }
 
 fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Component, BodyWorld) {
@@ -3295,9 +3520,13 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         throttles: [0; 2],
         mode: PRACTICE_RANGE_MODE,
         hero: SOLDIER,
+        body_definition: 0,
+        anim_timing: None,
         vitals: Vitals::empty(),
         pool_types_known: true,
         target_tags: tagged.then(|| body.target_tags.clone().unwrap()),
+        command_views: Default::default(),
+        wheel_cosmetics: Default::default(),
         model_hardpoints: None,
         target_tag_effects: TargetTagEffects::default(),
         controller_on_fire: false,
@@ -3305,11 +3534,21 @@ fn prepared_soldier_component(graphs: Arc<GraphStore>, tagged: bool) -> (Compone
         sightings: Vec::new(),
         sighting_source: None,
         death_source: None,
-        cinematic_aim: None,
+        cinematic_aim: Default::default(),
         facing_claims: Default::default(),
         deadeye_scene: DeadeyeScene::default(),
         velocity_changes: Vec::new(),
         scripted_motion: None,
+        voice_variant_counter: 0,
+        voice_cooldowns: Default::default(),
+        pet_positions: BTreeMap::new(),
+        spawned_possessables: BTreeMap::new(),
+        pending_body_swap: None,
+        combat_mods: Default::default(),
+        deflect: Default::default(),
+        recall_history: Default::default(),
+        active_auras: Default::default(),
+        ball_roll_speed: None,
     };
     let mut component = Component::start(
         graphs,
@@ -3344,42 +3583,237 @@ fn prepared_soldier_without_target_tags_reports_unavailable_filter() {
 
 #[test]
 #[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
+fn prepared_shared_combat_graph_projects_hit_and_elimination_effects() {
+    use crate::script_init::{
+        HealthTargetFacts, HitTags, HostEvent, HostHealthContext, RoomEntityStatus,
+    };
+
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let graphs = Arc::new(GraphStore::load(runtime.join("data/game_graphs_174.json.gz")).unwrap());
+    let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+    let instance = component
+        .snapshot()
+        .unwrap()
+        .instances
+        .iter()
+        .find(|(_, instance)| instance.graph == 0x01c7)
+        .map(|(&id, _)| id)
+        .unwrap();
+    let target = 0xc000_0001;
+    let target_facts = Arc::new(HealthTargetFacts {
+        target,
+        filter_flags: Some(crate::match_scene::team_bit(1).unwrap()),
+        room_status: Some(RoomEntityStatus {
+            team: Some(1),
+            alive: true,
+        }),
+        tags: TargetTagEffects::default().snapshot(Some(&Default::default())),
+        script_state: crate::script_entity_state::EntityScriptState::Absent,
+    });
+    let expect_effect =
+        |snapshot: &crate::script_init::Snapshot, before: usize, effect_index: u64| {
+            let actions = &snapshot.frame_actions;
+            assert_eq!(
+                actions.len(),
+                before + 1,
+                "{:?}",
+                snapshot
+                    .diagnostics
+                    .iter()
+                    .filter(|item| item.site.graph == 0x01c7)
+                    .collect::<Vec<_>>(),
+            );
+            let action = actions.back().unwrap();
+            assert_eq!(action.callout.instance, instance);
+            let graph = graphs.graph(snapshot.instances[&instance].graph).unwrap();
+            let node = graph.node(action.callout.position).unwrap();
+            assert_eq!(
+                crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"]),
+                Some(0x0300_0000_0000_0000 | effect_index),
+            );
+            action.values.contains_key(&(instance, 18702))
+        };
+
+    // These inputs exercise the authored switch. They do not assign the native 0724 scalar
+    // a gameplay meaning or derive it from a physical hit.
+    for (critical, scalar, effect_index) in [
+        (false, Some(1.0), 0x0206),
+        (true, Some(1.0), 0x183b),
+        (false, Some(0.0), 0x2894),
+        (true, Some(0.0), 0x2892),
+        (false, Some(2.0), 0x2893),
+        (true, Some(2.0), 0x2891),
+        (false, None, 0x2894),
+    ] {
+        let before = component.snapshot().unwrap().frame_actions.len();
+        let queued = if let Some(scalar) = scalar {
+            let event = HostEvent::HealthApplied {
+                source: Some(world.entity),
+                target,
+                delta: -9.0,
+                killed: false,
+                hit_tags: Some(HitTags::EMPTY),
+            };
+            let mut context = HostHealthContext {
+                target_facts: Some(Arc::clone(&target_facts)),
+                ..HostHealthContext::default()
+            };
+            assert_eq!(
+                component
+                    .queue_authored_hit_feedback(event, &context, scalar)
+                    .unwrap(),
+                0,
+            );
+            context.critical_hit = Some(critical);
+            component.queue_authored_hit_feedback(event, &context, scalar)
+        } else {
+            component.queue_settled_damage_message(
+                instance,
+                0x0240_0000_0000_0012,
+                Variables::from([
+                    (0x13, Value::Float(9.0)),
+                    (0x15, Value::Entity(target)),
+                    (0x3d, Value::Array(Vec::new())),
+                    (0x95, Value::Bool(critical)),
+                ]),
+                Arc::clone(&target_facts),
+            )
+        };
+        assert_eq!(queued.unwrap(), 1);
+        component.run_now(&mut world).unwrap();
+        assert!(expect_effect(
+            component.snapshot().unwrap(),
+            before,
+            effect_index
+        ));
+    }
+
+    let mut retired = (*target_facts).clone();
+    retired.room_status.as_mut().unwrap().alive = false;
+    let retired = Arc::new(retired);
+    // The two modes take opposite branches of the authored mode flag.
+    for (mode, effect_index) in [
+        (PRACTICE_RANGE_MODE, 0x00ee),
+        (0x0230_0000_0000_0003, 0x2939),
+    ] {
+        world.mode = mode;
+        for final_blow in [true, false] {
+            let before = component.snapshot().unwrap().frame_actions.len();
+            assert_eq!(
+                component
+                    .queue_authored_elimination_feedback(Arc::clone(&retired), final_blow)
+                    .unwrap(),
+                1,
+            );
+            component.run_now(&mut world).unwrap();
+            assert!(!expect_effect(
+                component.snapshot().unwrap(),
+                before,
+                effect_index
+            ));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a tagged separately prepared 104319 statescript catalog"]
 fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
     use crate::{
-        collision_cache::CollisionCache,
+        collision_cache::{CollisionCache, Mesh, Triangle},
         contact_world::ContactWorld,
         game_clock::FIRST_TICK,
         game_combat::{PlayerBodyState, RoomSimulation},
         game_messages::Message,
-        game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction},
+        game_parameters::{CLIENT_WHEEL_ACTION, ClientWheelAction, ClientWheelUse},
         game_replication::BodyId,
         jam_codec::{Fields, Value as WireValue},
         mover_settings::MoverSettings,
         script_graph::RoomSpatialNeeds,
+        script_init::StateKind,
+        script_snapshot_wire::{SnapshotEncoder, View},
+        script_stream::{BodyStream, ChangeKey, DeltaKind},
     };
 
     let root = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let graphs = Arc::new(GraphStore::load(root.join("data/game_graphs_174.json.gz")).unwrap());
-    let action = 0x0a90_0000_0000_0171;
-    let request = ClientWheelAction::read(&Message {
-        id: CLIENT_WHEEL_ACTION,
-        fields: Fields::from([
-            (0x78, WireValue::Unsigned(action)),
-            (0x80, WireValue::Bool(true)),
-        ]),
-    })
+    let voice_catalog = crate::actor_voice::ActorVoiceCatalog::load(
+        &root.join(crate::runtime::ACTOR_VOICE_CATALOG),
+    )
     .unwrap()
-    .into_local_message();
+    .map(Arc::new);
+    let items = crate::catalog::ItemDb::load(&root.join("data")).unwrap();
+    let voice_effect = voice_catalog.as_ref().and_then(|catalog| {
+        items
+            .wheel_voice_effects
+            .values()
+            .copied()
+            .filter(|&effect| catalog.equipped_options(SOLDIER, 0, effect).is_some())
+            .min()
+    });
+    let resource_graph = 0x1040;
+    if graphs.graph(resource_graph).is_some() {
+        let resource = Component::start(
+            Arc::clone(&graphs),
+            0xa000_0101,
+            Variables::new(),
+            vec![Root::listener(1, resource_graph, Some(0))],
+            0,
+            &mut crate::script_init::EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = resource.snapshot().unwrap();
+        assert!(
+            snapshot.diagnostics.is_empty(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert!(snapshot.instances[&1].states[&0].active);
+    }
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/wheel-selection-ingress-v1.json"
+    ))
+    .unwrap();
+    let ready = &fixture["ready_selection"];
+    let asset = |value: &Json| {
+        u64::from_str_radix(value.as_str().unwrap().strip_prefix("0x").unwrap(), 16).unwrap()
+    };
+    let action = asset(&ready["action"]);
+    let request = |action| {
+        ClientWheelAction::read(&Message {
+            id: CLIENT_WHEEL_ACTION,
+            fields: Fields::from([
+                (0x78, WireValue::Unsigned(action)),
+                (0x80, WireValue::Bool(true)),
+            ]),
+        })
+        .unwrap()
+    };
+    let spray_fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/spray-surface-placement-v1.json"
+    ))
+    .unwrap();
+    let spray_input = &spray_fixture["input"];
+    let vector = |value: &Json| std::array::from_fn(|axis| value[axis].as_f64().unwrap());
     for with_room in [false, true] {
-        let (mut component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+        let (component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
         if with_room {
             let ground = CollisionScene::movement_probe(
                 &CollisionCache {
                     header: serde_json::from_str(
-                        r#"{"meshes":[],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
+                        r#"{"meshes":[[6,2]],"hulls":0,"models":0,"placements":0,"identifiers":[]}"#,
                     )
                     .unwrap(),
-                    meshes: Vec::new(),
+                    meshes: vec![Mesh {
+                        vertices: ["excluded_wall_z", "spray_wall_z"].into_iter().flat_map(|key| {
+                            let z = spray_input[key].as_f64().unwrap() as f32;
+                            [[-4.0, 0.0, z], [-4.0, 8.0, z], [4.0, 0.0, z]]
+                        }).collect(),
+                        triangles: vec![
+                            Triangle { corners: [0,1,2], wings: [-1;3], mask: 0x18, surface: 0 },
+                            Triangle { corners: [3,4,5], wings: [-1;3], mask: 0x40, surface: 0 },
+                        ],
+                    }],
                     hulls: Vec::new(),
                     models: Vec::new(),
                     placements: Vec::new(),
@@ -3389,6 +3823,10 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             .unwrap();
             let mut room = RoomSimulation::new(Vec::new()).unwrap();
             room.enable_spatial_queries(false, Arc::new(ground), RoomSpatialNeeds::Queries);
+            if let Some(catalog) = &voice_catalog {
+                room.enable_actor_voice(Arc::clone(catalog));
+            }
+
             let mover = Mover::new(
                 MoverSettings::default(),
                 Arc::new(ContactWorld::new(Vec::new()).unwrap()),
@@ -3415,15 +3853,49 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             world.spatial_frame = room.capture_spatial_frame(FIRST_TICK + 1).unwrap();
             assert!(world.spatial_frame.is_some());
         }
+        let mut runtime = PlayerBodyRuntime {
+            component,
+            world,
+            codecs: Arc::new(CodecTable::from_json(r#"{"classes":{}}"#).unwrap()),
+            modifiers: None,
+            leases: Default::default(),
+            frame: FIRST_TICK,
+            wheel_delivery_frame: FIRST_TICK,
+            charge_binding: None,
+            ult_charge_scale: 1.0,
+        };
         assert_eq!(
-            component
-                .queue_entity_message_from(world.entity, request.id, request.parameters.clone())
-                .unwrap(),
-            2
+            runtime.wheel_actions_available(),
+            graphs.has_asset_category_data()
         );
-        component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
-        let snapshot = component.snapshot().unwrap();
+        assert_eq!(
+            runtime
+                .queue_wheel_selection(request(0x0a90_0000_dead_beef), None)
+                .unwrap(),
+            0
+        );
+        let selection = request(action);
+        let before_selection = runtime.snapshot().unwrap().now_ms;
         if graphs.has_asset_category_data() {
+            assert_eq!(runtime.queue_wheel_selection(selection, None).unwrap(), 2);
+        } else {
+            assert_eq!(runtime.queue_wheel_selection(selection, None).unwrap(), 0);
+            let request = selection.into_local_message();
+            assert_eq!(
+                runtime
+                    .component
+                    .queue_entity_message_from(runtime.world.entity, request.id, request.parameters)
+                    .unwrap(),
+                2
+            );
+            runtime.component.run_now(&mut runtime.world).unwrap();
+        }
+        let snapshot = runtime.component.snapshot().unwrap();
+        if graphs.has_asset_category_data() {
+            assert_eq!(
+                Some(snapshot.now_ms - before_selection),
+                ready["elapsed_vm_ms"].as_u64()
+            );
             assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
                 matches!(&diagnostic.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class))
                     if class == "STU_4460419A")
@@ -3491,6 +3963,538 @@ fn prepared_wheel_packet_bindings_reach_both_authored_handlers() {
             );
             if graph == 0x05ad {
                 assert_eq!(instance.variables[&9253], Value::Bool(true));
+            }
+        }
+        let spray = 0x0a90_0000_0000_01a4;
+        if with_room && graphs.has_asset_category_entry(spray) {
+            let codecs = CodecTable::load(root.join("data/statescript_codecs_174.json")).unwrap();
+            let encoder = SnapshotEncoder::new(&graphs, &codecs);
+            let before =
+                [View::Owner, View::Observer].map(|view| encoder.project(snapshot, view).unwrap());
+            runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                sprays: [0, 0, 0x0250_0000_0000_0009, 0],
+                ..Default::default()
+            });
+            runtime.world.eye_position = Some(vector(&spray_input["eye"]));
+            runtime.world.movement.yaw = 0;
+            runtime.world.movement.pitch = 0;
+            runtime.world.record_command_view(FIRST_TICK + 2);
+            runtime.world.movement.yaw = 32768;
+
+            assert_eq!(
+                runtime
+                    .queue_wheel_selection(request(spray), Some(FIRST_TICK + 2))
+                    .unwrap(),
+                2
+            );
+            runtime.component.run_now(&mut runtime.world).unwrap();
+            assert!(
+                !runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .instances
+                    .values()
+                    .any(|instance| {
+                        instance.states.values().any(|state| {
+                            state.active && matches!(state.kind, StateKind::SprayPlacement(Some(_)))
+                        })
+                    })
+            );
+            runtime
+                .component
+                .advance_frame(FIRST_TICK + 2, &mut runtime.world)
+                .unwrap();
+            let snapshot = runtime.component.snapshot().unwrap();
+            let (&spray_instance, spray_wheel) = snapshot
+                .instances
+                .iter()
+                .find(|(_, instance)| instance.graph == 0x02cf)
+                .unwrap();
+            assert_eq!(
+                spray_wheel.variables.get(&9259),
+                Some(&Value::Integer(2)),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            let (spray_slot, hit) = spray_wheel
+                .states
+                .iter()
+                .find_map(|(&slot, state)| match state.kind {
+                    StateKind::SprayPlacement(Some((_, hit))) if state.active => Some((slot, hit)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing spray placement: {:?}", snapshot.diagnostics));
+            assert_eq!(
+                hit.point.map(f64::from),
+                vector(&spray_fixture["expected"]["point"])
+            );
+            assert_eq!(
+                hit.normal.map(f64::from),
+                vector(&spray_fixture["expected"]["normal"])
+            );
+            assert_eq!(
+                hit.direction.map(f64::from),
+                vector(&spray_input["direction"])
+            );
+            assert!(
+                snapshot.initialization_complete(),
+                "{:?}",
+                snapshot.diagnostics
+            );
+            let mut sent_spray = None;
+            for previous in before {
+                let mut stream = BodyStream::new(snapshot.entity);
+                stream.create_arrived();
+                let base = encoder.queue_full(&mut stream, &previous).unwrap();
+                assert!(stream.arrived(base.last).advanced);
+                let next = encoder.project_next(snapshot, &previous).unwrap();
+                let kind = match previous.view() {
+                    View::Owner => {
+                        DeltaKind::InitialOwner((snapshot.now_ms / FRAME_MS).try_into().unwrap())
+                    }
+                    View::Observer => DeltaKind::Observer { resend: false },
+                };
+                let change = encoder
+                    .queue_delta(&mut stream, &next, kind, 16)
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    stream
+                        .touched()
+                        .contains(&ChangeKey::State(spray_instance, spray_slot))
+                );
+                if let Some(sent) = stream.sent(change.last) {
+                    sent_spray = sent.snapshot.active_spray(spray_instance, spray_slot);
+                }
+                assert!(stream.arrived(change.last).advanced);
+            }
+            // Supply a synthetic anchored hit to the real codec and
+            // projection. The prepared collision cache only yields world hits.
+            let mut attached = snapshot.clone();
+            let state = attached
+                .instances
+                .get_mut(&spray_instance)
+                .unwrap()
+                .states
+                .get_mut(&spray_slot)
+                .unwrap();
+            let StateKind::SprayPlacement(Some((unlock, mut hit))) = state.kind else {
+                unreachable!()
+            };
+            let anchor = &spray_fixture["attachment"];
+            let anchor_id = anchor["entity"].as_u64().unwrap() as u32;
+            hit.point = vector(&anchor["point"]).map(|axis| axis as f32);
+            hit.normal = vector(&anchor["normal"]).map(|axis| axis as f32);
+            for case in anchor["cases"].as_array().unwrap() {
+                hit.attachment = Some(crate::script_init::SprayAttachment {
+                    entity: anchor_id,
+                    key: case["key"]
+                        .as_u64()
+                        .and_then(|key| std::num::NonZeroU32::new(key as u32)),
+                });
+                attached.instances[&spray_instance]
+                    .states
+                    .get_mut(&spray_slot)
+                    .unwrap()
+                    .kind = StateKind::SprayPlacement(Some((unlock, hit)));
+                for view in [View::Owner, View::Observer] {
+                    let projection = encoder.project(&attached, view).unwrap();
+                    let mut stream = BodyStream::new(attached.entity);
+                    stream.create_arrived();
+                    let frame = encoder.queue_full(&mut stream, &projection).unwrap();
+                    assert!(stream.arrived(frame.last).advanced);
+                }
+            }
+            let report = ClientWheelUse {
+                entity: snapshot.entity,
+                instance: spray_instance,
+                unlock: 0x0250_0000_0000_0009,
+            };
+            for wrong in [
+                ClientWheelUse {
+                    entity: report.entity + 1,
+                    ..report
+                },
+                ClientWheelUse {
+                    instance: 0,
+                    ..report
+                },
+                ClientWheelUse {
+                    unlock: report.unlock + 1,
+                    ..report
+                },
+            ] {
+                assert_eq!(runtime.queue_wheel_use(wrong, None).unwrap(), 0);
+            }
+            assert_eq!(runtime.queue_wheel_use(report, None).unwrap(), 1);
+            runtime.world.movement.yaw = 32768;
+            assert_eq!(
+                runtime.queue_wheel_selection(request(spray), None).unwrap(),
+                2
+            );
+            runtime
+                .component
+                .advance_frame(FIRST_TICK + 3, &mut runtime.world)
+                .unwrap();
+            let during_cooldown = &runtime.component.snapshot().unwrap().instances[&spray_instance];
+            assert_eq!(during_cooldown.variables.get(&61), Some(&Value::Bool(true)));
+            assert!(during_cooldown.states[&spray_slot].active);
+            assert_eq!(
+                during_cooldown.variables.get(&8022),
+                Some(&Value::Asset(report.unlock)),
+            );
+            assert!(
+                runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .initialization_complete()
+            );
+
+            let next_selection = FIRST_TICK + 2 + 1_000_u32.div_ceil(FRAME_MS as u32);
+            for frame in FIRST_TICK + 4..=next_selection {
+                runtime
+                    .component
+                    .advance_frame(frame, &mut runtime.world)
+                    .unwrap();
+            }
+            let after_cooldown = runtime.component.snapshot().unwrap();
+            assert_eq!(
+                after_cooldown.instances[&spray_instance].variables.get(&61),
+                Some(&Value::Bool(false)),
+                "{:?}",
+                after_cooldown.diagnostics
+            );
+            assert_eq!(
+                runtime.queue_wheel_selection(request(spray), None).unwrap(),
+                2
+            );
+            runtime
+                .component
+                .advance_frame(next_selection + 1, &mut runtime.world)
+                .unwrap();
+            assert!(
+                runtime
+                    .component
+                    .snapshot()
+                    .unwrap()
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x02cf)
+                    .unwrap()
+                    .states
+                    .values()
+                    .all(|state| !state.active
+                        || !matches!(state.kind, StateKind::SprayPlacement(_)))
+            );
+            let start =
+                runtime.component.snapshot().unwrap().instances[&spray_instance].started_at_ms();
+            assert_eq!(runtime.queue_wheel_use(report, None).unwrap(), 0);
+            assert_eq!(runtime.queue_wheel_use(report, Some(start + 1)).unwrap(), 0);
+            assert_eq!(sent_spray, Some((start, report.unlock)));
+            runtime
+                .component
+                .set_instance_variable(spray_instance, 8022, Value::Asset(0), &mut runtime.world)
+                .unwrap();
+            assert_eq!(
+                runtime
+                    .queue_wheel_use(report, sent_spray.map(|(start, _)| start))
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                runtime.component.snapshot().unwrap().instances[&spray_instance]
+                    .variables
+                    .get(&8022),
+                Some(&Value::Asset(report.unlock))
+            );
+            if let Some(effect) = voice_effect {
+                let selection_frame = next_selection + 160;
+                for frame in next_selection + 2..=selection_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                runtime.frame = selection_frame;
+                let _ = runtime.take_script_requests();
+                runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                    voice_effects: [0, effect, 0, 0],
+                    ..Default::default()
+                });
+                let action = 0x0a90_0000_0000_019d;
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(action), None)
+                        .unwrap(),
+                    2
+                );
+                let snapshot = runtime.component.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
+                let callout = snapshot
+                    .instances
+                    .values()
+                    .find(|instance| instance.graph == 0x0686)
+                    .unwrap();
+                assert!(matches!(
+                    callout.states[&13].kind,
+                    StateKind::ClientPulse {
+                        count: 0,
+                        fresh_at: None
+                    }
+                ));
+                assert_eq!(runtime.take_script_requests().len(), 1);
+            }
+            let emote_action = 0x0a90_0000_0000_01a1;
+            if graphs.has_asset_category_entry(emote_action) {
+                let emote_frame = next_selection + 500;
+                let next_frame =
+                    runtime.component.snapshot().unwrap().now_ms as u32 / FRAME_MS as u32 + 1;
+                for frame in next_frame..=emote_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                runtime.frame = emote_frame;
+                runtime.world.movement.yaw = 8192;
+                runtime.world.movement.pitch = 1024;
+                runtime.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+                    emote_aliases: [0, 0x0c80_0000_0000_0091, 0, 0],
+                    emote_blend_trees: [0, 0x0040_0000_0000_0052, 0, 0],
+                    ..Default::default()
+                });
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(emote_action), None)
+                        .unwrap(),
+                    2
+                );
+                let snapshot = runtime.component.snapshot().unwrap();
+                let (&emote_instance, emote) = snapshot
+                    .instances
+                    .iter()
+                    .find(|(_, instance)| instance.graph == 0x023a)
+                    .unwrap_or_else(|| {
+                        panic!("emote graph did not start: {:?}", snapshot.diagnostics)
+                    });
+                let (&resource_instance, _) = snapshot
+                    .instances
+                    .iter()
+                    .find(|(_, instance)| instance.graph == 0x1040)
+                    .expect("authored emote resource preload");
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{:?}",
+                    snapshot.diagnostics
+                );
+                assert_eq!(
+                    emote.variables.get(&8908),
+                    Some(&Value::Asset(0x0040_0000_0000_0052))
+                );
+                assert_eq!(emote.states[&24].kind, StateKind::Plain);
+                assert!(emote.states[&24].active);
+                assert_eq!(emote.states[&36].kind, StateKind::Plain);
+                assert!(emote.states[&36].active);
+                assert!(emote.states[&19].active);
+                assert_eq!(emote.states[&37].kind, StateKind::Plain);
+                assert!(emote.states[&37].active);
+                assert_eq!(emote.states[&19].kind, StateKind::Registered { next: None });
+                assert_eq!(emote.variables.get(&2291), Some(&Value::Bool(true)));
+                assert_eq!(emote.variables.get(&502), Some(&Value::Float(5.625)));
+                assert_eq!(emote.states[&2].kind, StateKind::Registered { next: None });
+                assert_eq!(runtime.cinematic_aim(), Some([8192, 1024]));
+                assert!(!snapshot.diagnostics.iter().any(|d| {
+                    matches!(&d.issue, crate::script_init::Issue::Expression(crate::script_expr::EvalError::UnsupportedConfig(class)) if matches!(class.as_str(), "STU_DF7C7C63" | "STU_250DEABD" | "STUConfigVarAnimation"))
+                }), "{:?}", snapshot.diagnostics);
+                assert!(!snapshot.diagnostics.iter().any(|diagnostic| {
+                    matches!(&diagnostic.issue, crate::script_init::Issue::UnsupportedAction(class) if class == "STU_BC5E4622")
+                }), "{:?}", snapshot.diagnostics);
+                let before_playback = [View::Owner, View::Observer].map(|view| {
+                    let projected = encoder.project(snapshot, view).unwrap();
+                    assert!(
+                        projected
+                            .instance_states(emote_instance)
+                            .unwrap()
+                            .contains(&36)
+                    );
+                    encoder.full(&projected).unwrap();
+                    projected
+                });
+                let playback_frame = emote_frame + 20;
+                for frame in emote_frame + 1..=playback_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                let playing = runtime.component.snapshot().unwrap();
+                assert!(
+                    playing.initialization_complete(),
+                    "{:?}",
+                    playing.diagnostics
+                );
+                let cue = playing
+                    .frame_actions
+                    .iter()
+                    .find(|action| {
+                        action.callout.instance == emote_instance && action.callout.position == 11
+                    })
+                    .expect("the authored client playback message");
+                for previous in before_playback {
+                    let mut stream = BodyStream::new(playing.entity);
+                    stream.create_arrived();
+                    let base = encoder.queue_full(&mut stream, &previous).unwrap();
+                    assert!(stream.arrived(base.last).advanced);
+                    let kind = match previous.view() {
+                        View::Owner => DeltaKind::InitialOwner(playback_frame),
+                        View::Observer => DeltaKind::Observer { resend: false },
+                    };
+                    let next = encoder.project_next(playing, &previous).unwrap();
+                    let delta = encoder
+                        .queue_delta(&mut stream, &next, kind, 16)
+                        .unwrap()
+                        .unwrap();
+                    assert!(stream.arrived(delta.last).advanced);
+                    assert_eq!(
+                        stream.base().unwrap().1.acknowledged_callout(),
+                        cue.callout.serial
+                    );
+                }
+                assert_eq!(
+                    runtime
+                        .component
+                        .queue_local_instance_message(
+                            emote_instance,
+                            crate::script_init::RoomMessage {
+                                id: 0x0240_0000_0000_083a,
+                                parameters: Variables::new(),
+                            }
+                        )
+                        .unwrap(),
+                    1
+                );
+                runtime
+                    .component
+                    .advance_frame(playback_frame + 1, &mut runtime.world)
+                    .unwrap();
+                let stopped = runtime.component.snapshot().unwrap();
+                assert!(
+                    stopped.initialization_complete(),
+                    "{:?}",
+                    stopped.diagnostics
+                );
+                assert!(
+                    !stopped.instances.contains_key(&emote_instance),
+                    "emote still running: {:?}",
+                    stopped.instances.get(&emote_instance)
+                );
+                assert_eq!(runtime.cinematic_aim(), None);
+
+                let replay_frame = playback_frame + 500;
+                for frame in playback_frame + 2..replay_frame {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                }
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(emote_action), None)
+                        .unwrap(),
+                    2
+                );
+                runtime
+                    .component
+                    .advance_frame(replay_frame, &mut runtime.world)
+                    .unwrap();
+                let replayed = runtime.component.snapshot().unwrap();
+                assert!(
+                    replayed.initialization_complete(),
+                    "{:?}",
+                    replayed.diagnostics
+                );
+                assert!(!replayed.instances.contains_key(&resource_instance));
+                assert_eq!(
+                    replayed
+                        .instances
+                        .values()
+                        .filter(|instance| instance.graph == 0x1040)
+                        .count(),
+                    1,
+                    "the authored PlayScript replacement keeps a single preload"
+                );
+            }
+        }
+        if with_room && graphs.has_asset_category_data() {
+            let (component, mut world) = prepared_soldier_component(Arc::clone(&graphs), true);
+            world.spatial_frame = runtime.world.spatial_frame.take();
+            world.eye_position = Some(vector(&spray_input["eye"]));
+            runtime.component = component;
+            runtime.world = world;
+            runtime.frame = FIRST_TICK;
+            runtime.wheel_delivery_frame = FIRST_TICK;
+            let callouts = &fixture["repeated_callouts"];
+            let rest = callouts["rest_frames"].as_u64().unwrap() as u32;
+            let receiver = callouts["healing_receiver_output"].as_u64().unwrap() as u32;
+            let advance = |runtime: &mut PlayerBodyRuntime, frames| {
+                let start = (runtime.snapshot().unwrap().now_ms / FRAME_MS) as u32;
+                for frame in start + 1..=start + frames {
+                    runtime
+                        .component
+                        .advance_frame(frame, &mut runtime.world)
+                        .unwrap();
+                    runtime.frame = frame;
+                }
+            };
+            for key in ["greeting", "need_healing", "greeting"] {
+                assert_eq!(
+                    runtime
+                        .queue_wheel_selection(request(asset(&callouts[key])), None)
+                        .unwrap(),
+                    2
+                );
+                advance(&mut runtime, 10);
+                let snapshot = runtime.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{key}: {:?}",
+                    snapshot.diagnostics
+                );
+                if key == "need_healing" {
+                    let receiver = snapshot
+                        .instances
+                        .values()
+                        .find(|instance| instance.graph == 0x05ad)
+                        .unwrap()
+                        .variables
+                        .get(&receiver);
+                    assert!(
+                        receiver.is_some(),
+                        "the authored local receiver did not run"
+                    );
+                } else {
+                    assert!(
+                        snapshot
+                            .instances
+                            .values()
+                            .any(|instance| instance.graph == 0x0341),
+                        "greeting did not start at frame {}",
+                        runtime.frame
+                    );
+                }
+                advance(&mut runtime, rest);
+                let snapshot = runtime.snapshot().unwrap();
+                assert!(
+                    snapshot.initialization_complete(),
+                    "{key} follow-up: {:?}",
+                    snapshot.diagnostics
+                );
             }
         }
     }
@@ -3877,9 +4881,13 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             throttles: [0; 2],
             mode: PRACTICE_RANGE_MODE,
             hero,
+            body_definition: 0,
+            anim_timing: None,
             vitals: Vitals::empty(),
             pool_types_known: true,
             target_tags: body.target_tags.clone(),
+            command_views: Default::default(),
+            wheel_cosmetics: Default::default(),
             model_hardpoints: None,
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: false,
@@ -3887,11 +4895,21 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
             sightings: Vec::new(),
             sighting_source: None,
             death_source: None,
-            cinematic_aim: None,
+            cinematic_aim: Default::default(),
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
+            voice_variant_counter: 0,
+            voice_cooldowns: Default::default(),
+            pet_positions: BTreeMap::new(),
+            spawned_possessables: BTreeMap::new(),
+            pending_body_swap: None,
+            combat_mods: Default::default(),
+            deflect: Default::default(),
+            recall_history: Default::default(),
+            active_auras: Default::default(),
+            ball_roll_speed: None,
         };
         let component = Component::start(
             Arc::clone(&graphs),
@@ -3918,4 +4936,603 @@ fn authored_armour_and_shield_roots_reproduce_the_reference_body_pools() {
         );
         assert_eq!(world.vitals.component(), pools.vitals().component());
     }
+}
+
+#[test]
+fn voice_stimulus_state_and_array_criteria_emit_room_cues() {
+    use crate::{
+        actor_voice::ActorVoiceCatalog,
+        game_clock::FIRST_TICK,
+        game_combat::{CombatError, RoomSimulation},
+        game_combat_messages::CombatNotice,
+        game_replication::BodyId,
+        script_graph::RoomSpatialNeeds,
+    };
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    let graphs = Arc::new(
+            GraphStore::from_json(
+                json!({
+                    "version": 1,
+                    "bodies": {},
+                    "entities": {},
+                    "roots": {},
+                    "missing": [],
+                    "graphs": [{
+                        "index": 0x0999,
+                        "items": 3,
+                        "states": [2],
+                        "entries": [0],
+                        "remote": [],
+                        "sync_vars": [],
+                        "containers": {},
+                        "unknown_nodes": [],
+                        "fields": {},
+                        "header": {
+                            "m_nodesBitCount": 4,
+                            "m_statesBitCount": 4,
+                            "m_remoteSyncNodesBitCount": 4,
+                            "m_syncVarsBitCount": 4
+                        },
+                        "nodes": [
+                            {
+                                "pos": 0, "uid": 0, "rid": 0, "remote": -1,
+                                "class": "STUStatescriptEntry",
+                                "state": null, "server_only": false, "client_only": false,
+                                "fields": {
+                                    "m_outPlug": { "$": "STUStatescriptOutputPlug", "links": [[1, "m_inPlug"]] }
+                                }
+                            },
+                            {
+                                "pos": 1, "uid": 1, "rid": 1, "remote": -1,
+                                "class": "STUStatescriptActionCriteria",
+                                "state": null, "server_only": true, "client_only": false,
+                                "fields": {
+                                    "m_identifier": {
+                                        "$": "STUConfigVarIdentifier",
+                                        "m_identifier": "0x0D80000000000720"
+                                    },
+                                    "m_targets": {
+                                        "$": "STU_06610EBC",
+                                        "m_configVars": [{ "$": "STU_B5A0CAF0" }]
+                                    },
+                                    "m_297E0B63": { "$": "STU_B5A0CAF0" },
+                                    "m_outPlug": { "$": "STUStatescriptOutputPlug", "links": [[2, "m_beginPlug"]] }
+                                }
+                            },
+                            {
+                                "pos": 2, "uid": 2, "rid": 2, "remote": -1,
+                                "class": "STU_40E05F6B",
+                                "state": 0, "server_only": false, "client_only": false,
+                                "fields": {
+                                    "m_2BBEEAB8": 1,
+                                    "m_beginPlug": { "$": "STUStatescriptInputPlug", "links": [] },
+                                    "m_stimulus": {
+                                        "$": "STUConfigVarVoiceStimulus",
+                                        "m_voiceStimulus": "0x0EE0000000000042"
+                                    },
+                                    "m_targets": { "$": "STU_B5A0CAF0" }
+                                }
+                            }
+                        ]
+                    }]
+                })
+                .to_string()
+                .as_bytes(),
+            )
+            .unwrap(),
+        );
+    let catalog = Arc::new(
+        serde_json::from_value::<ActorVoiceCatalog>(json!({
+            "criteria": {
+                "0x0D80000000000720": ["0x0EE0000000000040"]
+            },
+            "heroes": {
+                "0x02E000000000006E": "0x05F0000000000001"
+            },
+            "skins": {},
+            "sets": {
+                "0x05F0000000000001": {
+                    "0x0EE0000000000040": ["0x0760000000001001"],
+                    "0x0EE0000000000042": ["0x0760000000001002"]
+                }
+            },
+            "equipped": {}
+        }))
+        .unwrap(),
+    );
+
+    let cache = crate::collision_cache::CollisionCache {
+        header: serde_json::from_value(json!({
+            "meshes": [[3, 1]], "hulls": 0, "models": 0, "placements": 0, "identifiers": []
+        }))
+        .unwrap(),
+        meshes: vec![crate::collision_cache::Mesh {
+            vertices: vec![[-1.0, 0.0, 0.0], [-1.0, 2.0, 0.0], [-1.0, 0.0, 1.0]],
+            triangles: vec![crate::collision_cache::Triangle {
+                corners: [0, 1, 2],
+                wings: [-1; 3],
+                mask: 0x18,
+                surface: 0,
+            }],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let ground = Arc::new(
+        crate::collision_scene::CollisionScene::movement_probe(&cache, &BTreeSet::new()).unwrap(),
+    );
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let owner = BodyId {
+        entity: 0xa000_0101,
+        generation: 1,
+    };
+    let mover = crate::mover::Mover::new(
+        crate::mover_settings::MoverSettings::default(),
+        Arc::new(crate::contact_world::ContactWorld::new(Vec::new()).unwrap()),
+        [0.0; 3],
+        0,
+        0x18,
+    )
+    .unwrap();
+    room.spawn_player_body(crate::game_combat::PlayerBodyState::new(
+        owner, 1, 0, 0, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+    room.enable_spatial_queries(false, ground, RoomSpatialNeeds::Queries);
+    room.enable_actor_voice(catalog);
+    room.prepare_spatial_frame(1).unwrap();
+    let frame = room.spatial_frame();
+
+    let mut world = BodyWorld {
+        spatial_frame: frame,
+        team_member_counts: None,
+        room_activity: None,
+        script_requests: Default::default(),
+        graphs: Arc::clone(&graphs),
+        controller: 1,
+        entity: owner.entity,
+        body_filter: crate::match_scene::team_bit(0).unwrap(),
+        position: [0.0; 3],
+        eye_position: None,
+        movement: Movement::default(),
+        throttles: [0; 2],
+        mode: PRACTICE_RANGE_MODE,
+        hero: SOLDIER,
+        body_definition: 0,
+        anim_timing: None,
+        vitals: Vitals::empty(),
+        pool_types_known: true,
+        target_tags: None,
+        command_views: Default::default(),
+        wheel_cosmetics: Default::default(),
+        model_hardpoints: None,
+        target_tag_effects: TargetTagEffects::default(),
+        controller_on_fire: false,
+        defenders: Arc::default(),
+        sightings: Vec::new(),
+        sighting_source: None,
+        death_source: None,
+        cinematic_aim: Default::default(),
+        facing_claims: Default::default(),
+        deadeye_scene: DeadeyeScene::default(),
+        velocity_changes: Vec::new(),
+        scripted_motion: None,
+        voice_variant_counter: 0,
+        voice_cooldowns: Default::default(),
+        pet_positions: BTreeMap::new(),
+        spawned_possessables: BTreeMap::new(),
+        pending_body_swap: None,
+        combat_mods: Default::default(),
+        deflect: Default::default(),
+        recall_history: Default::default(),
+        active_auras: Default::default(),
+        ball_roll_speed: None,
+    };
+    let mut component = Component::start(
+        Arc::clone(&graphs),
+        world.entity,
+        Variables::default(),
+        vec![crate::script_init::Root::new(1, 0x0999)],
+        FIRST_TICK,
+        &mut world,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    component.advance_frame(FIRST_TICK + 1, &mut world).unwrap();
+    component.poll_voice(&mut world).unwrap();
+    let requests = world.script_requests.take();
+    room.settle_test_script_requests(owner.entity, requests, FIRST_TICK + 1)
+        .map_err(|e: CombatError| e)
+        .unwrap();
+    let cues: Vec<_> = room
+        .take_player_cues()
+        .into_iter()
+        .filter_map(|cue| match cue.notice {
+            CombatNotice::Voice { stimulus, line, .. } => Some((stimulus, line)),
+            _ => None,
+        })
+        .collect();
+    let diag = component.snapshot().unwrap().diagnostics.clone();
+    assert_eq!(
+        cues,
+        vec![
+            (0x0EE0_0000_0000_0040, 0x0760_0000_0000_1001),
+            (0x0EE0_0000_0000_0042, 0x0760_0000_0000_1002),
+        ],
+        "diagnostics: {diag:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires separately prepared 104319 runtime"]
+fn prepared_soldier_emote_and_need_healing_close_cleanly() {
+    use crate::{
+        commands::Command, game_clock::FIRST_TICK, game_combat::RoomSimulation,
+        game_combat_messages::CombatNotice, game_content::GameMap,
+        game_parameters::ClientWheelAction, game_replication::BodyId, scene_assets::SceneAssets,
+        script_graph::RoomSpatialNeeds,
+    };
+    use std::path::PathBuf;
+
+    let runtime_dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&runtime_dir).unwrap();
+    let map = GameMap::practice_range();
+    let scene = assets.prepare(map).unwrap();
+    let hero = assets.heroes().find_hero("Soldier: 76").unwrap().clone();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    let owner = BodyId {
+        entity: 0xa000_0101,
+        generation: 1,
+    };
+    let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    room.spawn_player_body(crate::game_combat::PlayerBodyState::new(
+        owner, 1, 0, 0, hero.guid, mover, None, 1, None,
+    ))
+    .unwrap();
+    room.enable_spatial_queries(false, scene.test_combat_rays(), RoomSpatialNeeds::Queries);
+    if let Some(voice) = assets.test_actor_voice() {
+        room.enable_actor_voice(voice);
+    }
+    room.prepare_spatial_frame(FIRST_TICK).unwrap();
+
+    let mut player = assets
+        .compile_owner_factory(&scene, &hero)
+        .unwrap()
+        .start_with_setup(
+            OwnerBodySpawn {
+                controller: 0xa000_0100,
+                entity: owner.entity,
+                body_filter: crate::match_scene::team_bit(0).unwrap(),
+                slot: 0,
+                frame: FIRST_TICK,
+                pose: Movement::default(),
+                eye_position: None,
+                quanta: RETAIL_QUANTA,
+                skin: 0,
+            },
+            OwnerBodySetup {
+                spatial_frame: room.spatial_frame(),
+                ..OwnerBodySetup::default()
+            },
+        )
+        .unwrap();
+
+    // 1. Verify 004B m_publicSchema camera defaults (2286 = 3.0, 2296 = 0x0880000000000003)
+    let snap0 = player.component.snapshot().unwrap();
+    let body_inst = snap0
+        .instances
+        .values()
+        .find(|inst| inst.graph == 0x004b)
+        .expect("004B body graph");
+    assert_eq!(body_inst.variables.get(&2286), Some(&Value::Float(3.0)));
+    assert_eq!(
+        body_inst.variables.get(&2296),
+        Some(&Value::Asset(0x0880_0000_0000_0003))
+    );
+
+    // 2. Equip a non-looping emote (0x0C8000000000045C, blend 0x0040000000000644, 4.5s) and trigger it
+    player.set_wheel_cosmetics(crate::match_scene::WheelCosmetics {
+        emote_aliases: [0x0c80_0000_0000_045c, 0, 0, 0],
+        emote_blend_trees: [0x0040_0000_0000_0644, 0, 0, 0],
+        ..Default::default()
+    });
+    let step_mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+    let mut frame = FIRST_TICK + 20;
+    for f in FIRST_TICK + 1..=frame {
+        player
+            .advance(
+                Command {
+                    frame: f,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let wheel_req = |action: u64| {
+        ClientWheelAction::read(&crate::game_messages::Message {
+            id: crate::game_parameters::CLIENT_WHEEL_ACTION,
+            fields: BTreeMap::from([
+                (0x78, crate::jam_codec::Value::Unsigned(action)),
+                (0x80, crate::jam_codec::Value::Bool(true)),
+            ]),
+        })
+        .unwrap()
+    };
+    let emote_req = wheel_req(0x0a90_0000_0000_0172);
+    assert_eq!(player.queue_wheel_selection(emote_req, None).unwrap(), 2);
+    assert!(
+        player.cinematic_aim().is_some(),
+        "emote must engage cinematic aim"
+    );
+
+    // Advance enough frames for 023A emote to finish naturally via AnimationTiming
+    for _ in 0..400 {
+        frame += 1;
+        player
+            .advance(
+                Command {
+                    frame,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let after_emote = player.component.snapshot().unwrap();
+    assert!(
+        !after_emote
+            .instances
+            .values()
+            .any(|inst| inst.graph == 0x023a),
+        "emote graph 023A should exit after duration/cancel"
+    );
+    assert_eq!(
+        player.cinematic_aim(),
+        None,
+        "cinematic aim must clear when returning to first-person"
+    );
+
+    // 3. Trigger Need Healing (0x0A90_0000_0000_016C) and verify both 0686:40 action + Voice cue
+    let before_actions = after_emote
+        .frame_actions
+        .back()
+        .map_or(0, |a| a.callout.serial);
+    let _ = player.take_script_requests();
+    let heal_req = wheel_req(0x0a90_0000_0000_016c);
+    assert!(player.queue_wheel_selection(heal_req, None).unwrap() > 0);
+    for _ in 0..5 {
+        frame += 1;
+        player
+            .advance(
+                Command {
+                    frame,
+                    ..Command::default()
+                },
+                &step_mover,
+                BodyStep::Posed,
+            )
+            .unwrap();
+    }
+    let after_heal = player.component.snapshot().unwrap();
+    assert!(
+        after_heal
+            .frame_actions
+            .iter()
+            .any(|a| a.callout.serial > before_actions),
+        "Need Healing must capture a replicated frame action (0686:40 / 05AD:166)"
+    );
+    let requests = player.take_script_requests();
+    room.settle_test_script_requests(owner.entity, requests, frame)
+        .unwrap();
+    let cues: Vec<_> = room
+        .take_player_cues()
+        .into_iter()
+        .filter(|cue| {
+            matches!(
+                cue.notice,
+                CombatNotice::Voice {
+                    stimulus: 0x0ee0_0000_0000_0045,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(
+        !cues.is_empty(),
+        "Need Healing must emit a CombatNotice::Voice cue with stimulus 0x0ee0_0000_0000_0045"
+    );
+}
+
+#[test]
+#[ignore = "requires separately prepared 104319 runtime"]
+fn prepared_all_32_heroes_compile_start_and_step_cleanly() {
+    use crate::{
+        commands::Command, game_clock::FIRST_TICK, game_combat::RoomSimulation,
+        game_content::GameMap, game_replication::BodyId, scene_assets::SceneAssets,
+        script_graph::RoomSpatialNeeds,
+    };
+    use std::path::PathBuf;
+
+    let runtime_dir = PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let assets = SceneAssets::load(&runtime_dir).unwrap();
+    let heroes: Vec<_> = assets.heroes().heroes().cloned().collect();
+    assert_eq!(heroes.len(), 32, "expected 32 retail heroes");
+
+    let map = GameMap::practice_range();
+    let scene = assets.prepare(map).unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, scene.test_combat_rays(), RoomSpatialNeeds::Queries);
+    room.prepare_spatial_frame(FIRST_TICK).unwrap();
+
+    let mut failures = Vec::new();
+    for (idx, hero) in heroes.iter().enumerate() {
+        let owner = BodyId {
+            entity: 0xa000_0200 + (idx as u32),
+            generation: 1,
+        };
+        let factory = match assets.compile_owner_factory(&scene, hero) {
+            Ok(f) => f,
+            Err(err) => {
+                failures.push(format!("{} compile: {err}", hero.name));
+                continue;
+            }
+        };
+        let mover = scene.player_spawn_mover(hero.body, 0).unwrap();
+        let mut player = match factory.start_with_setup(
+            OwnerBodySpawn {
+                controller: 0xa000_0100 + (idx as u32),
+                entity: owner.entity,
+                body_filter: crate::match_scene::team_bit(0).unwrap(),
+                slot: idx as u8,
+                frame: FIRST_TICK,
+                pose: Movement::default(),
+                eye_position: Some([0.0, crate::game_combat::eye_height(hero.guid, false), 0.0]),
+                quanta: RETAIL_QUANTA,
+                skin: 0,
+            },
+            OwnerBodySetup {
+                spatial_frame: room.spatial_frame(),
+                team_member_counts: Some(TeamMemberCounts::from_teams(false, [0])),
+                room_activity: Some(scene.owner_room_activity()),
+            },
+        ) {
+            Ok(p) => p,
+            Err(err) => {
+                failures.push(format!("{} start: {err}", hero.name));
+                continue;
+            }
+        };
+
+        // Strict live-server baseline check: Owner + Observer projection AND full wire encode
+        // (this is the exact check that rejects a hero in live `WorldDelivery::start_owner_body`).
+        let snapshot = player.snapshot().expect("started hero snapshot");
+        let encoder = player.encoder();
+        match encoder.project(snapshot, View::Owner) {
+            Ok(projected) => {
+                if matches!(hero.name.as_str(), "Hanzo" | "Baptiste" | "Zarya") {
+                    match projected
+                        .variables
+                        .values
+                        .get(&crate::script_init::OWNER_HEALTH)
+                    {
+                        Some(&Value::Float(hp)) if hp > 0.0 => {}
+                        other => {
+                            failures.push(format!(
+                                "{} owner-crosshair-health-253 missing or zero: {other:?}",
+                                hero.name
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                if let Err(err) = encoder.full(&projected) {
+                    failures.push(format!("{} owner-wire: {err}", hero.name));
+                    continue;
+                }
+            }
+            Err(err) => {
+                failures.push(format!("{} owner-baseline: {err}", hero.name));
+                continue;
+            }
+        }
+        match encoder.project(snapshot, View::Observer) {
+            Ok(projected) => {
+                if let Err(err) = encoder.full(&projected) {
+                    failures.push(format!("{} observer-wire: {err}", hero.name));
+                    continue;
+                }
+            }
+            Err(err) => {
+                failures.push(format!("{} observer-baseline: {err}", hero.name));
+                continue;
+            }
+        }
+
+        // Deep multi-frame exercise across EVERY combat & mobility input:
+        // primary (0x1), secondary (0x2), jump (0x4), ability1 (0x8), ability2 (0x10),
+        // ult (0x20), reload (0x100), melee (0x800). Hold each for multiple frames + release
+        // so delayed states, velocity impulses, blinks, beams, heals, and multi-pellet volleys run.
+        let mut frame = FIRST_TICK;
+        let phases: &[(u32, u32, i8)] = &[
+            (0x0, 2, 0),
+            (0x1, 6, 0), // primary fire hold
+            (0x0, 4, 0), // release
+            (0x2, 6, 0), // secondary fire hold
+            (0x0, 4, 0),
+            (0x8, 6, 127), // ability 1 (with forward throttle for dash/blink/roll)
+            (0x0, 6, 0),
+            (0x10, 6, 127), // ability 2
+            (0x0, 6, 0),
+            (0x20, 6, 0), // ultimate
+            (0x0, 6, 0),
+            (0x800, 4, 0), // quick melee
+            (0x0, 4, 0),
+            (0x4, 4, 127), // jump / double-jump / hover
+            (0x0, 4, 0),
+            (0x100, 4, 0), // reload
+            (0x0, 4, 0),
+        ];
+        let mut total_shots = 0usize;
+        let mut total_vel = 0usize;
+        let mut total_motion = 0usize;
+        'hero_loop: for &(buttons, ticks, forward) in phases {
+            for _ in 0..ticks {
+                frame += 1;
+                let cmd = Command {
+                    frame,
+                    buttons,
+                    forward,
+                    ..Command::default()
+                };
+                if let Err(err) = player.advance(cmd, &mover, BodyStep::Posed) {
+                    failures.push(format!("{} step({buttons:#x}@f{frame}): {err}", hero.name));
+                    break 'hero_loop;
+                }
+                total_shots += player.take_shots(Some(cmd), &mover).len();
+                total_vel += player.take_velocity_changes().len();
+                if player.take_scripted_motion().is_some() {
+                    total_motion += 1;
+                }
+                let snap = player.snapshot().expect("stepped hero snapshot");
+                if !snap.initialization_complete() {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) diags: {:?}",
+                        hero.name, snap.diagnostics
+                    ));
+                    break 'hero_loop;
+                }
+                if let Err(err) = player.encoder().project(snap, View::Owner) {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) owner-proj: {err}",
+                        hero.name
+                    ));
+                    break 'hero_loop;
+                }
+                if let Err(err) = player.encoder().project(snap, View::Observer) {
+                    failures.push(format!(
+                        "{} step({buttons:#x}@f{frame}) observer-proj: {err}",
+                        hero.name
+                    ));
+                    break 'hero_loop;
+                }
+            }
+        }
+        eprintln!(
+            "  hero {:<16} shots={:<3} vel_ops={:<3} motions={:<2}",
+            hero.name, total_shots, total_vel, total_motion
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "32-hero generic matrix failures ({}/32):\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

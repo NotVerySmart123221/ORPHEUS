@@ -7,6 +7,11 @@
   "ally": 58,
   "opponents": [61, 62, 63, 64, 65, 66],
   "window_frames": 6,
+  "body_reuse": {
+    "generation": 2,
+    "first_kill": 121,
+    "second_kill": 122
+  },
   "cues": [{"count": 2, "line": 301}, {"count": 3, "line": 302}],
   "events": [
     {"name": "first opponent", "source": 57, "target": 61, "frame": 100, "killed": true, "count": 1},

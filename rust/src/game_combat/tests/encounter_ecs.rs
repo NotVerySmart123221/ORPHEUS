@@ -10,9 +10,11 @@ use crate::{
         GateDamageStage, GateHealth, GateState, GateWorld, RoomSimulation,
     },
     game_heroes::HeroCatalog,
-    junkenstein_messages::{BOSS_PAUSE, ENCOUNTER_RESULT, POST_MATCH_COMPLETE, POST_MATCH_PHASE},
     mover_settings::{MoverCatalog, MoverSettings},
     npc_catalog::NpcDefinition,
+    pve_encounter::messages::{
+        BOSS_PAUSE, ENCOUNTER_RESULT, POST_MATCH_COMPLETE, POST_MATCH_PHASE,
+    },
     scene_assets::{BotQueries, JunkensteinGate, SpawnAnchors},
     script_codecs::CodecTable,
     script_enemy::SceneMessage,
@@ -773,7 +775,7 @@ fn build_registration(
         script.snapshot().unwrap().diagnostics
     );
     EncounterRegistration {
-        voice_set: crate::junkenstein_voice::ENCOUNTER_VOICE_SET,
+        voice_set: crate::pve_encounter::voice::ENCOUNTER_VOICE_SET,
         graphs,
         npcs: None,
         heroes: Arc::new(HeroCatalog::default()),

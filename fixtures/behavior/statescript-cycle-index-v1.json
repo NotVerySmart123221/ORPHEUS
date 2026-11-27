@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "case_id": "statescript-cycle-index-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "cedec602",
+    "paths": [
+      "src/ow174/game/script/nodes.py"
+    ],
+    "notes": "The generic order follows the PC CycleIndex handler, which steps before every predicate and wraps to visit the start once. Inputs are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "cases": [
+    {
+      "name": "forward skips disabled",
+      "start": 0,
+      "available": [
+        true,
+        false,
+        true
+      ],
+      "expected": 2
+    },
+    {
+      "name": "reverse wraps",
+      "start": 0,
+      "reverse": true,
+      "available": [
+        false,
+        true,
+        true
+      ],
+      "expected": 2
+    },
+    {
+      "name": "forward wraps to start",
+      "start": 1,
+      "available": [
+        false,
+        true,
+        false
+      ],
+      "expected": 1
+    },
+    {
+      "name": "clamp oversized start",
+      "start": 12,
+      "available": [
+        true,
+        false,
+        true
+      ],
+      "expected": 0
+    },
+    {
+      "name": "clamp negative start",
+      "start": -4,
+      "available": [
+        true,
+        true,
+        false
+      ],
+      "expected": 1
+    },
+    {
+      "name": "one rejected index",
+      "start": 0,
+      "available": [
+        false
+      ],
+      "expected": -1
+    },
+    {
+      "name": "configured failure",
+      "start": 0,
+      "available": [
+        false,
+        false
+      ],
+      "fail": 8,
+      "expected": 8
+    },
+    {
+      "name": "empty selection",
+      "start": 0,
+      "available": [],
+      "fail": 7,
+      "expected": 7
+    }
+  ]
+}

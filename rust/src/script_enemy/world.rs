@@ -214,13 +214,11 @@ impl World for EnemyWorld<'_> {
         &mut self,
         site: Site,
         source: u32,
-        resource: u64,
+        _resource: u64,
         targets: &[u32],
     ) -> bool {
         site.entity == self.binding.body
             && source == self.binding.body
-            && (site.graph, site.node) == (0x0c89, Some(49))
-            && resource == 0x0120_0000_0000_0015
             && targets
                 .iter()
                 .all(|target| self.known_position(*target).is_some())
@@ -472,7 +470,7 @@ impl World for EnemyWorld<'_> {
                 .push(parameters.clone());
             return true;
         }
-        if message == junkenstein_messages::FLASHBANG_HIT
+        if message == crate::pve_encounter::messages::FLASHBANG_HIT
             && site.entity == self.binding.body
             && is_junkenstein_mode(self.binding.mode)
             && self.control_records.defenders.contains(&target)
@@ -740,7 +738,8 @@ impl World for EnemyWorld<'_> {
         guid: u64,
     ) -> Option<Option<crate::script_voice::Stimulus>> {
         self.voice_context(site)?;
-        let kind = junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, guid)?;
+        let kind =
+            crate::pve_encounter::voice::boss_speech(self.binding.hero, self.binding.skin, guid)?;
         Some(Some(crate::script_voice::Stimulus {
             guid,
             playable: true,
@@ -749,18 +748,25 @@ impl World for EnemyWorld<'_> {
     }
     fn voice_allow(&mut self, site: Site, stimulus: crate::script_voice::Stimulus) -> Option<bool> {
         self.voice_context(site)?;
-        let kind =
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid)?;
-        junkenstein_voice::speech_allowed(
+        let kind = crate::pve_encounter::voice::boss_speech(
+            self.binding.hero,
+            self.binding.skin,
+            stimulus.guid,
+        )?;
+        crate::pve_encounter::voice::speech_allowed(
             kind,
             self.binding.mode_voice_set,
-            junkenstein_voice::body_voice_set(self.binding.hero, self.binding.skin),
+            crate::pve_encounter::voice::body_voice_set(self.binding.hero, self.binding.skin),
         )
     }
     fn voice_actor_required(&self, _site: Site, stimulus: crate::script_voice::Stimulus) -> bool {
         matches!(
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid),
-            Some(junkenstein_voice::BossSpeech::Defeat(_))
+            crate::pve_encounter::voice::boss_speech(
+                self.binding.hero,
+                self.binding.skin,
+                stimulus.guid
+            ),
+            Some(crate::pve_encounter::voice::BossSpeech::Defeat(_))
         )
     }
     fn voice_submit(
@@ -770,13 +776,15 @@ impl World for EnemyWorld<'_> {
         targets: &[u32],
         actor: Option<&Value>,
     ) -> Result<Option<u32>, &'static str> {
-        use junkenstein_voice::BossSpeech;
+        use crate::pve_encounter::voice::BossSpeech;
         if self.voice_context(site).is_none() {
             return Ok(None);
         }
-        let Some(kind) =
-            junkenstein_voice::boss_speech(self.binding.hero, self.binding.skin, stimulus.guid)
-        else {
+        let Some(kind) = crate::pve_encounter::voice::boss_speech(
+            self.binding.hero,
+            self.binding.skin,
+            stimulus.guid,
+        ) else {
             return Ok(None);
         };
         let hero = if matches!(kind, BossSpeech::Defeat(_)) {
@@ -802,12 +810,21 @@ impl World for EnemyWorld<'_> {
             None
         };
         let draw = if kind.needs_draw() {
-            junkenstein_voice::voice_draw(site.entity, &mut self.control_records.voice_variation)
+            crate::pve_encounter::voice::voice_draw(
+                site.entity,
+                &mut self.control_records.voice_variation,
+            )
         } else {
             0.0
         };
-        let (handle, request) =
-            junkenstein_voice::speech_submission(site, kind, stimulus.guid, hero, targets, draw)?;
+        let (handle, request) = crate::pve_encounter::voice::speech_submission(
+            site,
+            kind,
+            stimulus.guid,
+            hero,
+            targets,
+            draw,
+        )?;
         if let Some(request) = request {
             if self.control_records.voice_requests.len() >= MAX_INIT_WORK {
                 return Ok(None);
@@ -818,14 +835,14 @@ impl World for EnemyWorld<'_> {
     }
     fn voice_duration(&mut self, site: Site, handle: u32, guid: u64, mode: bool) -> Option<f64> {
         self.voice_context(site)?;
-        junkenstein_voice::boss_duration(handle, guid, mode)
+        crate::pve_encounter::voice::boss_duration(handle, guid, mode)
     }
     fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {
         self.voice_context(site).map(|_| 0.0)
     }
 
     fn boss_intro_cue(&self, node: &crate::script_graph::Node) -> Option<IntroCue> {
-        junkenstein_voice::intro_cue(node)
+        crate::pve_encounter::voice::intro_cue(node)
     }
 
     fn play_boss_intro_voice(&mut self, site: Site, cue: IntroCue) -> Option<u64> {
@@ -837,8 +854,9 @@ impl World for EnemyWorld<'_> {
         {
             return None;
         }
-        let lines = junkenstein_voice::intro_lines(cue, self.binding.hero, self.binding.skin);
-        let Some((line, duration_ms)) = junkenstein_voice::select_line(
+        let lines =
+            crate::pve_encounter::voice::intro_lines(cue, self.binding.hero, self.binding.skin);
+        let Some((line, duration_ms)) = crate::pve_encounter::voice::select_line(
             lines,
             site.entity,
             &mut self.control_records.voice_variation,
@@ -1415,26 +1433,19 @@ impl World for EnemyWorld<'_> {
         filter: &Json,
     ) -> Option<crate::script_expr::SceneFilterPolicy> {
         use crate::script_expr::{FilterPredicate, FilterRelation, SceneFilterPolicy};
-        if site.entity != self.binding.body || !is_junkenstein_mode(self.binding.mode) {
+        if site.entity != self.binding.body {
             return None;
         }
-        let hostile = matches!(site.graph, 0x05ac | 0x01a3 | 0x157c)
-            && filter["m_66747E7D"] == 2
-            && filter
-                .get("m_89831602")
-                .is_none_or(|value| value.is_null() || value.as_u64() == Some(0));
-        let friendly = matches!(site.graph, 0x006b | 0x0071)
-            && filter["m_66747E7D"] == 1
-            && filter["m_89831602"] == 4;
+        let team_mode = filter.get("m_66747E7D").and_then(Json::as_u64).unwrap_or(0);
+        let hostile_flag = filter.get("m_89831602").and_then(Json::as_u64).unwrap_or(0);
+        let hostile = team_mode == 2 && (hostile_flag == 0 || hostile_flag == 1);
+        let friendly = team_mode == 1 && matches!(hostile_flag, 0 | 4);
         if !hostile && !friendly {
             return None;
         }
         let predicate = filter
             .get("m_condition")
             .is_some_and(|value| !value.is_null());
-        if hostile && predicate && site.graph != 0x01a3 {
-            return None;
-        }
         for key in ["m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"] {
             if filter.get(key).is_some_and(|value| {
                 !value.is_null() && crate::script_expr::target_tag_config(value).is_none()
@@ -1527,17 +1538,15 @@ impl World for EnemyWorld<'_> {
     }
 
     fn native(&mut self, site: Site, config: &Json) -> Option<Value> {
-        if self.binding.hero == SUMMONER
-            && (site.entity, site.graph, site.node) == (self.binding.body, 0x157c, Some(48))
+        if site.entity == self.binding.body
             && crate::script_expr::native_fields(config, &["m_entity", "m_filter"])
             && config["$"] == "STU_AC829876"
-            && config["m_filter"]["m_84065FD1"] == 64
-            && crate::script_expr::dynamic(&config["m_entity"])
-                .ok()
-                .flatten()
-                .is_some_and(|target| target.id == 536)
+            && config["m_filter"]
+                .get("m_84065FD1")
+                .and_then(Json::as_u64)
+                .is_some_and(|mask| mask & 0x40 != 0)
         {
-            // The beam can only acquire defenders, which have no world-object mask bit 0x40.
+            // World-object mask bit 0x40 is absent on living actor bodies.
             return Some(Value::Bool(false));
         }
         if (site.entity, site.graph, site.node) == (self.binding.body, 0x0079, Some(0))
@@ -1665,16 +1674,16 @@ impl World for EnemyWorld<'_> {
             if matches!(
                 (site.graph, site.node),
                 (0x01ca, Some(126)) | (0x00cb | 0x14b1, _)
-            ) && junkenstein_messages::sighting_selector(config)
+            ) && crate::pve_encounter::messages::sighting_selector(config)
             {
-                return Some(junkenstein_messages::recipients(
+                return Some(crate::pve_encounter::messages::recipients(
                     &self.control_records.defenders,
                 ));
             }
             if matches!(
                 (site.graph, site.node),
                 (0x01ca, Some(127)) | (0x00cb | 0x14b1, _)
-            ) && junkenstein_messages::self_team_query(config)
+            ) && crate::pve_encounter::messages::self_team_query(config)
             {
                 return Some(Value::Integer(i64::from(self.binding.team)));
             }

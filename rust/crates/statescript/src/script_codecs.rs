@@ -518,6 +518,15 @@ enum Family {
     LinkedTarget,
     Counter2,
     Pulser,
+    SprayPlacement,
+    Blink,
+    Start,
+    NoneU8,
+    NoneU16,
+    FlaggedValue,
+    ValueFlag,
+    Time16S64,
+    TwoVectorsS64,
 }
 
 impl Family {
@@ -544,6 +553,15 @@ impl Family {
             "linked_target" => Self::LinkedTarget,
             "counter2" => Self::Counter2,
             "pulser" => Self::Pulser,
+            "861D9015" => Self::SprayPlacement,
+            "blink" => Self::Blink,
+            "start" => Self::Start,
+            "none+u8" => Self::NoneU8,
+            "none+u16" => Self::NoneU16,
+            "63B7ADFD" => Self::FlaggedValue,
+            "239B1E64" => Self::ValueFlag,
+            "time16+s64" => Self::Time16S64,
+            "two_vectors+s64" => Self::TwoVectorsS64,
             _ => return None,
         })
     }
@@ -634,12 +652,146 @@ fn project(
                 fields.insert("values", FieldValue::Rows(vec![LayoutFields::new(); 7]));
             }
         }
+        Family::SprayPlacement => project_spray(&mut fields, &vm)?,
         Family::Pulser => {
             fields.insert("fresh", Value::Bool(vm.flag("fresh")).into());
             fields.insert("count", Value::Integer(vm.integer("count", 0)?).into());
         }
+        Family::Blink if !owner => {
+            fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+        }
+        Family::Blink => {}
+        Family::Start if owner => {
+            if let PayloadMode::Owner { frame_time, .. } = mode {
+                let start = vm.integer("start", frame_time)?;
+                let elapsed = frame_time
+                    .checked_sub(start)
+                    .ok_or(PayloadError::TimeRange)?;
+                fields.insert("t", Value::Integer(elapsed).into());
+            }
+        }
+        Family::Start => {}
+        Family::NoneU8 => {
+            fields.insert(
+                "m_B4802CE3",
+                Value::Integer(vm.integer("m_B4802CE3", 0)?).into(),
+            );
+        }
+        Family::NoneU16 => {
+            fields.insert(
+                "m_AE2D8911",
+                Value::Integer(vm.integer("m_AE2D8911", 0)?).into(),
+            );
+        }
+        Family::FlaggedValue => {
+            let active = vm.flag("a");
+            fields.insert("a", Value::Bool(active).into());
+            if active {
+                fields.insert("b", Value::Bool(vm.flag("b")).into());
+                fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+            }
+        }
+        Family::ValueFlag => {
+            fields.insert("value", Value::Integer(vm.integer("value", 0)?).into());
+            fields.insert("flag", Value::Bool(vm.flag("flag")).into());
+        }
+        Family::Time16S64 => {
+            fields.insert(
+                "m_0007BF47",
+                Value::Integer(vm.integer("m_0007BF47", 0)?).into(),
+            );
+            fields.insert("time", Value::Integer(vm.integer("time", 0)?).into());
+        }
+        Family::TwoVectorsS64 => {
+            fields.insert(
+                "m_0007BF47",
+                Value::Integer(vm.integer("m_0007BF47", 0)?).into(),
+            );
+            fields.insert("a", Value::Bool(vm.flag("a")).into());
+            fields.insert("b", Value::Bool(vm.flag("b")).into());
+        }
     }
     Ok(fields)
+}
+
+fn project_spray(fields: &mut LayoutFields<'static>, vm: &Vm<'_>) -> Result<(), PayloadError> {
+    if vm.0.is_empty() {
+        fields.insert("a", Value::Bool(false).into());
+        return Ok(());
+    }
+    let vector = |field| -> Result<[f32; 3], PayloadError> {
+        let Some(Value::Vector(value)) = vm.0.get(field) else {
+            return Err(invalid_field(field));
+        };
+        let vector = value.map(|value| value as f32);
+        vector
+            .iter()
+            .all(|part| part.is_finite())
+            .then_some(vector)
+            .ok_or_else(|| invalid_field(field))
+    };
+    let angles = |[x, y, z]: [f32; 3]| {
+        let yaw = if x == 0.0 && z == 0.0 {
+            0.0
+        } else {
+            f64::from(x).atan2(f64::from(z))
+        };
+        let pitch = if y.abs() > 0.999_845_5 {
+            std::f64::consts::FRAC_PI_2.copysign(f64::from(y))
+        } else {
+            f64::from(y).asin()
+        };
+        let quantize = |angle: f64, scale: f32| {
+            (32768.0 + (angle as f32 * scale).round()).clamp(0.0, 65535.0) as u32
+        };
+        [quantize(yaw, 10430.378), quantize(pitch, 20860.756)]
+    };
+    let [yaw, pitch] = angles(vector("direction")?);
+    let point = vector("point")?.map(f32::to_bits);
+    let [normal_yaw, normal_pitch] = angles(vector("normal")?);
+    fields.insert("a", Value::Bool(true).into());
+    for (key, value) in ["v0", "v1", "v2", "v3", "v4", "v5", "v6"].into_iter().zip([
+        yaw,
+        pitch,
+        point[0],
+        point[1],
+        point[2],
+        normal_yaw,
+        normal_pitch,
+    ]) {
+        fields.insert(key, FieldValue::Unsigned(u64::from(value)));
+    }
+    let entity = match vm.0.get("entity") {
+        None => None,
+        Some(Value::Entity(entity))
+            if entity & 0x8000_0000 != 0
+                && entity & 0x1fff_ffff != 0
+                && crate::script_expr::valid_entity(*entity) =>
+        {
+            Some(*entity)
+        }
+        _ => return Err(invalid_field("entity")),
+    };
+    let key = match vm.0.get("extra") {
+        None => None,
+        Some(Value::Integer(key)) if entity.is_some() => Some(
+            u32::try_from(*key)
+                .ok()
+                .filter(|&key| key != 0)
+                .ok_or_else(|| invalid_field("extra"))?,
+        ),
+        _ => return Err(invalid_field("extra")),
+    };
+    fields.insert("has_entity", Value::Bool(entity.is_some()).into());
+    if let Some(entity) = entity {
+        fields.insert("entity", Value::Entity(entity).into());
+        fields.insert("has_extra", Value::Bool(key.is_some()).into());
+        if let Some(key) = key {
+            fields.insert("extra", FieldValue::Unsigned(u64::from(key)));
+        }
+    }
+    fields.insert("g", Value::Bool(false).into());
+    Ok(())
 }
 
 fn project_volley(
@@ -771,6 +923,90 @@ fn elapsed(frame_time: i64, frame_ms: u32, last: i64) -> Result<i64, PayloadErro
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn static_and_attached_sprays_match_verified_field_layout() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../fixtures/behavior/spray-surface-placement-v1.json"
+        )))
+        .unwrap();
+        let table = CodecTable::from_json(r#"{"classes":{"861D9015":{
+            "name":"STU_861D9015","stec":false,"status":"VERIFIED","codec":"861D9015","layout":[
+                {"op":"bits","n":1,"f":"a"},{"op":"if","c":"a","then":[
+                    {"op":"bits","n":16,"f":"v0"},{"op":"bits","n":16,"f":"v1"},
+                    {"op":"bits","n":32,"f":"v2"},{"op":"bits","n":32,"f":"v3"},{"op":"bits","n":32,"f":"v4"},
+                    {"op":"bits","n":16,"f":"v5"},{"op":"bits","n":16,"f":"v6"},
+                    {"op":"bits","n":1,"f":"has_entity"},{"op":"if","c":"has_entity","then":[
+                        {"op":"entity_id","f":"entity"},{"op":"bits","n":1,"f":"has_extra"},
+                        {"op":"if","c":"has_extra","then":[{"op":"var_b","f":"extra"}],"else":[]}
+                    ],"else":[]},{"op":"bits","n":1,"f":"g"}
+                ],"else":[]}
+            ]
+        }}}"#).unwrap();
+        let codec = table.codec("STU_861D9015").unwrap();
+        let vector = |parts: &serde_json::Value| {
+            Value::Vector(std::array::from_fn(|axis| parts[axis].as_f64().unwrap()))
+        };
+        let payload = StatePayload::from([
+            ("direction".into(), vector(&fixture["input"]["direction"])),
+            ("point".into(), vector(&fixture["expected"]["point"])),
+            ("normal".into(), vector(&fixture["expected"]["normal"])),
+        ]);
+        let assert_wire = |payload: &StatePayload, expected: &serde_json::Value, mode| {
+            let encoded = codec.payload(payload, mode).unwrap();
+            let hex: String = encoded
+                .as_bytes()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(hex, expected["payload_hex"].as_str().unwrap());
+            assert_eq!(encoded.bit_len() as u64, expected["bits"].as_u64().unwrap());
+        };
+        let attachment = &fixture["attachment"];
+        for full in [false, true] {
+            for mode in [
+                PayloadMode::Remote { full },
+                PayloadMode::Owner {
+                    full,
+                    frame_time: 0,
+                    frame_ms: 16,
+                },
+            ] {
+                assert_wire(&payload, &fixture["expected"], mode);
+                for case in attachment["cases"].as_array().unwrap() {
+                    let mut attached = payload.clone();
+                    attached.insert("point".into(), vector(&attachment["point"]));
+                    attached.insert("normal".into(), vector(&attachment["normal"]));
+                    attached.insert(
+                        "entity".into(),
+                        Value::Entity(attachment["entity"].as_u64().unwrap() as u32),
+                    );
+                    if let Some(key) = case["key"].as_i64() {
+                        attached.insert("extra".into(), Value::Integer(key));
+                    }
+                    assert_wire(&attached, case, mode);
+                }
+                for (field, value) in [
+                    ("entity", Value::Entity(0x8000_0000)),
+                    ("entity", Value::Entity(0x9fff_ffff)),
+                    ("entity", Value::Entity(1)),
+                    ("extra", Value::Integer(311)),
+                ] {
+                    let mut invalid = payload.clone();
+                    invalid.insert(field.into(), value);
+                    assert_eq!(
+                        codec.payload(&invalid, mode).unwrap_err(),
+                        invalid_field(field)
+                    );
+                }
+                assert_eq!(
+                    codec.payload(&StatePayload::new(), mode).unwrap().bit_len(),
+                    1
+                );
+            }
+        }
+    }
+
     use super::*;
     use serde_json::json;
 

@@ -69,6 +69,7 @@ pub(super) struct StockBotWorld {
     placement_graphs: Vec<u32>,
     spatial_frame: Option<Arc<RoomSpatialFrame>>,
     script_requests: RoomScriptRequests,
+    voice_variant_counter: usize,
 }
 
 impl StockBotWorld {
@@ -111,11 +112,24 @@ impl World for StockBotWorld {
         criterion: u64,
         choose: &mut dyn FnMut(usize) -> usize,
     ) {
-        if let Some((cue, listeners)) = self
-            .spatial_frame
-            .as_deref()
-            .and_then(|frame| frame.actor_voice_request(site.entity, criterion, choose))
-        {
+        self.queue_actor_voice_with_audience(site, criterion, None, choose);
+    }
+
+    fn queue_actor_voice_with_audience(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        audience: Option<&[u32]>,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        if let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request_with_audience(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::Criterion(criterion),
+                audience,
+                choose,
+            )
+        }) {
             self.queue_room_cue(site, &listeners, cue);
         }
     }
@@ -155,6 +169,17 @@ impl World for StockBotWorld {
 
     fn authored_forward(&self, entity: u32) -> Option<[f64; 3]> {
         self.forward(entity)
+    }
+
+    fn body_eye_position(&self, entity: u32) -> Option<[f64; 3]> {
+        if entity == self.entity {
+            return Some([
+                self.position[0],
+                self.position[1] + super::eye_height(self.hero, false),
+                self.position[2],
+            ]);
+        }
+        self.spatial_frame.as_deref()?.actor_eye_position(entity)
     }
 
     fn movement_sample(&self, site: Site) -> Option<MovementSample> {
@@ -236,7 +261,84 @@ impl World for StockBotWorld {
     }
 
     fn voice_context(&mut self, site: Site) -> Option<bool> {
-        (site.entity == self.entity).then_some(false)
+        (site.entity == self.entity).then(|| self.actor_voice_available(site))
+    }
+
+    fn voice_manager(&mut self, site: Site) -> Option<bool> {
+        self.voice_context(site)
+    }
+
+    fn voice_clock(&mut self, site: Site, now_ms: u64) -> Option<f64> {
+        self.voice_context(site)
+            .filter(|&ok| ok)
+            .map(|_| now_ms as f64 / 1000.0)
+    }
+
+    fn voice_stimulus(
+        &mut self,
+        site: Site,
+        guid: u64,
+    ) -> Option<Option<crate::script_voice::Stimulus>> {
+        if !self.actor_voice_available(site) {
+            return None;
+        }
+        let playable = self
+            .spatial_frame
+            .as_deref()
+            .is_some_and(|frame| frame.actor_voice_has_stimulus(site.entity, guid));
+        Some(playable.then_some(crate::script_voice::Stimulus {
+            guid,
+            playable: true,
+            mode: false,
+        }))
+    }
+
+    fn voice_allow(&mut self, site: Site, stimulus: crate::script_voice::Stimulus) -> Option<bool> {
+        self.actor_voice_available(site)
+            .then_some(stimulus.playable)
+    }
+
+    fn voice_submit(
+        &mut self,
+        site: Site,
+        stimulus: crate::script_voice::Stimulus,
+        targets: &[u32],
+        _actor: Option<&Value>,
+    ) -> Result<Option<u32>, &'static str> {
+        if !self.actor_voice_available(site) {
+            return Ok(None);
+        }
+        if !targets.is_empty() && !targets.contains(&site.entity) {
+            return Ok(Some(0));
+        }
+        let pick = self.voice_variant_counter;
+        self.voice_variant_counter = self.voice_variant_counter.wrapping_add(1);
+        let Some((cue, listeners)) = self.spatial_frame.as_deref().and_then(|frame| {
+            frame.actor_voice_request(
+                site.entity,
+                crate::game_combat::ActorVoiceQuery::Stimulus(stimulus.guid),
+                &mut |count| pick % count,
+            )
+        }) else {
+            return Ok(Some(0));
+        };
+        Ok(Some(u32::from(self.queue_room_cue(site, &listeners, cue))))
+    }
+
+    fn voice_duration(&mut self, site: Site, handle: u32, guid: u64, _mode: bool) -> Option<f64> {
+        if !self.actor_voice_available(site) || handle == 0 {
+            return None;
+        }
+        Some(
+            self.spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.voice_line_duration(guid))
+                .unwrap_or(1.0),
+        )
+    }
+
+    fn voice_part(&mut self, site: Site, _number: u16) -> Option<f64> {
+        self.actor_voice_available(site).then_some(0.0)
     }
 
     fn player_stats_available(&self, site: Site) -> Option<bool> {
@@ -504,6 +606,7 @@ impl StockBotScript {
             placement_graphs,
             spatial_frame: None,
             script_requests: RoomScriptRequests::default(),
+            voice_variant_counter: 0,
         };
         let component = match Component::start_with_public_schema(
             Arc::clone(&catalog.graphs),
@@ -529,36 +632,14 @@ impl StockBotScript {
             weapon_inputs,
             faulted: false,
         };
-        let queued = match entry {
-            // The replacement's body, including its private placement
-            // behavior, receives the authored reset before publication.
-            BodyEntry::Respawn => script.component.queue_entity_message_from(
-                bot.entity,
-                RESET_MESSAGE,
-                Variables::new(),
-            ),
-            BodyEntry::Initial => {
-                let placements = script
-                    .component
-                    .snapshot()
-                    .into_iter()
-                    .flat_map(|snapshot| {
-                        snapshot.instances.iter().filter_map(|(&id, instance)| {
-                            (instance.is_server_only()
-                                && instance.parent.is_none()
-                                && script.world.placement_graphs.contains(&instance.graph))
-                            .then_some(id)
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                placements.into_iter().try_fold(0, |total, id| {
-                    script
-                        .component
-                        .queue_message(id, RESET_MESSAGE, Variables::new())
-                        .map(|queued| total + queued)
-                })
-            }
-        };
+        // Both initial spawns and respawns deliver RESET_MESSAGE (0x13) to the
+        // full body entity so 0BA8:8 sets shared_var[1226] (combat anim layer)
+        // and placement graphs (0B92) arm cleanly on both teams.
+        let _ = entry;
+        let queued =
+            script
+                .component
+                .queue_entity_message_from(bot.entity, RESET_MESSAGE, Variables::new());
         let result = queued.and_then(|count| {
             if count == 0 {
                 Ok(())
@@ -570,23 +651,106 @@ impl StockBotScript {
         Some(script)
     }
 
+    pub(super) fn receive_host_event(
+        &mut self,
+        event: crate::script_init::HostEvent,
+        context: crate::script_init::HostHealthContext,
+    ) {
+        if self.faulted {
+            return;
+        }
+        let result = self
+            .component
+            .queue_host_event_with_context(event, context)
+            .and_then(|count| {
+                if count == 0 {
+                    Ok(())
+                } else {
+                    self.component.run_now(&mut self.world)
+                }
+            });
+        self.check_projection(result);
+    }
+
     pub(super) fn on_damage(&mut self, remaining_health: f64, source: Death) {
         if self.faulted {
             return;
         }
         let current = self.world.vitals.total();
-        if current > remaining_health {
-            self.world.vitals.damage(current - remaining_health, source);
+        let dealt = (current - remaining_health).max(0.0);
+        if dealt > 0.0 {
+            self.world.vitals.damage(dealt, source);
         }
-        let health = Value::Float(remaining_health);
-        let result = self
-            .component
+        let result = self.publish_health(remaining_health).and_then(|()| {
+            if dealt > 0.0 && !self.world.dead {
+                // Retail damage-taken message (`0x0240000000000011`, params 0x13=amount,
+                // 0x3D=hurt-flinch tags, 0x65=hit direction vector): drives `0x0E8C:14`
+                // 3rd-person hurt-flinch (`Anim 0x0174`) and `0x08B6:6` wobble without
+                // faulting `0x0E8C:49` (`0x03FA` vector sync var).
+                const DAMAGE_TAKEN_MESSAGE: u64 = 0x0240_0000_0000_0011;
+                const TAG_HURT_FLINCH_ANIM: u64 = 0x0d80_0000_0000_078d;
+                const TAG_HURT_FLINCH_WEIGHT: u64 = 0x0d80_0000_0000_09a5;
+                let default_dir = [-self.world.forward[0], 0.0, -self.world.forward[2]];
+                let hit_dir = self
+                    .world
+                    .spatial_frame
+                    .as_deref()
+                    .and_then(|frame| frame.actor_eye_position(source.killer))
+                    .map(|origin| {
+                        let dx = self.world.position[0] - origin[0];
+                        let dz = self.world.position[2] - origin[2];
+                        let len = (dx * dx + dz * dz).sqrt();
+                        if len > 1e-4 {
+                            [dx / len, 0.0, dz / len]
+                        } else {
+                            default_dir
+                        }
+                    })
+                    .unwrap_or(default_dir);
+                let params = Variables::from([
+                    (0x13, Value::Float(f64::from(dealt as f32))),
+                    (
+                        0x3d,
+                        Value::Array(vec![
+                            Value::Asset(TAG_HURT_FLINCH_ANIM),
+                            Value::Asset(TAG_HURT_FLINCH_WEIGHT),
+                        ]),
+                    ),
+                    (0x65, Value::Vector(hit_dir)),
+                ]);
+                if self.component.queue_entity_message_from(
+                    source.killer,
+                    DAMAGE_TAKEN_MESSAGE,
+                    params,
+                )? > 0
+                {
+                    self.component.run_now(&mut self.world)?;
+                }
+            }
+            Ok(())
+        });
+        self.check_projection(result);
+    }
+
+    pub(super) fn on_heal(&mut self, current_health: f64) {
+        if self.faulted || self.world.dead {
+            return;
+        }
+        self.world
+            .vitals
+            .heal(current_health - self.world.vitals.total());
+        let result = self.publish_health(current_health);
+        self.check_projection(result);
+    }
+
+    fn publish_health(&mut self, health: f64) -> Result<(), InitFault> {
+        let health = Value::Float(health);
+        self.component
             .set_entity_variable(OWNER_HEALTH, health.clone(), &mut self.world)
             .and_then(|()| {
                 self.component
                     .set_entity_variable(HUD_HEALTH, health, &mut self.world)
-            });
-        self.check_projection(result);
+            })
     }
 
     pub(super) fn on_death(&mut self, source: Death, critical: bool, loadout: Option<u64>) {
@@ -601,14 +765,7 @@ impl StockBotScript {
             return;
         }
         self.frame = next_frame;
-        let death_health = self
-            .component
-            .set_entity_variable(OWNER_HEALTH, Value::Float(0.0), &mut self.world)
-            .and_then(|()| {
-                self.component
-                    .set_entity_variable(HUD_HEALTH, Value::Float(0.0), &mut self.world)
-            });
-        if let Err(error) = death_health {
+        if let Err(error) = self.publish_health(0.0) {
             self.stop_script(error);
             return;
         }
@@ -620,10 +777,13 @@ impl StockBotScript {
     }
 
     pub(super) fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
+        static EMPTY_TAGS: std::sync::LazyLock<std::collections::BTreeSet<u64>> =
+            std::sync::LazyLock::new(std::collections::BTreeSet::new);
         let base = self.graphs.entity_body(self.world.body);
-        self.world
-            .target_tag_effects
-            .snapshot(base.and_then(|body| body.target_tags.as_ref()))
+        self.world.target_tag_effects.snapshot(Some(
+            base.and_then(|body| body.target_tags.as_ref())
+                .unwrap_or(&EMPTY_TAGS),
+        ))
     }
 
     pub(super) fn script_state(&self) -> crate::script_entity_state::EntityScriptState {
@@ -699,7 +859,8 @@ impl StockBotScript {
             self.component.advance_command(command, &mut self.world)
         } else {
             self.component.advance_frame(tick, &mut self.world)
-        };
+        }
+        .and_then(|()| self.component.poll_voice(&mut self.world));
         self.check_projection(result);
     }
 
@@ -744,7 +905,11 @@ impl StockBotScript {
                                 .ok()
                         })
                         .as_ref()?;
-                    let volley = snapshot.freeze_volley(shot, report.presentation)?;
+                    let volley = snapshot.freeze_volley_with_states(
+                        shot,
+                        report.presentation,
+                        &report.presentation_states,
+                    )?;
                     Some(ObservedShot::new(
                         volley, definition, origin, forward, tick, lifetime,
                     ))

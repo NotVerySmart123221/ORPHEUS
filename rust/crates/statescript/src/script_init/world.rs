@@ -13,7 +13,7 @@ use crate::{
     script_wire::{Value, Variables},
 };
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Site {
     pub entity: u32,
     pub instance: u16,
@@ -42,6 +42,8 @@ pub struct ContactTarget {
 pub struct ViewTargetQuery<'a> {
     pub source: u32,
     pub offset: [f64; 3],
+    /// When set, the vector is a world-space eye origin and the heading is in degrees.
+    pub eye_heading: Option<f64>,
     pub range: f64,
     pub aperture: f64,
     pub limit: usize,
@@ -110,12 +112,21 @@ impl Relocation {
             .then_some(Self { destination })
     }
 
-    /// Keep the requested feet coordinates; share the swept motion distance bound.
+    /// Keep the requested feet coordinates; only finite displacements within the
+    /// swept-motion reach bound are admissible for `ScriptedMotion::Relocate`.
     pub fn destination_from(self, origin: [f64; 3]) -> Option<[f64; 3]> {
-        SweptDisplacement::new(std::array::from_fn(|axis| {
-            self.destination[axis] - origin[axis]
-        }))?;
-        Some(self.destination)
+        let delta = std::array::from_fn(|axis| self.destination[axis] - origin[axis]);
+        SweptDisplacement::new(delta).map(|_| self.destination)
+    }
+
+    /// Long-range teleport destination (Reaper Shadow Step, Sombra Translocator,
+    /// Symmetra Teleporter, Tracer Recall, Lua Mods) without the 32m cap.
+    pub fn teleport_destination(self) -> Option<[f64; 3]> {
+        const MAX_AXIS: f64 = 4096.0;
+        self.destination
+            .into_iter()
+            .all(|v| v.is_finite() && v.abs() <= MAX_AXIS)
+            .then_some(self.destination)
     }
 }
 
@@ -124,6 +135,7 @@ impl Relocation {
 pub enum ScriptedMotion {
     Sweep(SweptDisplacement),
     Relocate(Relocation),
+    Teleport(Relocation),
 }
 
 /// A bounded, typed message evaluated by the sending StateScript VM.
@@ -425,6 +437,10 @@ pub struct TargetTagSnapshot {
 }
 
 impl TargetTagSnapshot {
+    pub(super) fn has_known_base(&self) -> bool {
+        self.base.is_some()
+    }
+
     pub fn presence(&self, tag: u64) -> Option<bool> {
         self.overrides
             .get(&tag)
@@ -499,6 +515,90 @@ pub struct BeamContact {
     pub hit: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GenericBeamContact {
+    pub entity: Option<u32>,
+    pub hit: bool,
+    pub point: Option<[f64; 3]>,
+    pub normal: Option<[f64; 3]>,
+    pub distance: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VelocityAxis {
+    All,
+    Horizontal,
+    Vertical,
+    VerticalUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PetSpawn {
+    pub definition: u64,
+    pub attach: Option<u32>,
+    pub position: Option<[f64; 3]>,
+    pub bone_attached: bool,
+    pub possessable: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeflectState {
+    pub reflect: bool,
+    pub half_angle_deg: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CombatModEntry {
+    pub stat: u64,
+    pub multiplicative: bool,
+    pub value: f64,
+    pub cc_immune: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VelocityOp {
+    AddVector([f64; 3]),
+    SetVector([f64; 3]),
+    SetHorizontalVector([f64; 2]),
+    SetSpeed {
+        axis: VelocityAxis,
+        value: f64,
+    },
+    CapSpeed {
+        axis: VelocityAxis,
+        max: f64,
+    },
+    ScaleSpeed {
+        axis: VelocityAxis,
+        factor: f64,
+    },
+    ClampSpeed {
+        axis: VelocityAxis,
+        min: f64,
+        max: f64,
+    },
+}
+
+/// Geometry captured once when a travelling ground wave begins.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroundWave {
+    pub centre: [f64; 3],
+    pub sight_origin: [f64; 3],
+    pub yaw: f64,
+    pub aperture: f64,
+    pub distance: f64,
+    pub speed: f64,
+    pub max_rise: f64,
+    pub max_drop: f64,
+    pub ground_range: f64,
+}
+
+impl GroundWave {
+    pub fn reach(&self, elapsed_ms: u64) -> f64 {
+        (self.speed * elapsed_ms as f64 / 1000.0).min(self.distance)
+    }
+}
+
 /// External authored queries for this initialization. The caller owns mode,
 /// ruleset, and entity data and can decline a query without guessing its value.
 pub trait World {
@@ -522,8 +622,104 @@ pub trait World {
         false
     }
 
+    /// Queue an ordered list of authored `STU_FF3471E9` velocity operations.
+    fn apply_velocity_ops(&mut self, _site: Site, _frame: u32, _ops: &[VelocityOp]) -> bool {
+        false
+    }
+
+    /// Queue a horizontal swept blink along current movement throttle (or facing).
+    fn queue_blink(&mut self, _site: Site, _frame: u32, _distance: f64) -> bool {
+        false
+    }
+
     fn summoner_beam_contact(&self, _site: Site) -> Option<BeamContact> {
         None
+    }
+
+    fn generic_beam_contact(
+        &self,
+        _site: Site,
+        _origin: Option<[f64; 3]>,
+        _direction: Option<[f64; 3]>,
+        _length: Option<f64>,
+        _radius: f64,
+        _filter: &Json,
+    ) -> Option<GenericBeamContact> {
+        None
+    }
+
+    fn queue_modify_health(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        _impulse: Option<[f64; 3]>,
+    ) -> bool {
+        if delta != 0.0 {
+            self.queue_health_change(site, target, delta)
+        } else {
+            false
+        }
+    }
+
+    fn spawn_pet(&mut self, _site: Site, _spawn: PetSpawn) -> Option<u32> {
+        None
+    }
+
+    fn despawn_pet(&mut self, _site: Site, _entity: u32) -> bool {
+        false
+    }
+
+    fn request_possess_entity(&mut self, _site: Site, _target: u32) -> bool {
+        false
+    }
+
+    /// Echo Duplicate (`STUStatescriptStateCreateEntity` with `STU_0AC15F78`):
+    /// copy `target`'s hero body for the duplicate duration.
+    fn duplicate_target_entity(&mut self, _site: Site, _target: u32) -> bool {
+        false
+    }
+
+    fn set_combat_mod(&mut self, _site: Site, _entry: Option<CombatModEntry>) -> bool {
+        false
+    }
+
+    fn set_deflect_state(&mut self, _site: Site, _state: Option<DeflectState>) -> bool {
+        false
+    }
+
+    fn set_target_aura(
+        &mut self,
+        _site: Site,
+        _targets: &[u32],
+        _effect: u64,
+        _param: Option<f64>,
+        _elapsed_ms: u64,
+    ) -> bool {
+        false
+    }
+
+    fn record_recall_sample(&mut self, _site: Site, _window_secs: f64) -> bool {
+        false
+    }
+
+    fn execute_recall(&mut self, _site: Site, _frame: u32) -> Option<[f64; 3]> {
+        None
+    }
+
+    fn set_ball_roll_state(&mut self, _site: Site, _active: bool, _max_speed: f64) -> bool {
+        false
+    }
+
+    fn apply_physics_explosion(
+        &mut self,
+        _site: Site,
+        _center: [f64; 3],
+        _radius: f64,
+        _impulse: f64,
+        _direction: Option<[f64; 3]>,
+    ) -> bool {
+        false
     }
 
     fn summoner_beam_damage(&mut self, _site: Site, _target: u32, _amount: f64) -> bool {
@@ -567,11 +763,36 @@ pub trait World {
     ) -> bool {
         false
     }
-    fn deadeye_targets(&self, _site: Site, _radius: f64, _angle: f64) -> Option<Vec<u32>> {
+    #[allow(clippy::too_many_arguments)]
+    fn cone_targets(
+        &self,
+        _site: Site,
+        _origin: u32,
+        _offset: [f64; 3],
+        _radius: f64,
+        _angle: f64,
+        _visible: bool,
+        _filter: &Json,
+    ) -> Option<Vec<u32>> {
         None
     }
 
-    fn deadeye_target_alive(&self, _site: Site, _entity: u32) -> bool {
+    #[allow(clippy::too_many_arguments)]
+    fn cone_targets_with_cylinder(
+        &self,
+        site: Site,
+        origin: u32,
+        offset: [f64; 3],
+        radius: f64,
+        angle: f64,
+        _cylinder_radius: f64,
+        visible: bool,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        self.cone_targets(site, origin, offset, radius, angle, visible, filter)
+    }
+
+    fn entity_alive(&self, _site: Site, _entity: u32) -> bool {
         false
     }
 
@@ -584,6 +805,20 @@ pub trait World {
         _filter: &Json,
     ) -> Option<Vec<u32>> {
         None
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn swept_tracked_targets(
+        &mut self,
+        site: Site,
+        origin: u32,
+        start_offset: [f64; 3],
+        _end_offset: Option<[f64; 3]>,
+        _local_space: bool,
+        radius: f64,
+        filter: &Json,
+    ) -> Option<Vec<u32>> {
+        self.tracked_targets(site, origin, start_offset, radius, filter)
     }
 
     /// None leaves the view query unavailable. An empty list is a completed query.
@@ -713,6 +948,17 @@ pub trait World {
     fn set_captured_aim_lock(&mut self, _site: Site, _degrees: Option<[f64; 2]>) -> bool {
         false
     }
+    fn queue_modify_health_with_meta(
+        &mut self,
+        site: Site,
+        target: u32,
+        delta: f64,
+        impulse: Option<[f64; 3]>,
+        _loadout: Option<u64>,
+        _tags: HitTags,
+    ) -> bool {
+        self.queue_modify_health(site, target, delta, impulse)
+    }
     fn set_same_team_contact_suppressed(&mut self, _site: Site, _suppressed: bool) -> bool {
         false
     }
@@ -800,6 +1046,10 @@ pub trait World {
     }
     /// Availability of the native auxiliary view owner; false is known absence.
     fn spatial_binding_owner_available(&self, _site: Site) -> Option<bool> {
+        None
+    }
+    /// Whether the native voice-category service is available to this VM.
+    fn voice_category_service_available(&self, _site: Site) -> Option<bool> {
         None
     }
     /// Whether the bound controller exposes a player stats record to this VM.
@@ -900,6 +1150,24 @@ pub trait World {
     }
 
     /// A known model can confirm presence or absence. None means unavailable.
+    /// Outer None means no query service. Inner None is a completed miss.
+    fn spray_placement(
+        &self,
+        _reach: f64,
+        _command_frame: Option<u32>,
+    ) -> Option<Option<super::types::SprayPlacement>> {
+        None
+    }
+
+    fn equipped_cosmetic(
+        &self,
+        _entity: u32,
+        _slot: usize,
+        _cosmetic: script_expr::EquippedCosmetic,
+    ) -> Option<u64> {
+        None
+    }
+
     fn body_has_hardpoint(&self, _site: Site, _entity: u32, _hardpoint: u64) -> Option<bool> {
         None
     }
@@ -921,6 +1189,18 @@ pub trait World {
 
     /// Whether static geometry leaves the segment clear. None is unavailable.
     fn spatial_line_clear(&self, _origin: [f64; 3], _target: [f64; 3]) -> Option<bool> {
+        None
+    }
+
+    /// Profile 002C selects static ability collision in build 104319.
+    fn ability_ground_ray(
+        &self,
+        _site: Site,
+        _frame: u32,
+        _origin: [f64; 3],
+        _direction: [f64; 3],
+        _length: f64,
+    ) -> Option<Option<script_expr::SpatialRayHit>> {
         None
     }
 
@@ -1168,8 +1448,28 @@ pub trait World {
     }
 
     /// Whether this actor has a room-backed voice catalog.
+    fn queue_equipped_voice(
+        &mut self,
+        _site: Site,
+        _slot: usize,
+        _choose: &mut dyn FnMut(usize) -> usize,
+    ) -> bool {
+        false
+    }
+
     fn actor_voice_available(&self, _site: Site) -> bool {
         false
+    }
+
+    /// Resolve an animation duration in seconds when `m_playOverDuration` is omitted.
+    fn animation_duration(
+        &mut self,
+        _site: Site,
+        _blend_tree: u64,
+        _alias: u64,
+        _category: u64,
+    ) -> Option<f64> {
+        None
     }
 
     /// Resolve a criterion to a cue for the actor and its audience.
@@ -1179,6 +1479,17 @@ pub trait World {
         _criterion: u64,
         _choose: &mut dyn FnMut(usize) -> usize,
     ) {
+    }
+
+    /// Resolve a criterion to a cue for the actor and an optional explicit audience.
+    fn queue_actor_voice_with_audience(
+        &mut self,
+        site: Site,
+        criterion: u64,
+        _audience: Option<&[u32]>,
+        choose: &mut dyn FnMut(usize) -> usize,
+    ) {
+        self.queue_actor_voice(site, criterion, choose);
     }
 
     /// The world owns delivery outside the current body.
@@ -1192,6 +1503,15 @@ pub trait World {
         false
     }
 
+    fn ground_wave_targets(
+        &self,
+        _site: Site,
+        _wave: &GroundWave,
+        _reach: f64,
+    ) -> Option<Vec<u32>> {
+        None
+    }
+
     fn shockwave_targets(&mut self, _site: Site, _reach: f64) -> Option<Vec<u32>> {
         None
     }
@@ -1202,6 +1522,18 @@ pub trait World {
 
     fn select_landing(&mut self, _site: Site) -> LandingSelection {
         LandingSelection::Unhandled
+    }
+
+    /// Whether this host runs live player bodies that admit generic verified-codec
+    /// retail states and actions beyond strict synthetic test fixtures.
+    fn admits_generic_player_runtime(&self, _site: Site) -> bool {
+        false
+    }
+
+    /// Whether a state-managed self-targeted `STU_38EE1100` registration for `topic`
+    /// has only client-side receivers and should be projected as `ProjectedSelfSend`.
+    fn accepts_client_self_message(&self, _site: Site, _topic: u64) -> bool {
+        false
     }
 }
 

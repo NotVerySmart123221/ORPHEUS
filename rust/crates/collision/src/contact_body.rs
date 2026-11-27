@@ -7,11 +7,9 @@ use std::{collections::HashSet, fmt, sync::Arc};
 
 use crate::{
     collision_grid::ColumnRange,
-    contact_cache::{CapsulePose, LOOSE, ProxyContact, cast_round, encloses},
-    contact_gjk::{
-        PointSetSize, SimplexCache, gjk,
-        sweep::{CastShape, MeshProbe},
-    },
+    collision_scene::BreakableState,
+    contact_cache::{CapsulePose, LOOSE, ProxyContact, encloses},
+    contact_gjk::{PointSetSize, SimplexCache, gjk, sweep::MeshProbe},
     contact_hull::HullContactError,
     contact_math::{TINY, Vec3, add, dot, maxps, minps, scale, sub},
     contact_mesh::ContactBounds,
@@ -19,6 +17,7 @@ use crate::{
     contact_solver::{Constraint, ContactPlane, project_target},
     contact_triangle::{SKIN, TOUCH, closest_parameters},
     contact_world::{ContactWorld, PROXY_MARGIN, StaticGeometry, StaticShape, WorldHit, overlaps},
+    static_ray::{capsule_entry_hit, norm, segment_separation},
 };
 
 const MAX_ROUNDS: u32 = 20;
@@ -28,6 +27,8 @@ pub struct BodyMove<'a> {
     pub position: Vec3,
     pub planes: &'a [ContactPlane],
     pub touching: bool,
+    /// An admitted actor changed the requested motion through a cast or constraint.
+    pub actor_contact: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -39,6 +40,7 @@ pub struct SweepClip {
 
 pub struct CharacterBody {
     world: Arc<ContactWorld>,
+    breakables: Option<Arc<BreakableState>>,
     pose: CapsulePose,
     category: u16,
     fat: ContactBounds,
@@ -64,6 +66,7 @@ impl CharacterBody {
     pub fn new(world: Arc<ContactWorld>, pose: CapsulePose, category: u16) -> Self {
         Self {
             world,
+            breakables: None,
             pose,
             category,
             fat: expanded(pose.bounds(), PROXY_MARGIN),
@@ -74,6 +77,10 @@ impl CharacterBody {
             constraints: Vec::new(),
             planes: Vec::new(),
         }
+    }
+
+    pub fn set_breakables(&mut self, breakables: Arc<BreakableState>) {
+        self.breakables = Some(breakables);
     }
 
     pub fn position(&self) -> Vec3 {
@@ -94,14 +101,16 @@ impl CharacterBody {
 
     /// Create the same capsule at a new origin with fresh contact state.
     pub fn fresh_at(&self, position: Vec3) -> Self {
-        Self::new(
+        let mut body = Self::new(
             Arc::clone(&self.world),
             CapsulePose {
                 position,
                 ..self.pose
             },
             self.category,
-        )
+        );
+        body.breakables = self.breakables.clone();
+        body
     }
 
     /// Relocate to a clear capsule origin without sweeping the intervening path.
@@ -124,7 +133,10 @@ impl CharacterBody {
         }
         let capsule = candidate.world_capsule();
         let bounds = candidate.bounds();
-        for id in self.world.query(bounds) {
+        for id in self
+            .world
+            .query_with_breakables(bounds, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0
                 && penetrates_shape(shape, capsule, self.category)?
@@ -150,13 +162,16 @@ impl CharacterBody {
 
     /// Query the same upright capsule and mask without changing its contact state.
     pub fn sweep(&self, start: Vec3, end: Vec3) -> Result<Option<WorldHit>, PointSetSize> {
-        self.world.scene_sweep(MeshProbe {
-            points: &[[0.0, self.pose.radius, 0.0], [0.0, self.pose.top, 0.0]],
-            radius: self.pose.radius,
-            start,
-            end,
-            category: self.category,
-        })
+        self.world.scene_sweep_with_breakables(
+            MeshProbe {
+                points: &[[0.0, self.pose.radius, 0.0], [0.0, self.pose.top, 0.0]],
+                radius: self.pose.radius,
+                start,
+                end,
+                category: self.category,
+            },
+            self.breakables.as_deref(),
+        )
     }
 
     pub fn teleport(&mut self, position: Vec3) {
@@ -195,7 +210,10 @@ impl CharacterBody {
         }
         .world_capsule();
         let bounds = segment_bounds(capsule.a, capsule.b, reach);
-        for id in self.world.query(bounds) {
+        for id in self
+            .world
+            .query_with_breakables(bounds, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0
                 && overlaps_segment(shape, [capsule.a, capsule.b], reach, self.category)?
@@ -259,6 +277,7 @@ impl CharacterBody {
         let mut current = self.pose.position;
         let target = add(add(scale([0.0; 3], dt), current), displacement);
         let mut passes_total = 0;
+        let mut actor_contact = false;
         for _ in 0..rounds {
             self.update_pairs();
             self.constraints.clear();
@@ -275,28 +294,41 @@ impl CharacterBody {
                         .push(contact_constraint(current, normal, points));
                 }
             }
+            let static_constraints = self.constraints.len();
             if !actors.is_empty() {
-                let bounds = self.pose.bounds();
+                let bounds = expanded(self.pose.bounds(), TOUCH);
                 let low = bounds.low.map(f64::from);
                 let high = bounds.high.map(f64::from);
-                let moving = self.pose.world_capsule();
                 for actor in actors {
                     if !overlaps(low, high, actor.bounds()) {
                         continue;
                     }
-                    let manifold = capsule_capsule(moving, actor.world_capsule());
-                    if !manifold.points().is_empty() {
-                        self.constraints.push(contact_constraint(
-                            current,
-                            manifold.normal.map(|axis| -axis),
-                            manifold.points(),
-                        ));
+                    let (a, b, radius) = actor_exclusion(self.pose, *actor);
+                    let separation = segment_separation(current.map(f64::from), a, b);
+                    let distance = norm(separation);
+                    if distance <= radius + f64::from(TOUCH) {
+                        let normal = if distance == 0.0 {
+                            [-1.0, 0.0, 0.0]
+                        } else {
+                            separation.map(|axis| (axis / distance) as f32)
+                        };
+                        // Cancel the static solver's penetration allowance for actors.
+                        // Leave rounding clearance so a projected tangent can slide.
+                        let position_dot = dot(normal, current);
+                        let rounding = f32::EPSILON * position_dot.abs().max(1.0);
+                        let offset = position_dot + ((radius - distance) as f32 + TOUCH + rounding);
+                        self.constraints
+                            .push(ContactPlane { normal, offset }.into());
                     }
                 }
             }
             let (projected, passes) = project_target(target, &mut self.constraints);
+            actor_contact |= self.constraints[static_constraints..]
+                .iter()
+                .any(|constraint| constraint.impulse > 0.0);
             passes_total += passes;
-            let moved = self.set_position::<TRACE>(projected, actors, clip)?;
+            let (moved, actor_clipped) = self.set_position::<TRACE>(projected, actors, clip)?;
+            actor_contact |= actor_clipped;
             let step = sub(moved, current);
             current = moved;
             if dot(step, step) < TOUCH * TOUCH {
@@ -322,6 +354,7 @@ impl CharacterBody {
             position: current,
             planes: &self.planes,
             touching,
+            actor_contact,
         })
     }
 
@@ -334,11 +367,27 @@ impl CharacterBody {
     }
 
     fn update_pairs(&mut self) {
+        if let Some(breakables) = self.breakables.as_deref() {
+            if breakables.broken_count() > 0 {
+                self.contacts.retain(|(id, _)| {
+                    let keep = self.world.shapes()[*id as usize]
+                        .breakable_placement()
+                        .is_none_or(|placement| !breakables.is_broken(placement));
+                    if !keep {
+                        self.pairs.remove(id);
+                    }
+                    keep
+                });
+            }
+        }
         if !std::mem::take(&mut self.proxy_moved) {
             return;
         }
         let before = self.contacts.len();
-        for id in self.world.query(self.fat) {
+        for id in self
+            .world
+            .query_with_breakables(self.fat, self.breakables.as_deref())
+        {
             let shape = &self.world.shapes()[id as usize];
             if shape.geometry().mask() & self.category != 0 && self.pairs.insert(id) {
                 self.contacts
@@ -357,7 +406,7 @@ impl CharacterBody {
         target: Vec3,
         actors: &[CapsulePose],
         clip: &mut Option<SweepClip>,
-    ) -> Result<Vec3, HullContactError> {
+    ) -> Result<(Vec3, bool), HullContactError> {
         let swept = self.pose.swept_bounds(target);
         self.move_proxy(swept);
         self.update_pairs();
@@ -374,6 +423,7 @@ impl CharacterBody {
         });
         let mut fraction = 1.0;
         let mut proxy_id = None;
+        let mut actor_clipped = false;
         if translation != [0.0; 3] {
             for (id, contact) in &mut self.contacts {
                 if let Some(candidate) = contact.cast(self.pose, swept, translation)? {
@@ -386,25 +436,27 @@ impl CharacterBody {
             if !actors.is_empty() {
                 let low = swept.low.map(f64::from);
                 let high = swept.high.map(f64::from);
-                let capsule = self.pose.world_capsule();
-                let endpoints = [capsule.a, capsule.b];
-                let moving = CastShape {
-                    points: &endpoints,
-                    radius: capsule.radius,
-                    frame: None,
-                };
+                let origin = self.pose.position.map(f64::from);
+                let delta = translation.map(f64::from);
+                let length = norm(delta);
+                let direction = delta.map(|axis| axis / length);
                 for actor in actors {
                     if !overlaps(low, high, actor.bounds()) {
                         continue;
                     }
-                    if let Some(candidate) = cast_round(
-                        moving,
-                        RoundShape::Capsule(actor.world_capsule()),
-                        None,
-                        translation,
-                    )? {
-                        if TRACE && candidate < fraction {
-                            proxy_id = None;
+                    let (a, b, radius) = actor_exclusion(self.pose, *actor);
+                    if let Some(hit) = capsule_entry_hit(origin, direction, length, a, b, radius)
+                        .filter(|hit| {
+                            hit.distance != 0.0
+                                || dot(hit.normal.map(|axis| axis as f32), translation) < 0.0
+                        })
+                    {
+                        let candidate = (hit.distance / length) as f32;
+                        if candidate < fraction {
+                            actor_clipped = true;
+                            if TRACE {
+                                proxy_id = None;
+                            }
                         }
                         fraction = minps(fraction, candidate);
                     }
@@ -422,8 +474,22 @@ impl CharacterBody {
         if moved.into_iter().all(f32::is_finite) {
             self.teleport(moved);
         }
-        Ok(self.pose.position)
+        Ok((self.pose.position, actor_clipped))
     }
+}
+
+// For two upright capsules the forbidden origins form one upright capsule
+// with the summed radii and the interval of vertical axis differences.
+fn actor_exclusion(moving: CapsulePose, actor: CapsulePose) -> ([f64; 3], [f64; 3], f64) {
+    let [x, y, z] = actor.position.map(f64::from);
+    let low = y + f64::from(actor.radius.min(actor.top)) - f64::from(moving.radius.max(moving.top));
+    let high =
+        y + f64::from(actor.radius.max(actor.top)) - f64::from(moving.radius.min(moving.top));
+    (
+        [x, low, z],
+        [x, high, z],
+        f64::from(moving.radius) + f64::from(actor.radius),
+    )
 }
 
 fn contact_constraint(current: Vec3, normal: Vec3, points: &[ContactPoint]) -> Constraint {
@@ -844,6 +910,42 @@ mod tests {
         let clipped = clip_velocity([4.0, 0.0, 0.0], movement.planes);
         assert!(clipped.into_iter().all(|axis| axis.abs() < 1e-4));
         assert_eq!(body.capsule_pose().radius, 0.5);
+    }
+
+    #[test]
+    fn dynamic_capsule_glances_without_entering_the_actor() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../fixtures/behavior/hostile-capsule-glance-v1.json"
+        ))
+        .unwrap();
+        let input = &fixture["input"];
+        let expected = &fixture["expected"];
+        let vector = |key: &str| serde_json::from_value::<Vec3>(input[key].clone()).unwrap();
+        let world = Arc::new(ContactWorld::new(Vec::new()).unwrap());
+        let actor = standing(vector("actor_origin"));
+        let mut body = CharacterBody::new(world, standing(vector("mover_origin")), 0x18);
+        let displacement = vector("displacement");
+        let dt = input["step_seconds"].as_f64().unwrap() as f32;
+        let minimum = expected["minimum_axis_distance"].as_f64().unwrap() as f32;
+        let mut contacted = false;
+        for _ in 0..input["steps"].as_u64().unwrap() {
+            let movement = body
+                .move_capsule_against(displacement, dt, &[actor])
+                .unwrap();
+            let [x, _, z] = movement.position;
+            assert!(
+                (x - actor.position[0]).hypot(z - actor.position[2]) >= minimum - 1e-6,
+                "{:?}",
+                movement.position
+            );
+            contacted |= movement.actor_contact;
+        }
+        assert_eq!(contacted, expected["contact_detected"].as_bool().unwrap());
+        assert!(
+            f64::from(body.position()[0]) > expected["final_x_above"].as_f64().unwrap(),
+            "{:?}",
+            body.position()
+        );
     }
 
     #[test]

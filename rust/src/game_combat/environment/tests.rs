@@ -242,3 +242,26 @@ fn environment_volumes_settle_source_free_deaths_once_and_preserve_safe_lower_po
         }
     }
 }
+
+#[test]
+fn sombra_hack_health_pack_locks_enemy_and_speeds_respawn() {
+    let env_json = serde_json::json!({
+        "version": 1,
+        "maps": {
+            "0x0800000000000688": {
+                "lethal_volumes": [],
+                "health_packs": [
+                    { "position": [4.0, 0.0, 4.0], "mega": false }
+                ]
+            }
+        }
+    });
+    let catalog = EnvironmentCatalog::from_json(&env_json.to_string()).unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.set_environment(catalog.for_map(0x0800_0000_0000_0688));
+    // Out of range (> 15m) returns false.
+    assert!(!room.hack_health_pack([40.0, 0.0, 40.0], 0, 100));
+    // Within range (<= 15m) succeeds and locks pack for team 0 for 45s (2790 ticks).
+    assert!(room.hack_health_pack([5.0, 0.0, 4.0], 0, 100));
+    assert_eq!(room.health_pack_states[0].hacked_by, Some((0, 100 + 2790)));
+}

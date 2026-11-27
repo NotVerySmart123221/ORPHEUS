@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "case_id": "lobby-text-chat-v1",
+  "source": {"basis": "Synthetic posts in a two-peer General channel and a solo Match channel."},
+  "evidence": "rust-headless-synthetic",
+  "input": {"general": "Olá, lobby!", "match": "Olá, partida!", "other_channel": "wrong channel"},
+  "expected": {"general_members": 2, "match_members": 1, "general_kind": 7, "match_kind": 6}
+}

@@ -99,6 +99,17 @@ impl Default for MoverSettings {
 }
 
 impl MoverSettings {
+    /// Data-driven standing/crouching eye height derived from the hero body's
+    /// authored `STUCharacterMoverComponent` stand/crouch heights. Matches
+    /// retail Soldier (`stand_height=2.0 -> 1.55`, `crouch_height=1.25 -> 1.085`).
+    pub fn eye_height(&self, crouched: bool) -> f64 {
+        if crouched {
+            (self.crouch_height - 0.165).max(0.4)
+        } else {
+            (self.stand_height - 0.45).max(0.5)
+        }
+    }
+
     pub fn nav_agent(&self, category: u16) -> crate::navigation::NavAgent {
         crate::navigation::NavAgent {
             stand_radius: self.stand_radius,

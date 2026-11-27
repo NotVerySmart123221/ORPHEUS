@@ -5,7 +5,7 @@ pub(super) struct StepBuffers<'a> {
     pub(super) frame: &'a mut u32,
     pub(super) fields: &'a mut Vec<(ProjectileToken, BioticField)>,
     pub(super) launches: &'a mut Vec<AdmittedFlight>,
-    pub(super) hitscan: &'a mut Vec<PosedHitscan>,
+    pub(super) hitscan: &'a mut Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)>,
 }
 
 pub(super) fn stage_scripted_motion(runtime: &mut dyn OwnerBodyRuntime, mover: &mut Mover) {
@@ -22,10 +22,28 @@ pub(super) struct BodyScript {
     pub(super) stream: BodyStream<ProjectedSnapshot>,
     pub(super) frame: u32,
     pub(super) unsent_delta: Option<(u32, DeltaKind)>,
+    sent_sprays: VecDeque<SentSpray>,
     pub(super) corrections: Option<CorrectionHistory>,
     continuous_corrections: bool,
     processed_at_spawn: Option<u32>,
     pub(super) projectiles: Option<OwnerProjectiles>,
+    server_projectile_seq: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SentSpray {
+    instance: u16,
+    start_ms: u64,
+    unlock: u64,
+    frame: u32,
+}
+
+impl SentSpray {
+    fn within_report_window(&self, now: u32) -> bool {
+        const WINDOW_MS: u64 = 2_000;
+        now.checked_sub(self.frame)
+            .is_some_and(|frames| u64::from(frames) * crate::script_runtime::FRAME_MS <= WINDOW_MS)
+    }
 }
 
 fn startup_snapshot(runtime: &dyn OwnerBodyRuntime, entity: u32) -> io::Result<&Snapshot> {
@@ -72,8 +90,7 @@ impl BodyScript {
         runtime: &dyn OwnerBodyRuntime,
     ) -> io::Result<Self> {
         startup_snapshot(runtime, body.id.entity)?;
-        let continuous_corrections =
-            matches!(body.hero, SOLDIER | CASSIDY) && runtime.movement_modifiers().is_some();
+        let continuous_corrections = runtime.movement_modifiers().is_some();
         let corrections = continuous_corrections.then(|| {
             CorrectionHistory::new(body.id.entity, body.id.generation)
                 .with_processed_at_spawn(processed_at_spawn)
@@ -87,21 +104,31 @@ impl BodyScript {
             stream: BodyStream::new(body.id.entity),
             frame,
             unsent_delta: None,
+            sent_sprays: VecDeque::new(),
             corrections,
             continuous_corrections,
             processed_at_spawn,
             projectiles,
+            server_projectile_seq: 0,
         })
     }
 
-    pub(super) fn record_scripted_movement(
+    pub(super) fn record_authoritative_movement(
         &mut self,
         mover: &Mover,
         frame: u32,
         frame_us: u32,
         previously_processed: Option<u32>,
     ) {
-        if frame_us == 0 || !mover.scripted_motion_at(frame) {
+        if frame_us == 0 {
+            return;
+        }
+        if !mover.needs_owner_correction_at(frame) {
+            if let Some(history) = self.corrections.as_mut() {
+                if self.continuous_corrections || history.impulse_correction().is_some() {
+                    history.record(mover.pose());
+                }
+            }
             return;
         }
         let history = self.corrections.get_or_insert_with(|| {
@@ -139,6 +166,7 @@ impl BodyScript {
     ) -> io::Result<()> {
         if command.frame > *buffers.frame {
             if let Err(error) = runtime.advance(command, mover, step) {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(error);
             }
@@ -146,8 +174,13 @@ impl BodyScript {
             self.frame = command.frame;
         }
         match runtime.snapshot() {
-            Some(snapshot) if snapshot.initialization_complete() => {}
+            Some(snapshot)
+                if snapshot.diagnostics.iter().all(|diagnostic| {
+                    diagnostic.server_only
+                        || diagnostic.issue == crate::script_init::Issue::ObservationUnavailable
+                }) => {}
             Some(snapshot) => {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -158,12 +191,15 @@ impl BodyScript {
                 ));
             }
             None => {
+                mover.set_cinematic_aim(None);
                 mover.set_authored_facing(None);
                 return Err(invalid("body VM has no snapshot"));
             }
         }
         mover.set_cinematic_aim(runtime.cinematic_aim());
         mover.set_authored_facing(runtime.authored_facing());
+        mover.set_move_request(runtime.move_request());
+        mover.set_ball_roll_speed(runtime.ball_roll_speed());
         let velocity_changes = runtime.take_velocity_changes();
         if runtime
             .vitals()
@@ -195,7 +231,12 @@ impl BodyScript {
         }
         for shot in runtime.take_shots((step == BodyStep::Posed).then_some(command), mover) {
             match shot {
-                PosedShot::Hitscan(shot) => buffers.hitscan.push(*shot),
+                PosedShot::Hitscan(shot) => {
+                    buffers
+                        .hitscan
+                        .push((*shot, crate::game_hitscan::HitTargetPolicy::default()));
+                }
+                PosedShot::AllyHitscan(shot, policy) => buffers.hitscan.push((*shot, policy)),
                 PosedShot::Projectile(shot) => self.launch_projectile(*shot, buffers.launches),
                 PosedShot::BioticField(shot) => self.launch_biotic_field(shot, buffers.fields),
             }
@@ -223,21 +264,10 @@ impl BodyScript {
         projectile: PosedProjectile,
         launches: &mut Vec<AdmittedFlight>,
     ) {
-        let Some((projectiles, definition)) = self
-            .projectiles
-            .as_mut()
-            .zip(projectile.ballistics.definition)
-        else {
-            #[cfg(feature = "inspector")]
-            crate::owner_trace::playtest(format_args!(
-                "projectile event=launch-rejected shot={:?} reason=no-definition-or-tracker",
-                projectile.shot
-            ));
-            return;
-        };
         let bound = (projectile.ballistics.lifetime / TICK_PERIOD.as_secs_f64()).ceil() as u32;
         #[cfg(feature = "inspector")]
         let radius = projectile.ballistics.radius;
+        let definition = projectile.ballistics.definition;
         let Some(flight) = ProjectileFlight::new(
             projectile.ballistics,
             projectile.origin,
@@ -256,25 +286,53 @@ impl BodyScript {
         } else {
             flight
         };
-        if let Some(token) = projectiles.admit(projectile.shot, definition, bound) {
+        let flight = flight
+            .with_target_policy(projectile.target_policy)
+            .with_piercing(projectile.piercing)
+            .with_post_bounce_fuse(projectile.post_bounce_fuse)
+            .with_sticky_delay(projectile.sticky_delay)
+            .with_effects(projectile.direct_effect, projectile.blast_effect);
+        let token = if projectile.predicted {
+            let Some((projectiles, def)) = self.projectiles.as_mut().zip(definition) else {
+                #[cfg(feature = "inspector")]
+                crate::owner_trace::playtest(format_args!(
+                    "projectile event=launch-rejected shot={:?} reason=no-definition-or-tracker",
+                    projectile.shot
+                ));
+                return;
+            };
+            projectiles.admit(projectile.shot, def, bound)
+        } else {
+            self.server_projectile_seq = self.server_projectile_seq.wrapping_add(1);
+            Some(ProjectileToken::server_only(self.server_projectile_seq))
+        };
+        if let Some(token) = token {
             #[cfg(feature = "inspector")]
             crate::owner_trace::playtest(format_args!(
-                "projectile event=launched token={token:?} shot={:?} definition={definition:016x} origin={:?} aim={:?} radius={radius}",
-                projectile.shot, projectile.origin, projectile.direction
+                "projectile event=launched token={token:?} predicted={} shot={:?} definition={:016x} origin={:?} aim={:?} radius={radius}",
+                projectile.predicted,
+                projectile.shot,
+                definition.unwrap_or(0),
+                projectile.origin,
+                projectile.direction
             ));
             launches.push(AdmittedFlight {
                 token,
+                launch_frame: projectile.shot.frame,
                 flight,
                 stun: projectile.stun,
                 hit_effect: projectile
                     .stun
                     .and_then(|_| LEGACY_PROJECTILE_CONTROL.flight_site(&projectile.shot)),
+                impact_spawn: projectile.impact_spawn,
+                presentation: projectile.presentation,
             });
         } else {
             #[cfg(feature = "inspector")]
             crate::owner_trace::playtest(format_args!(
-                "projectile event=launch-rejected shot={:?} definition={definition:016x} reason=not-admitted",
-                projectile.shot
+                "projectile event=launch-rejected shot={:?} definition={:016x} reason=not-admitted",
+                projectile.shot,
+                definition.unwrap_or(0)
             ));
         }
     }
@@ -302,9 +360,10 @@ impl BodyScript {
         } else {
             let replace_initial =
                 matches!(self.unsent_delta, Some((_, DeltaKind::InitialOwner(_))));
+            let same_frame_refresh = self.frame > 0 && self.frame == self.stream.command_frame();
             let Some(kind) = self
                 .stream
-                .owner_kind(self.frame, false, replace_initial)
+                .owner_kind(self.frame, same_frame_refresh, replace_initial)
                 .map_err(invalid)?
             else {
                 return Ok(None);
@@ -314,6 +373,9 @@ impl BodyScript {
                 .base()
                 .expect("owner delta requires the baseline");
             let snapshot = encoder.project_next(snapshot, base).map_err(invalid)?;
+            if same_frame_refresh && &snapshot == self.stream.latest_snapshot().unwrap_or(base) {
+                return Ok(None);
+            }
             let chunk = encoder
                 .queue_delta(&mut self.stream, &snapshot, kind, runtime.frame_ms())
                 .map_err(invalid)?
@@ -346,15 +408,52 @@ impl BodyScript {
         Ok(Some((record, replaced)))
     }
 
+    pub(super) fn sent_spray_origin(&self, report: ClientWheelUse) -> Option<u64> {
+        if report.entity != self.id.entity {
+            return None;
+        }
+        self.sent_sprays.iter().rev().find_map(|sent| {
+            (sent.instance == report.instance
+                && sent.unlock == report.unlock
+                && sent.within_report_window(self.frame))
+            .then_some(sent.start_ms)
+        })
+    }
+
     pub(super) fn sent(&mut self, last: u32) {
         if let Some(report) = self.stream.sent(last) {
+            const MAX_SENT_SPRAYS: usize = 128;
+            self.sent_sprays
+                .retain(|placement| placement.within_report_window(self.frame));
+            for key in report.changes {
+                let ChangeKey::State(instance, raw) = *key else {
+                    continue;
+                };
+                if let Some((start_ms, unlock)) = report.snapshot.active_spray(instance, raw) {
+                    if self.sent_sprays.len() == MAX_SENT_SPRAYS {
+                        self.sent_sprays.pop_front();
+                    }
+                    self.sent_sprays.push_back(SentSpray {
+                        instance,
+                        start_ms,
+                        unlock,
+                        frame: report.command_frame,
+                    });
+                }
+            }
             #[cfg(feature = "inspector")]
-            if crate::owner_trace::enabled() {
-                report.snapshot.trace_owner_volley_delta(
-                    last,
-                    report.command_frame,
-                    report.changes,
-                );
+            {
+                let detailed = crate::owner_trace::enabled();
+                let playtest = crate::owner_trace::playtest_enabled();
+                if detailed || playtest {
+                    report.snapshot.trace_owner_volley_delta(
+                        last,
+                        report.command_frame,
+                        report.changes,
+                        detailed,
+                        playtest,
+                    );
+                }
             }
             if let Some(projectiles) = self.projectiles.as_mut() {
                 projectiles.owner_sent(
@@ -390,6 +489,11 @@ pub(super) enum InputWork {
     WheelAction {
         body: BodyId,
         action: ClientWheelAction,
+        command_frame: Option<u32>,
+    },
+    WheelUse {
+        body: BodyId,
+        report: ClientWheelUse,
     },
     Skin {
         hero: u64,

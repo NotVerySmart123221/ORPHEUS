@@ -41,6 +41,7 @@ use super::{
 mod contact_combat;
 mod effects;
 mod nodes;
+mod retail_catalog;
 mod target_tracking;
 mod transitions;
 
@@ -51,6 +52,7 @@ pub(super) struct Vm<'graph, 'world, 'machine, W> {
     pub(super) parameters: Option<Arc<Variables>>,
     health_context: HostHealthContext,
     observed_input: Option<ObservationInput>,
+    pub(super) command_frame: Option<u32>,
     settled_damage_receiver: Option<u16>,
     pub(super) output_write_depth: usize,
 }
@@ -68,6 +70,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             parameters: None,
             health_context: HostHealthContext::default(),
             observed_input: None,
+            command_frame: None,
             settled_damage_receiver: None,
             output_write_depth: 0,
         }
@@ -166,6 +169,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let apply_schema =
             self.machine.public_schemas && !matches!(startup, Startup::Played { .. });
         self.machine.claim_instance_id(id, scope.is_isolated())?;
+        self.machine.snapshot_dirty = true;
         self.machine.snapshot.instances.insert(
             id,
             Instance {
@@ -311,12 +315,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         if self.machine.control_blocked {
             command.buttons = 0;
             command.action = 0;
+            command.forward = 0;
+            command.right = 0;
         }
+        let next_directions = crate::script_runtime::direction_bits(command.forward, command.right);
         let edges: Vec<_> = button_edges(
             self.machine.command_buttons,
             command.buttons,
             command.action,
         )
+        .chain(crate::script_runtime::direction_edges(
+            self.machine.command_directions,
+            next_directions,
+        ))
         .collect();
         self.machine
             .queues
@@ -329,6 +340,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             }
         }
         self.machine.command_buttons = command.buttons;
+        self.machine.command_directions = next_directions;
         Ok(())
     }
 
@@ -388,6 +400,33 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                     && matches!(state.kind, StateKind::LogicalButton { down } if down != edge.pressed)
             }) {
                 self.set_button_down(key, node, edge.pressed, 0)?;
+            }
+        }
+        if edge.pressed {
+            let mut recheck = Vec::new();
+            for condition in &self.graph(id).nodes {
+                if condition.class != "STU_7DEB522D" || !configured(condition, "m_00994FF0") {
+                    continue;
+                }
+                if self.logical_button_id(id, condition, None) != Some(edge.button) {
+                    continue;
+                }
+                for target in array_field(&condition.fields, "m_122DF0CA") {
+                    if let Some(raw) = target.as_u64().and_then(|value| u16::try_from(value).ok()) {
+                        recheck.push(raw);
+                    }
+                }
+            }
+            for raw in recheck {
+                let key = StateKey { instance: id, raw };
+                if self
+                    .state(key)
+                    .is_some_and(|state| state.active && !state.ending)
+                {
+                    if let Some(node) = self.graph(id).state(usize::from(raw)) {
+                        self.try_complete(key, node, 0)?;
+                    }
+                }
             }
         }
         Ok(())
@@ -551,7 +590,10 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             || (early
                 && (button.is_some_and(|button| self.logical_button_blocked(key, node, button))
                     || !self.logical_button_allows_press(key.instance, node)));
-        let held = !blocked && self.button_held(key, node);
+        let require_fresh_press = self
+            .evaluate(key.instance, node, field(&node.fields, "m_4B925089"), None)
+            .is_some_and(|value| truthy(&value));
+        let held = !require_fresh_press && !blocked && self.button_held(key, node);
         let buffered = early && !blocked;
         let down = held || buffered;
         self.state_mut(key).expect("active logical button").kind =
@@ -1093,6 +1135,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         };
         let modifier = self.machine.value(VarKey::Entity(3652), None);
         let mut rate = (script_expr::to_float(&modifier) + 1.0) as f32;
+        if (self.machine.cooldown_scale - 1.0).abs() > 1e-9 && self.machine.cooldown_scale > 0.0 {
+            rate = (f64::from(rate) / self.machine.cooldown_scale.clamp(0.05, 10.0)) as f32;
+        }
         let scalar = field(&node.fields, "m_F7CAF887");
         if !scalar.is_null() {
             let Some(value) = self.evaluate(id, node, scalar, None) else {
@@ -1190,18 +1235,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 }
                 // Settle script work before the next input edge at this instant.
                 // A press and release can share a timestamp.
-                while let Some(event) =
-                    self.machine
-                        .queues
-                        .pop_due(id, self.machine.now_ms, |event| {
-                            !matches!(event, Event::Button(_))
-                        })
+                while let Some((event, command_frame)) = self
+                    .machine
+                    .queues
+                    .pop_due_with_command_frame(id, self.machine.now_ms, |event| {
+                        !matches!(event, Event::Button(_))
+                    })
                 {
                     if events == MAX_EVENTS_PER_UPDATE {
                         return Err(InitFault::EventBudget { instance: id });
                     }
                     events += 1;
                     self.spend("event dispatch")?;
+                    self.command_frame = command_frame;
                     let key = |raw| StateKey { instance: id, raw };
                     match event {
                         Event::Entry(position) => {
@@ -1263,19 +1309,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                             settled_damage,
                             room_directed,
                         } => {
-                            if room_directed && self.machine.owner_dead {
-                                continue;
+                            if !room_directed || !self.machine.owner_dead {
+                                self.deliver(
+                                    id,
+                                    position,
+                                    sender,
+                                    parameters,
+                                    health_context,
+                                    settled_damage,
+                                )?;
                             }
-                            self.deliver(
-                                id,
-                                position,
-                                sender,
-                                parameters,
-                                health_context,
-                                settled_damage,
-                            )?;
                         }
                     }
+                    self.command_frame = None;
                 }
                 if !self.machine.snapshot.instances.contains_key(&id) {
                     break;
@@ -1380,6 +1426,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             .iter()
             .any(|existing| existing.site == diagnostic.site && existing.issue == diagnostic.issue)
         {
+            self.machine.snapshot_dirty = true;
             self.machine.snapshot.diagnostics.push(diagnostic);
         }
     }
@@ -1394,9 +1441,19 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         delay_ms: u64,
         event: Event,
     ) -> Result<(), InitFault> {
-        self.machine
-            .queues
-            .push(id, self.machine.now_ms.saturating_add(delay_ms), event)?;
+        // Carry the input view through immediate graph work, including child
+        // startup. Later timers sample their own current frame.
+        let command_frame = if delay_ms == 0 {
+            self.command_frame
+        } else {
+            None
+        };
+        self.machine.queues.push_with_command_frame(
+            id,
+            self.machine.now_ms.saturating_add(delay_ms),
+            event,
+            command_frame,
+        )?;
         Ok(())
     }
 
@@ -1620,6 +1677,38 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 } else if !self.world.play_script(site, target, request) {
                     self.report(site, Issue::UnsupportedField("PlayScript target component"));
                     return Ok(false);
+                }
+            }
+            Value::Array(targets) if self.world.admits_generic_player_runtime(site) => {
+                let Some(params) = self.play_parameters(id, node)? else {
+                    return Ok(false);
+                };
+                let source = match self
+                    .machine
+                    .value(VarKey::Instance(id, SCRIPT_SOURCE), None)
+                {
+                    Value::Entity(source) if script_expr::valid_entity(source) => source,
+                    _ => site.entity,
+                };
+                for item in targets {
+                    if let Value::Entity(target) = item {
+                        if !script_expr::valid_entity(target) {
+                            continue;
+                        }
+                        let request = PlayScript {
+                            policy,
+                            overrides: overrides.clone(),
+                            graph,
+                            source,
+                            parameters: params.clone(),
+                            auto_retire,
+                        };
+                        if target == site.entity {
+                            self.start_loaded_script(site, &request)?;
+                        } else {
+                            let _ = self.world.play_script(site, target, request);
+                        }
+                    }
                 }
             }
             _ => {
@@ -2253,7 +2342,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(true)
     }
 
-    fn capture_callout(&mut self, id: u16, node: &Node) -> bool {
+    fn capture_frame_action(&mut self, id: u16, node: &Node) -> bool {
         use super::{FrameAction, FrameCallout};
 
         const HISTORY: usize = 32;
@@ -2267,10 +2356,6 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 .graph(id)
                 .remote_node(remote)
                 .is_none_or(|mapped| mapped.pos != node.pos)
-            || !matches!(
-                node.field("m_text").and_then(|text| text["$"].as_str()),
-                Some("STU_E7579408" | "STU_919FD47C" | "STUConfigVarExpression")
-            )
         {
             return false;
         }
@@ -2288,6 +2373,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 ((owner, variable.id), self.machine.value(key, None))
             })
             .collect();
+        self.machine.snapshot_dirty = true;
         let history = &mut self.machine.snapshot.frame_actions;
         let previous = history.back().map_or(0, |action| action.callout.serial);
         let Some(serial) = previous.checked_add(1) else {
@@ -2323,19 +2409,60 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         ) else {
             return;
         };
-        let speaker = self.evaluate_with_context(
-            site,
-            field(&node.fields, "m_targets"),
-            None,
-            Value::Null,
-            false,
-        );
-        if speaker != Ok(Value::Entity(site.entity)) {
+        let targets_field = field(&node.fields, "m_targets");
+        let speaker = if script_expr::assignment_group_source(targets_field).is_some() {
+            self.assignment_group(id, node, targets_field)
+                .ok()
+                .flatten()
+        } else {
+            self.evaluate_with_context(site, targets_field, None, Value::Null, false)
+                .ok()
+        };
+        let self_targeted = match speaker {
+            Some(Value::Entity(entity)) => entity == site.entity,
+            Some(Value::Array(items)) => items.contains(&Value::Entity(site.entity)),
+            _ => false,
+        };
+        if !self_targeted {
             return;
         }
-        self.world.queue_actor_voice(site, criterion, &mut |count| {
-            ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize
-        });
+        let audience_field = field(&node.fields, "m_297E0B63");
+        let explicit_audience = if audience_field.is_null() {
+            None
+        } else {
+            let evaluated = if script_expr::assignment_group_source(audience_field).is_some() {
+                self.assignment_group(id, node, audience_field)
+                    .ok()
+                    .flatten()
+            } else {
+                self.evaluate_with_context(site, audience_field, None, Value::Null, false)
+                    .ok()
+            };
+            match evaluated {
+                Some(Value::Entity(entity)) if script_expr::valid_entity(entity) => {
+                    Some(vec![entity])
+                }
+                Some(Value::Array(items)) => {
+                    let list: Vec<u32> = items
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            Value::Entity(entity) if script_expr::valid_entity(entity) => {
+                                Some(entity)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    (!list.is_empty()).then_some(list)
+                }
+                _ => None,
+            }
+        };
+        self.world.queue_actor_voice_with_audience(
+            site,
+            criterion,
+            explicit_audience.as_deref(),
+            &mut |count| ((u128::from(self.machine.random_u64()) * count as u128) >> 64) as usize,
+        );
     }
 
     fn send_room_cue(
@@ -2464,12 +2591,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
     }
 
     pub(in crate::script_init) fn state_mut(&mut self, key: StateKey) -> Option<&mut State> {
-        self.machine
+        let state = self
+            .machine
             .snapshot
             .instances
             .get_mut(&key.instance)?
             .states
-            .get_mut(&key.raw)
+            .get_mut(&key.raw)?;
+        self.machine.snapshot_dirty = true;
+        Some(state)
     }
 
     pub(in crate::script_init) fn evaluate(
@@ -2550,6 +2680,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             reads: Vec::new(),
             foreign_reads: Vec::new(),
             parameters: self.parameters.as_deref(),
+            cycle_candidate: None,
             health_target_facts: self.health_context.target_facts.as_deref(),
             observed_sample: self
                 .observed_input
@@ -2582,6 +2713,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
                 let watchers = self.machine.foreign_watchers.entry(key).or_default();
                 if !watchers.contains(&watcher) {
                     watchers.push(watcher);
+                    self.machine
+                        .state_foreign_watches
+                        .entry(watcher)
+                        .or_default()
+                        .push(key);
                 }
             }
             if let Some(start) = self
@@ -2611,6 +2747,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         let watchers = self.machine.watchers.entry(key).or_default();
         if !watchers.contains(&watcher) {
             watchers.push(watcher);
+            self.machine
+                .state_watches
+                .entry(watcher)
+                .or_default()
+                .push(key);
         }
     }
 
@@ -2673,12 +2814,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         {
             Arc::make_mut(sample).input = Some((key, value.clone()));
         }
-        match key {
-            VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value),
+        let prev = match key {
+            VarKey::Entity(id) => self.machine.snapshot.variables.insert(id, value.clone()),
             VarKey::Instance(instance, id) => self.machine.snapshot.instances[&instance]
                 .variables
-                .insert(id, value),
+                .insert(id, value.clone()),
         };
+        if prev.as_ref().is_none_or(|old| !same(old, &value)) {
+            self.machine.snapshot_dirty = true;
+        }
     }
 
     pub(in crate::script_init) fn notify_value(
@@ -2811,7 +2955,7 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             } else {
                 let caller = if target.is_action() { None } else { caller };
                 let linked = if target.class == "STU_1113EBD5"
-                    && matches!((graph.index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
+                    && self.admits_join_inputs(id, graph.index, target)
                 {
                     self.join_inputs(id, target, (node.pos, path), caller, depth + 1)?
                 } else {
@@ -2823,6 +2967,15 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         Ok(taken)
     }
 
+    #[inline(never)]
+    fn admits_join_inputs(&self, id: u16, graph_index: u32, target: &Node) -> bool {
+        matches!((graph_index, target.pos), (0x0cc0, 7) | (0x022f, 8 | 12))
+            || self
+                .world
+                .admits_generic_player_runtime(self.site(id, target))
+    }
+
+    #[inline(never)]
     pub(in crate::script_init) fn join_inputs(
         &mut self,
         id: u16,

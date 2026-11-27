@@ -31,10 +31,21 @@
       "uses_pose": true
     },
     {
-      "name": "another slot has no posed source contract",
+      "name": "direct launch with third literal slot",
       "aim": {
         "$": "STUConfigVarInt",
         "m_value": 2
+      },
+      "launch": {
+        "$": "STU_239B571E"
+      },
+      "uses_pose": true
+    },
+    {
+      "name": "unsupported aim slot outside 0..=3",
+      "aim": {
+        "$": "STUConfigVarInt",
+        "m_value": 4
       },
       "launch": {
         "$": "STU_239B571E"
@@ -53,10 +64,18 @@
       "uses_pose": false
     },
     {
-      "name": "spread requires a different launch profile",
+      "name": "single projectile with ring launch profile",
       "aim": null,
       "launch": {
         "$": "STU_613BDDB0"
+      },
+      "uses_pose": true
+    },
+    {
+      "name": "unknown launch profile is rejected",
+      "aim": null,
+      "launch": {
+        "$": "SyntheticLaunchProfile"
       },
       "uses_pose": false
     }

@@ -174,10 +174,15 @@ impl RoomSpatialFrame {
         if let Some(empty) = self.empty_view_targets(query) {
             return Some(empty);
         }
-        let profile = query.sight?;
-        let (feet, angles) = self.actor_pose(query.source)?;
-        let eye = self.actor_eye_position(query.source)?;
-        let camera = Camera::new(feet, eye, angles, query.offset);
+        let camera = if let Some(heading) = query.eye_heading {
+            let yaw = (heading * (65_536.0 / 360.0)).round() as i32;
+            Camera::new(query.offset, query.offset, [yaw, 0], [0.0; 3])
+        } else {
+            query.sight?;
+            let (feet, angles) = self.actor_pose(query.source)?;
+            let eye = self.actor_eye_position(query.source)?;
+            Camera::new(feet, eye, angles, query.offset)
+        };
         if !camera.origin.into_iter().all(f64::is_finite) {
             return None;
         }
@@ -189,9 +194,8 @@ impl RoomSpatialFrame {
         let [any, all, exclude] = query.masks;
         let cosine = (query.aperture.to_radians() * 0.5).cos();
         let mut ranked = Vec::new();
-        // The view tracker body filter selects participating player bodies.
-        // Bots may still occlude a sight sample when the supplied profile admits them.
-        for &entity in self.player_wires.values() {
+        for candidate in &self.candidates {
+            let entity = candidate.entity;
             if entity == query.source {
                 continue;
             }
@@ -203,10 +207,13 @@ impl RoomSpatialFrame {
                 continue;
             }
             let pose = self.view_capsule(entity)?;
-            if !camera.contains(pose, query.range, cosine)
-                || !self.view_visible(camera.origin, query.source, entity, pose, profile)?
-            {
+            if !camera.contains(pose, query.range, cosine) {
                 continue;
+            }
+            if let Some(profile) = query.sight {
+                if !self.view_visible(camera.origin, query.source, entity, pose, profile)? {
+                    continue;
+                }
             }
             let score: f64 = scoring
                 .iter()

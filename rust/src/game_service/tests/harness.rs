@@ -209,6 +209,7 @@ pub struct WorldRecord {
     pub movement_frame: Option<u32>,
     pub skin: Option<(u32, bool)>,
     pub script: Option<ReceivedChunk>,
+    pub has_projectile_launch: bool,
     pub projectile_release: Option<u32>,
     pub base_health: Option<f32>,
     pub total_health: Option<f32>,
@@ -275,6 +276,58 @@ impl WorldRecord {
     }
 }
 
+fn read_projectile_launch_presence(reader: &mut BitReader<'_>) -> bool {
+    if !reader.bit().unwrap() {
+        return false;
+    }
+    let mut first = true;
+    while reader.bit().unwrap() {
+        if first {
+            reader.var_b().unwrap();
+            first = false;
+        } else {
+            let width = if !reader.bit().unwrap() {
+                4
+            } else if !reader.bit().unwrap() {
+                8
+            } else {
+                32
+            };
+            reader.advance(width).unwrap();
+        }
+        skip_projectile_escape(reader, 4, 8);
+        assert_eq!(reader.bits(2).unwrap(), 0); // no spread, volley form
+        reader.w_u16().unwrap(); // instance
+        reader.w_u16().unwrap(); // state
+        reader.advance(6).unwrap(); // activation
+        if !reader.bit().unwrap() {
+            reader.w_u16().unwrap(); // volley count
+        }
+        reader.w_u16().unwrap(); // counter
+        reader.advance(96 + 32).unwrap(); // origin and direction
+        if reader.bit().unwrap() {
+            let count = reader.w_u16().unwrap();
+            reader.advance(2).unwrap(); // projectile ID namespace
+            skip_projectile_escape(reader, 8, 16);
+            for _ in 1..count {
+                if !reader.bit().unwrap() {
+                    reader.advance(1).unwrap(); // sign
+                    skip_projectile_escape(reader, 4, 8);
+                }
+            }
+        }
+    }
+    !first
+}
+
+fn skip_projectile_escape(reader: &mut BitReader<'_>, short: usize, middle: usize) {
+    if !reader.bit().unwrap() {
+        reader.advance(short).unwrap();
+    } else if reader.bits(middle).unwrap() == (1 << middle) - 1 {
+        reader.advance(32).unwrap();
+    }
+}
+
 pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
     let mut reader = BitReader::new(&packet.payload);
     let tick = reader.var_a().unwrap();
@@ -292,6 +345,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
                 movement_frame: None,
                 skin: None,
                 script: None,
+                has_projectile_launch: false,
                 projectile_release: None,
                 base_health: None,
                 total_health: None,
@@ -322,7 +376,7 @@ pub fn world_records(schemas: &Schemas, packet: &Packet) -> Vec<WorldRecord> {
             if !reader.bit().unwrap() {
                 return record;
             }
-            assert!(!reader.bit().unwrap()); // no channel-2 launch events
+            record.has_projectile_launch = read_projectile_launch_presence(&mut reader);
             if reader.bit().unwrap() {
                 assert_eq!(reader.var_b().unwrap(), u32::MAX);
                 record.projectile_release = Some(reader.var_b().unwrap());

@@ -2,6 +2,170 @@ use super::*;
 use crate::{script_enemy::fixture, script_snapshot_wire::SceneProjection, world::frame};
 
 #[test]
+fn crowded_observer_frames_rotate_walking_npc_records() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/npc-script-packet-isolation-v1.json"
+    ))
+    .unwrap();
+    let input = &fixture["movement_budget"];
+    let count = input["actors"].as_u64().unwrap() as usize;
+    let spare = input["bytes_available_before_movement"].as_u64().unwrap() as usize;
+    let throttles = serde_json::from_value(input["walking_throttles"].clone()).unwrap();
+    let movements: Vec<_> = (0..count)
+        .map(|index| EntityUpdate {
+            entity: 0xc000_1000 + index as u32,
+            movement: Some(Movement {
+                position: [90.0 + index as f64, -2.0, -40.0],
+                yaw: 12000,
+                velocity: [1.0, 0.0, -3.0],
+                throttles,
+                ..Movement::default()
+            }),
+            ..Default::default()
+        })
+        .collect();
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let message = crate::game_messages::EncodedMessage::from_bytes(vec![
+        1;
+        crate::world::MAX_PAYLOAD
+            - spare
+    ]);
+    let mut visited = 0;
+    for sequence in 0..count as u32 {
+        let tick = 1000 + sequence;
+        let ordinal = egress.queue_reliable(message.clone()).unwrap();
+        let mut payload = Vec::new();
+        let send = world
+            .send_frame(tick, movements.clone(), false, None, &mut egress, |bytes| {
+                payload = bytes;
+                Ok::<_, ()>(sequence)
+            })
+            .unwrap();
+        let selected = send.records.len();
+        assert!((1..count).contains(&selected));
+        let expected: Vec<_> = movements
+            .iter()
+            .cycle()
+            .skip(visited)
+            .take(selected)
+            .collect();
+        assert_eq!(
+            payload,
+            frame(
+                tick,
+                world.command_ack(tick),
+                &[(ordinal, message.clone())],
+                &[],
+                &expected
+            )
+            .unwrap()
+        );
+        transport_outcome(&mut world, &mut egress, sequence, true);
+        visited += selected;
+        if visited >= count {
+            return;
+        }
+    }
+    panic!("not all NPCs got movement room in a crowded stream");
+}
+
+#[test]
+fn scripted_respawn_admits_owner_movement_and_weapon_contact_at_the_same_ack() {
+    use crate::world::Create;
+
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/respawn-weapon-visibility-v1.json"
+    ))
+    .unwrap();
+    let input = &contract["input"];
+    let number = |key: &str| u32::try_from(input[key].as_u64().unwrap()).unwrap();
+    let retired = number("retired");
+    let replacement = number("replacement");
+    let tick = number("first_tick");
+    let expected = |phase: &str| contract["expected"][phase].as_bool().unwrap();
+    let mut replacement_bot = crate::game_bots::Bot::fixture_walker([4.0, 0.0, 0.0]);
+    replacement_bot.entity = replacement;
+    replacement_bot.position = [2.0, 0.0, 0.0];
+    let mut simulation = RoomSimulation::new(vec![replacement_bot]).unwrap();
+    simulation.enable_movement_contacts(
+        false,
+        Arc::new(crate::mover_settings::MoverCatalog::default()),
+    );
+    simulation.prepare_movement_frame(tick).unwrap();
+    let contacts = simulation.movement_contact_frame().unwrap();
+    let check = |world: &WorldDelivery, phase: &str| {
+        let admitted = expected(phase);
+        assert_eq!(world.actor_contact_ready(replacement), admitted, "{phase}");
+        assert_eq!(
+            world
+                .owner_movement_blockers(&contacts, world.owner(), 0)
+                .len(),
+            usize::from(admitted),
+            "{phase}"
+        );
+        assert!(
+            world
+                .owner_movement_blockers(&contacts, world.owner(), 1)
+                .is_empty()
+        );
+    };
+    let (graphs, codecs, _, _) = fixture(false);
+    let script = Component::start(
+        Arc::clone(&graphs),
+        replacement,
+        crate::script_wire::Variables::new(),
+        vec![Root::new(1, 42)],
+        tick,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let start = |owner| {
+        let mut world = WorldDelivery::new(owner);
+        world.started = Some(tick);
+        world.bots.insert(retired, BotLifetime::Live);
+        world.created.insert(retired);
+        world.replace_bot(BotReplacement {
+            retired,
+            created: EntityUpdate {
+                entity: replacement,
+                operation: Some(Operation::Create(Box::new(Create::new(1, vec![])))),
+                ..EntityUpdate::default()
+            },
+            waits_for_presentation: true,
+        });
+        world
+            .present_scene_script(SceneProjection {
+                snapshot: script.snapshot().unwrap(),
+                encoder: SnapshotEncoder::new(&graphs, &codecs),
+            })
+            .unwrap();
+        world
+    };
+    let mut fast = start(OWNER);
+    let mut slow = start(OWNER + 1);
+    let mut fast_egress = GameEgress::default();
+    let mut slow_egress = GameEgress::default();
+    for (world, egress) in [(&mut fast, &mut fast_egress), (&mut slow, &mut slow_egress)] {
+        assert!(!world.actor_contact_ready(retired));
+        check(world, "weapon_target_before_create_ack");
+        transmit(world, None, egress, tick, 0);
+        transport_outcome(world, egress, 0, true);
+        assert!(world.identity_ready(replacement));
+        check(world, "weapon_target_after_create_ack");
+        transmit(world, None, egress, tick + 1, 1);
+    }
+    transport_outcome(&mut fast, &mut fast_egress, 1, true);
+    transport_outcome(&mut slow, &mut slow_egress, 1, false);
+    check(&fast, "weapon_target_after_animation_ack");
+    check(&slow, "weapon_target_after_animation_loss");
+    transmit(&mut slow, None, &mut slow_egress, tick + 2, 2);
+    transport_outcome(&mut slow, &mut slow_egress, 2, true);
+    check(&slow, "weapon_target_after_animation_ack");
+}
+
+#[test]
 fn npc_script_chunks_and_reliable_messages_advance_on_separate_frames() {
     let contract: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../fixtures/behavior/npc-script-packet-isolation-v1.json"

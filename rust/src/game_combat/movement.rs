@@ -25,17 +25,82 @@ pub(crate) struct MovementContactFrame {
 impl MovementContactFrame {
     /// Wire ordering is stable even when the ECS reuses a body slot.
     pub(crate) fn blockers(&self, source: u32, team: u8) -> Vec<CapsulePose> {
+        self.blockers_where(source, team, |_| true)
+    }
+
+    pub(crate) fn blockers_where(
+        &self,
+        source: u32,
+        team: u8,
+        mut visible: impl FnMut(u32) -> bool,
+    ) -> Vec<CapsulePose> {
         self.actors
             .iter()
             .filter_map(|(&entity, &(other_team, pose))| {
-                (entity != source && other_team != Some(team)).then_some(pose)
+                (entity != source && other_team != Some(team) && visible(entity)).then_some(pose)
             })
             .collect()
+    }
+
+    pub(crate) fn ally_separation(&self, source: u32, team: u8, pose: CapsulePose) -> [f64; 2] {
+        self.ally_separation_where(source, team, pose, |_| true)
+    }
+
+    pub(crate) fn ally_separation_where(
+        &self,
+        source: u32,
+        team: u8,
+        pose: CapsulePose,
+        mut visible: impl FnMut(u32) -> bool,
+    ) -> [f64; 2] {
+        let mut push = [0.0f64; 2];
+        for (&entity, &(other_team, other_pose)) in &self.actors {
+            if entity == source || other_team != Some(team) || !visible(entity) {
+                continue;
+            }
+            let self_top = pose.position[1] + pose.top + 2.0 * pose.radius;
+            let other_top = other_pose.position[1] + other_pose.top + 2.0 * other_pose.radius;
+            if pose.position[1] > other_top || other_pose.position[1] > self_top {
+                continue;
+            }
+            let dx = f64::from(pose.position[0] - other_pose.position[0]);
+            let dz = f64::from(pose.position[2] - other_pose.position[2]);
+            let min_dist = f64::from(pose.radius + other_pose.radius);
+            let dist = dx.hypot(dz);
+            if dist >= min_dist || min_dist <= 0.0 {
+                continue;
+            }
+            let overlap = (min_dist - dist) / min_dist;
+            let (nx, nz) = if dist > 1.0e-5 {
+                (dx / dist, dz / dist)
+            } else if source < entity {
+                (1.0, 0.0)
+            } else {
+                (-1.0, 0.0)
+            };
+            push[0] += nx * overlap;
+            push[1] += nz * overlap;
+        }
+        let mag = push[0].hypot(push[1]);
+        let max_step = 2.8 * crate::game_clock::TICK_PERIOD.as_secs_f64();
+        if mag > 1.0e-6 {
+            let step = (mag * max_step).min(max_step);
+            [push[0] / mag * step, push[1] / mag * step]
+        } else {
+            [0.0; 2]
+        }
     }
 
     pub(crate) fn stage_bot(&self, bot: &mut Bot, tick: u32) {
         if !bot.dead && !bot.has_movement_blockers(tick) {
             let blockers = if self.actors.contains_key(&bot.entity) {
+                if let Some((_, pose)) = self.actors.get(&bot.entity) {
+                    bot.set_ally_separation(self.ally_separation(
+                        bot.entity,
+                        bot.spawn.team,
+                        *pose,
+                    ));
+                }
                 self.blockers(bot.entity, bot.spawn.team)
             } else {
                 Vec::new()
@@ -57,6 +122,9 @@ impl RoomSimulation {
             return Ok(());
         }
         if let Some(id) = self.player_handle_for_wire(wire) {
+            if self.actor_is_cc_immune(wire, tick) {
+                return Ok(());
+            }
             if let Some(player) = self.player_body_mut(id).filter(|state| state.alive()) {
                 // Input frames can run ahead of the room clock. Apply once at
                 // the next actual pose so correction carries that pose's frame.
@@ -96,6 +164,17 @@ impl RoomSimulation {
     pub(crate) fn movement_contact_frame(&self) -> Option<Arc<MovementContactFrame>> {
         let (_, frame) = self.movement_contacts.as_ref()?.frame.as_ref()?;
         Some(Arc::clone(frame))
+    }
+
+    /// NPC movement follows player input. Freeze the current player poses
+    /// before advancing any NPC so it cannot sweep into a player's new pose.
+    pub(crate) fn prepare_npc_movement_frame(&mut self, tick: u32) -> Result<(), CombatError> {
+        if !self.players_by_wire.is_empty() {
+            if let Some(contacts) = &mut self.movement_contacts {
+                contacts.frame = None;
+            }
+        }
+        self.prepare_movement_frame(tick)
     }
 
     /// Freeze contacts before the first movement in this room tick.
@@ -147,6 +226,11 @@ impl RoomSimulation {
             if state.alive() && state.mover.character_collision_for_snapshot(state.frame) {
                 actors.insert(wire, (team(state.team), state.mover.contact_capsule()));
             }
+        }
+        // Solid blocking world structures (e.g. Mei Ice Wall pillars): team `None`
+        // so both allies and enemies are hard-blocked AND can stand on top of them.
+        for (wire, pose) in self.solid_wall_capsules() {
+            actors.insert(wire, (None, pose));
         }
         if let Some(contacts) = &mut self.movement_contacts {
             contacts.frame = Some((tick, Arc::new(MovementContactFrame { actors })));

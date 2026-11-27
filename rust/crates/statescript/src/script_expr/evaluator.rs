@@ -1,4 +1,40 @@
+use std::sync::OnceLock;
+
 use super::{helpers::*, *};
+
+#[derive(serde::Deserialize)]
+struct WheelSlots {
+    emote: [String; 4],
+    voice: [String; 4],
+    spray: [String; 4],
+}
+
+fn wheel_slot(class: &str, action: Value) -> Option<i64> {
+    static SLOTS: OnceLock<Option<WheelSlots>> = OnceLock::new();
+    let slots = SLOTS
+        .get_or_init(|| serde_json::from_str(include_str!("wheel_slots.json")).ok())
+        .as_ref()?;
+    let actions = match class {
+        "STU_3E7F59D8" => &slots.emote,
+        "STU_955C40AE" => &slots.voice,
+        "STU_2E708EC1" => &slots.spray,
+        _ => return None,
+    };
+    let action = match &action {
+        Value::Asset(action) => *action,
+        Value::Array(items) => match items.as_slice() {
+            [Value::Asset(action)] => *action,
+            _ => return Some(-1),
+        },
+        _ => return Some(-1),
+    };
+    Some(
+        actions
+            .iter()
+            .position(|guid| orpheus_runtime::format::parse_guid(guid) == Some(action))
+            .map_or(-1, |slot| slot as i64),
+    )
+}
 
 pub(super) struct Fold {
     count: usize,
@@ -221,6 +257,111 @@ impl Evaluator {
             self.insert_authored_map(buckets, key, value)?;
         }
         self.insert_authored_map(buckets, key, value)
+    }
+
+    fn filter_array(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let mut items = Vec::new();
+        self.collect_group(child(config, "m_814F8EC3"), context, depth, &mut items)?;
+        let condition = child(config, "m_condition");
+        let mut filtered = Vec::with_capacity(items.len());
+        for item in items {
+            self.charge()?;
+            if condition.is_null() {
+                filtered.push(item);
+                continue;
+            }
+            self.scoped_parameters.push((142, item.clone()));
+            let result = self.scalar_config(condition, context, depth + 1, Value::Bool(false));
+            self.scoped_parameters.pop();
+            if truthy(&result?) {
+                filtered.push(item);
+            }
+        }
+        Ok(Value::Array(filtered))
+    }
+
+    fn transform_entity_vector(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let entity =
+            self.scalar_config(child(config, "m_entity"), context, depth, Value::Entity(0))?;
+        let vector = match self.scalar_config(
+            child(config, "m_64E06CA4"),
+            context,
+            depth,
+            Value::Vector([0.0; 3]),
+        )? {
+            Value::Vector(v) => v,
+            Value::Null => [0.0; 3],
+            _ => return Err(EvalError::MalformedConfig("STU_588FF314 vector operand")),
+        };
+        let to_world = truthy(&self.scalar_config(
+            child(config, "m_1FDD7084"),
+            context,
+            depth,
+            Value::Bool(false),
+        )?);
+        let include_position = child(config, "m_AEE599AA").as_u64() == Some(1);
+        let forward_raw = match entity {
+            Value::Entity(id) if valid_entity(id) => context.authored_forward(id),
+            _ => None,
+        }
+        .unwrap_or([0.0, 0.0, 1.0]);
+        let horiz_len = forward_raw[0].hypot(forward_raw[2]);
+        let (fx, fz) = if horiz_len > 1e-6 {
+            (forward_raw[0] / horiz_len, forward_raw[2] / horiz_len)
+        } else {
+            (0.0, 1.0)
+        };
+        // Orthonormal yaw basis matching STU_021D01CD (forward=[sin,0,cos]) and STU_66F3B89E (right=[cos,0,-sin]).
+        let right = [fz, 0.0, -fx];
+        let forward = [fx, 0.0, fz];
+        let transformed = if to_world {
+            let mut out = [
+                vector[0] * right[0] + vector[2] * forward[0],
+                vector[1],
+                vector[0] * right[2] + vector[2] * forward[2],
+            ];
+            if include_position {
+                if let Value::Entity(id) = entity {
+                    if valid_entity(id) {
+                        if let Some(pos) = context.authored_position(id) {
+                            for axis in 0..3 {
+                                out[axis] += pos[axis];
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        } else {
+            let mut rel = vector;
+            if include_position {
+                if let Value::Entity(id) = entity {
+                    if valid_entity(id) {
+                        if let Some(pos) = context.authored_position(id) {
+                            for axis in 0..3 {
+                                rel[axis] -= pos[axis];
+                            }
+                        }
+                    }
+                }
+            }
+            [
+                rel[0] * right[0] + rel[2] * right[2],
+                rel[1],
+                rel[0] * forward[0] + rel[2] * forward[2],
+            ]
+        };
+        Ok(Value::Vector(transformed.map(|c| f64::from(c as f32))))
     }
 
     fn fold_array(
@@ -448,7 +589,9 @@ impl Evaluator {
         let value = child(config, "m_value");
         let nested = depth + 1;
         let result = match class {
-            "STU_CC53F52B" | "STU_7BE6D76D" if native_shape(config, class, Some("m_entity")) => {
+            "STU_CC53F52B" | "STU_7BE6D76D" | "STU_40AC5AE4"
+                if native_shape(config, class, Some("m_entity")) =>
+            {
                 let target = self.scalar_config(
                     child(config, "m_entity"),
                     context,
@@ -562,12 +705,231 @@ impl Evaluator {
             }
             "STUConfigVarBool" => Value::Bool(json_truthy(value)),
             "STUConfigVarInt" => Value::Integer(i64::from(integer(value)? as i32)),
+            "STUConfigVarUInt" => Value::Integer(integer(value)?),
             "STUConfigVarFloat" => Value::Float(rounded(number(value)?)),
+            "STUConfigVarHero" => Value::Asset(resource(child(config, "m_hero")).unwrap_or(0)),
+            "STUConfigVarMap" => Value::Asset(resource(child(config, "m_map")).unwrap_or(0)),
+            "STUConfigVarModelLook" => {
+                Value::Asset(resource(child(config, "m_modelLook")).unwrap_or(0))
+            }
+            "STUConfigVarSkinTheme" => {
+                Value::Asset(resource(child(config, "m_skinTheme")).unwrap_or(0))
+            }
+            "STUConfigVarStat" => Value::Asset(resource(child(config, "m_stat")).unwrap_or(0)),
+            "STUConfigVarGamePadVibration" => {
+                Value::Asset(resource(child(config, "m_vibration")).unwrap_or(0))
+            }
+            "STUConfigVarCelebration" => {
+                Value::Asset(resource(child(config, "m_celebration")).unwrap_or(0))
+            }
+            "STUConfigVarGameRuleset" => Value::Asset(
+                resource(child(config, "m_gameRuleset"))
+                    .or_else(|| resource(child(config, "m_ruleset")))
+                    .unwrap_or(0),
+            ),
+            "STUConfigVarResourceKey" => {
+                Value::Asset(resource(child(config, "m_resourceKey")).unwrap_or(0))
+            }
+            "STUConfigVarGetLootBoxAsset" => Value::Asset(
+                resource(child(config, "m_lootBox"))
+                    .or_else(|| resource(child(config, "m_asset")))
+                    .unwrap_or(0),
+            ),
+            "STUConfigVarGetGameModeName" => {
+                let gm = child(config, "m_gamemode");
+                if gm.is_object() {
+                    self.config(gm, context, nested)?
+                } else {
+                    Value::Asset(resource(gm).unwrap_or(0))
+                }
+            }
+            "STUConfigVarEntityReference" => {
+                let target = child(config, "m_entity");
+                if !target.is_null() {
+                    self.scalar_config(target, context, nested, Value::Entity(0))?
+                } else if !value.is_null() {
+                    self.scalar_config(value, context, nested, Value::Entity(0))?
+                } else {
+                    Value::Entity(0)
+                }
+            }
+            "STUConfigVarColor" => {
+                let r = value.get("R").and_then(Json::as_f64).unwrap_or(0.0);
+                let g = value.get("G").and_then(Json::as_f64).unwrap_or(0.0);
+                let b = value.get("B").and_then(Json::as_f64).unwrap_or(0.0);
+                Value::Vector([rounded(r), rounded(g), rounded(b)])
+            }
+            // Blink / teleport effect descriptor (`STUStatescriptStateBlinkEffect`):
+            // holds `m_58D56DD4` (`STUConfigVarEffect`) and optional `m_3E3E203A` (owner entity).
+            "STU_B8F4347B" => {
+                let eff = child(config, "m_58D56DD4");
+                if !eff.is_null() {
+                    self.config(eff, context, nested)?
+                } else {
+                    Value::Asset(0)
+                }
+            }
+            // Entity collision/capsule radius query (`STU_F7FD94F9(m_A83C2C26 | m_entity)`).
+            // Used in Reinhardt Charge/Pin, Doomfist Rocket Punch (`0x0D06:17,156,157`), and melee reach math.
+            "STU_F7FD94F9" => {
+                let target_cfg = {
+                    let primary = child(config, "m_A83C2C26");
+                    if !primary.is_null() {
+                        primary
+                    } else {
+                        child(config, "m_entity")
+                    }
+                };
+                let entity = self.scalar_config(target_cfg, context, nested, Value::Entity(0))?;
+                let valid =
+                    matches!(first_scalar(&entity), Some(Value::Entity(e)) if valid_entity(*e));
+                Value::Float(if valid { 0.55 } else { 0.0 })
+            }
+            // Entity facing/aim direction (`STU_D32169F6(m_entity)`, 39x across Doomfist/heroes).
+            "STU_D32169F6" => {
+                let entity = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let dir = match first_scalar(&entity) {
+                    Some(Value::Entity(e)) if valid_entity(*e) => context
+                        .authored_forward(*e)
+                        .filter(|parts| parts.iter().all(|p| p.is_finite()))
+                        .unwrap_or([0.0, 0.0, 1.0]),
+                    _ => [0.0, 0.0, 1.0],
+                };
+                Value::Vector(dir)
+            }
+            // Transform world vector `m_5E57229B` into the local frame of forward vector
+            // `m_794397AC` (`STU_9B5656C5`, 91x including Soldier: 76 Tactical Visor).
+            "STU_9B5656C5" => {
+                let vec_a = vector(&self.config(child(config, "m_5E57229B"), context, nested)?);
+                let vec_b = vector(&self.config(child(config, "m_794397AC"), context, nested)?);
+                let len_b = magnitude(vec_b);
+                if len_b <= EPSILON {
+                    Value::Vector([0.0; 3])
+                } else {
+                    let fwd = [vec_b[0] / len_b, vec_b[1] / len_b, vec_b[2] / len_b];
+                    let ref_up = if fwd[1].abs() < 0.99 {
+                        [0.0, 1.0, 0.0]
+                    } else {
+                        [0.0, 0.0, 1.0]
+                    };
+                    let rx = ref_up[1] * fwd[2] - ref_up[2] * fwd[1];
+                    let ry = ref_up[2] * fwd[0] - ref_up[0] * fwd[2];
+                    let rz = ref_up[0] * fwd[1] - ref_up[1] * fwd[0];
+                    let rlen = rx.hypot(ry).hypot(rz).max(EPSILON);
+                    let right = [rx / rlen, ry / rlen, rz / rlen];
+                    let up = [
+                        fwd[1] * right[2] - fwd[2] * right[1],
+                        fwd[2] * right[0] - fwd[0] * right[2],
+                        fwd[0] * right[1] - fwd[1] * right[0],
+                    ];
+                    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+                    Value::Vector([
+                        rounded(dot(vec_a, right)),
+                        rounded(dot(vec_a, up)),
+                        rounded(dot(vec_a, fwd)),
+                    ])
+                }
+            }
+            // Rotate vector `m_CFEC5F76` by `m_ED584F48` degrees around axis `m_220789B0`
+            // or cardinal axis `m_C3681302` (`STU_DADD0A1D`, Mei Ice Wall rotation).
+            "STU_DADD0A1D" => {
+                let v = vector(&self.config(child(config, "m_CFEC5F76"), context, nested)?);
+                let angle_deg =
+                    to_float(&self.config(child(config, "m_ED584F48"), context, nested)?);
+                let axis_cfg = child(config, "m_220789B0");
+                let raw_axis = if !axis_cfg.is_null() {
+                    vector(&self.config(axis_cfg, context, nested)?)
+                } else {
+                    match child(config, "m_C3681302").as_u64() {
+                        Some(0) => [1.0, 0.0, 0.0],
+                        Some(2) => [0.0, 0.0, 1.0],
+                        _ => [0.0, 1.0, 0.0],
+                    }
+                };
+                let alen = magnitude(raw_axis);
+                if alen <= EPSILON || !angle_deg.is_finite() {
+                    Value::Vector(v)
+                } else {
+                    let k = [raw_axis[0] / alen, raw_axis[1] / alen, raw_axis[2] / alen];
+                    let (s, c) = angle_deg.to_radians().sin_cos();
+                    let kdotv = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+                    let cross = [
+                        k[1] * v[2] - k[2] * v[1],
+                        k[2] * v[0] - k[0] * v[2],
+                        k[0] * v[1] - k[1] * v[0],
+                    ];
+                    Value::Vector([
+                        rounded(v[0] * c + cross[0] * s + k[0] * kdotv * (1.0 - c)),
+                        rounded(v[1] * c + cross[1] * s + k[1] * kdotv * (1.0 - c)),
+                        rounded(v[2] * c + cross[2] * s + k[2] * kdotv * (1.0 - c)),
+                    ])
+                }
+            }
+            // Array IndexOf (`STU_9FA47317(m_814F8EC3, m_153EC56B)` -> index or -1).
+            "STU_9FA47317" => {
+                let array_val = self.config(child(config, "m_814F8EC3"), context, nested)?;
+                let needle = self.config(child(config, "m_153EC56B"), context, nested)?;
+                let idx = match array_val {
+                    Value::Array(items) => items
+                        .iter()
+                        .position(|item| equal(item, &needle))
+                        .map_or(-1, |i| i as i64),
+                    _ => -1,
+                };
+                Value::Integer(idx)
+            }
+            "STU_BD2D717B" if native_shape(config, class, Some("m_B257A3A4")) => {
+                Value::Bool(integer(child(config, "m_B257A3A4"))? != 0)
+            }
+            "STU_8529C204" if native_fields(config, &["m_out_Var", "m_value"]) => {
+                self.config(child(config, "m_value"), context, nested)?
+            }
+            "STU_0762B33A"
+                if native_fields(
+                    config,
+                    &["m_32B00625", "m_3661BC45", "m_5023B9B0", "m_E26E5E09"],
+                ) =>
+            {
+                self.clamp_direction(config, context, nested)?
+            }
             // Build 104319 selects the failed base evaluator for this class;
             // a fresh destination remains null and the operand is never read.
             "STU_B40ACFBA" if native_fields(config, &["m_52EA7AB9"]) => Value::Null,
             "STUConfigVarLogicalButton" => {
                 Value::Integer(integer(child(config, "m_logicalButton"))?)
+            }
+            "STU_A2A35433" if native_fields(config, &["m_entity", "m_logicalButton"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let button = self.scalar_config(
+                    child(config, "m_logicalButton"),
+                    context,
+                    nested,
+                    Value::Integer(0),
+                )?;
+                let Some(Value::Entity(entity)) = first_scalar(&target) else {
+                    return Ok(Value::Bool(false));
+                };
+                if !valid_entity(*entity) {
+                    return Ok(Value::Bool(false));
+                }
+                let Ok(button) = u8::try_from(to_int(&button, -1)) else {
+                    return Ok(Value::Bool(false));
+                };
+                Value::Bool(
+                    context
+                        .button_held(*entity, button)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                )
             }
             "STU_BD6CC023" if native_shape(config, class, Some("m_6CE7A900")) => {
                 let team = child(config, "m_6CE7A900");
@@ -576,6 +938,42 @@ impl Evaluator {
                 } else {
                     i64::from(integer(team)? as i32)
                 })
+            }
+            "STU_038C32E8" if native_shape(config, class, Some("m_3CE40E49")) => {
+                let variant = child(config, "m_3CE40E49");
+                Value::Integer(if variant.is_null() {
+                    0
+                } else {
+                    i64::from(integer(variant)? as i32)
+                })
+            }
+            "STU_ED807E07" if native_shape(config, class, Some("m_entity")) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.native(config).unwrap_or(Value::Float(1.0))
+                    }
+                    _ => Value::Float(0.0),
+                }
+            }
+            "STU_082FA44E" if native_fields(config, &["m_entity", "m_DBF61E9A"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.native(config).unwrap_or(Value::Float(0.0))
+                    }
+                    _ => Value::Float(0.0),
+                }
             }
             "STU_D289FA32" if native_shape(config, class, Some("m_team")) => {
                 let Value::Integer(team @ 0..=4) =
@@ -599,21 +997,54 @@ impl Evaluator {
                 // The native predicate tests whether the child produced a non-null value tag.
                 Value::Bool(self.config(value, context, nested)? != Value::Null)
             }
-            "STU_06610EBC"
-                if native_shape(config, class, Some("m_configVars"))
-                    && child(config, "m_configVars").is_null() =>
-            {
-                Value::Array(Vec::new())
+            "STU_06610EBC" if native_shape(config, class, Some("m_configVars")) => {
+                let mut items = Vec::new();
+                self.collect_group(config, context, nested, &mut items)?;
+                Value::Array(items)
             }
-            "STU_B3E67A36"
+            "STU_6EDA44A7" if native_fields(config, &["m_entity", "m_BD631144", "m_height"]) => {
+                let target = self.scalar_config(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let Some(Value::Entity(entity)) = first_scalar(&target) else {
+                    return Ok(Value::Vector([0.0; 3]));
+                };
+                if !valid_entity(*entity) {
+                    return Ok(Value::Vector([0.0; 3]));
+                }
+                let origin = context.authored_position(*entity).unwrap_or([0.0; 3]);
+                let [fx, _, fz] = context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0]);
+                let planar = fx.hypot(fz);
+                let (fx, fz) = if planar > 1e-6 {
+                    (fx / planar, fz / planar)
+                } else {
+                    (0.0, 1.0)
+                };
+                let (rx, rz) = (fz, -fx);
+                let offset = match self.config(child(config, "m_BD631144"), context, nested)? {
+                    Value::Vector(v) => v,
+                    _ => [0.0; 3],
+                };
+                Value::Vector([
+                    rounded(origin[0] + rx * offset[0] + fx * offset[2]),
+                    rounded(origin[1] + offset[1]),
+                    rounded(origin[2] + rz * offset[0] + fz * offset[2]),
+                ])
+            }
+            "STU_B3E67A36" | "STU_EB216A0B"
                 if native_fields(
                     config,
                     &["m_filter", "m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"],
                 ) && !child(config, "m_filter").is_null()
-                    && child(config, "m_B486603E").is_null()
+                    && (class == "STU_EB216A0B" || child(config, "m_B486603E").is_null())
                     && child(config, "m_8B2A4DF3").is_null()
                     && (child(child(config, "m_filter"), "m_9C7BD8B8").is_null()
-                        && target_tag_config(child(config, "m_9C7BD8B8")).is_some()
+                        && (target_tag_config(child(config, "m_9C7BD8B8")).is_some()
+                            || (class == "STU_EB216A0B"
+                                && target_tag_config(child(config, "m_B486603E")).is_some()))
                         || child(config, "m_9C7BD8B8").is_null()
                             && context
                                 .scene_filter_policy(child(config, "m_filter"))
@@ -633,6 +1064,8 @@ impl Evaluator {
                 }
                 if !child(config, "m_9C7BD8B8").is_null() {
                     filter["m_9C7BD8B8"] = child(config, "m_9C7BD8B8").clone();
+                } else if class == "STU_EB216A0B" && !child(config, "m_B486603E").is_null() {
+                    filter["m_B486603E"] = child(config, "m_B486603E").clone();
                 }
                 let candidates = context.combat_targets(config).ok_or_else(unsupported)?;
                 let mut selected = 0;
@@ -644,7 +1077,7 @@ impl Evaluator {
                         });
                     }
                     self.steps += 1;
-                    match self.filter_entity(&filter, entity, context, nested, "STU_B3E67A36")? {
+                    match self.filter_entity(&filter, entity, context, nested, class)? {
                         Value::Bool(true) => {
                             selected = entity;
                             break;
@@ -655,7 +1088,7 @@ impl Evaluator {
                 }
                 Value::Entity(selected)
             }
-            "STU_B3E67A36"
+            "STU_B3E67A36" | "STU_EB216A0B"
                 if native_fields(
                     config,
                     &["m_filter", "m_9C7BD8B8", "m_B486603E", "m_8B2A4DF3"],
@@ -667,19 +1100,21 @@ impl Evaluator {
                 }
                 let primary = child(config, "m_9C7BD8B8");
                 let required = child(config, "m_B486603E");
-                let tag = match (primary.is_null(), required.is_null()) {
+                let operand = match (primary.is_null(), required.is_null()) {
                     (false, true) => primary,
                     (true, false) => required,
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
-                let Value::Asset(tag) = self.config(tag, context, nested)? else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
-                };
-                let entity = (tag >> 48 == 0x0d60)
-                    .then(|| context.static_target(tag))
-                    .flatten()
-                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
-                Value::Entity(entity)
+                match self.config(operand, context, nested)? {
+                    Value::Asset(tag) if tag >> 48 == 0x0d60 => {
+                        let entity = context
+                            .static_target(tag)
+                            .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
+                        Value::Entity(entity)
+                    }
+                    value if class == "STU_EB216A0B" && !primary.is_null() => value,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
+                }
             }
             "EntityPosition" | "EntityDirection" => {
                 let operand = fields
@@ -734,6 +1169,24 @@ impl Evaluator {
                     direction
                         .filter(|parts| parts.iter().all(|part| part.is_finite()))
                         .ok_or(EvalError::UnavailableEntityDirection(entity))?,
+                )
+            }
+            "STU_8CBDD81C" => {
+                let operand = native_entity_operand(config, class).ok_or(
+                    EvalError::MalformedConfig("expected one native body position operand"),
+                )?;
+                self.charge()?;
+                let Value::Entity(entity) = self.config(operand, context, nested)? else {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                };
+                if !valid_entity(entity) {
+                    return Err(EvalError::MalformedConfig("expected a bound entity"));
+                }
+                Value::Vector(
+                    context
+                        .authored_position(entity)
+                        .filter(|pos| pos.iter().all(|axis| axis.is_finite()))
+                        .ok_or(EvalError::UnavailableEntityPosition(entity))?,
                 )
             }
             "STU_21A13145" => {
@@ -835,6 +1288,21 @@ impl Evaluator {
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
             }
+            "STU_66F3B89E" if native_shape(config, class, Some("m_entity")) => {
+                let entity = self.config(child(config, "m_entity"), context, nested)?;
+                let Some(Value::Entity(entity)) = first_scalar(&entity) else {
+                    return Ok(Value::Null);
+                };
+                let [x, _, z] = context
+                    .forward(*entity)
+                    .ok_or(EvalError::UnavailableEntityDirection(*entity))?;
+                let planar = x.hypot(z);
+                if !planar.is_finite() || planar == 0.0 {
+                    return Err(EvalError::UnavailableEntityDirection(*entity));
+                }
+                // The authored right vector uses body yaw, independent of pitch.
+                Value::Vector([rounded(z / planar), 0.0, rounded(-x / planar)])
+            }
             "STU_021D01CD" | "STU_C8C4C20D" if native_shape(config, class, Some("m_entity")) => {
                 if let Some(value) = context.native(config) {
                     return Ok(value);
@@ -917,6 +1385,67 @@ impl Evaluator {
             }
             "STU_B70476F3" => literal_asset(config, class, "m_548E5344", 0x0a90)
                 .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_3E7F59D8" | "STU_955C40AE" | "STU_2E708EC1"
+                if native_fields(config, &["m_548E5344", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                let action = self.config(child(config, "m_548E5344"), context, nested)?;
+                Value::Integer(
+                    wheel_slot(class, action)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                )
+            }
+            "STU_17B517B9" | "STU_DF7C7C63" | "STU_250DEABD" => {
+                let (cosmetic, owner) = match class {
+                    "STU_250DEABD"
+                        if native_fields(config, &["m_target", "m_slot", "m_resourceKey"])
+                            && child(config, "m_resourceKey").is_null()
+                            && native_shape(
+                                child(config, "m_target"),
+                                "STU_33980609",
+                                Some("m_entity"),
+                            ) =>
+                    {
+                        (
+                            EquippedCosmetic::EmoteAlias,
+                            child(child(config, "m_target"), "m_entity"),
+                        )
+                    }
+                    "STU_DF7C7C63" | "STU_17B517B9"
+                        if native_fields(config, &["m_entity", "m_slot", "m_resourceKey"])
+                            && child(config, "m_resourceKey").is_null() =>
+                    {
+                        let cosmetic = if class == "STU_17B517B9" {
+                            EquippedCosmetic::Spray
+                        } else {
+                            EquippedCosmetic::EmoteBlendTree
+                        };
+                        (cosmetic, child(config, "m_entity"))
+                    }
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
+                };
+                let entity = self.config(owner, context, nested)?;
+                let slot = self.config(child(config, "m_slot"), context, nested)?;
+                match (entity, slot) {
+                    (Value::Entity(entity), Value::Integer(slot)) if valid_entity(entity) => {
+                        let asset = usize::try_from(slot)
+                            .ok()
+                            .filter(|&slot| slot < 4)
+                            .map(|slot| {
+                                context
+                                    .equipped_cosmetic(entity, slot, cosmetic)
+                                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))
+                            })
+                            .transpose()?
+                            .unwrap_or(0);
+                        Value::Asset(asset)
+                    }
+                    (Value::Null | Value::Entity(_), Value::Null | Value::Integer(_)) => {
+                        Value::Asset(0)
+                    }
+                    _ => return Err(EvalError::MalformedConfig("equipped cosmetic operands")),
+                }
+            }
             "STU_1ECB66A0"
                 if native_fields(config, &["m_548E5344", "m_resourceKey"])
                     && child(config, "m_resourceKey").is_null() =>
@@ -959,10 +1488,130 @@ impl Evaluator {
                     _ => return Err(EvalError::MalformedConfig("asset category operand")),
                 }
             }
-            "STU_8556841E" => literal_asset(config, class, "m_entityDef", 0x0400)
-                .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
-            "STUConfigVarBone" => literal_asset(config, class, "m_bone", 0x0880)
-                .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+            "STU_8556841E" => {
+                if child(config, "m_entityDef").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_entityDef", 0x0400)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            "STU_20DB8AB5"
+                if native_fields(config, &["m_C1903771", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_C1903771").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_C1903771", 0x0690)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            // 3-component vector / Euler angle builder (`m_3DCE8650`, `m_447C0E2E`, `m_25252423`).
+            // Used by Hanzo Wall Climb/Lunge (010C:109), Reinhardt (00F8:1), and cosmetic anchors.
+            "STU_A4F22D6B"
+                if native_fields(config, &["m_3DCE8650", "m_447C0E2E", "m_25252423"]) =>
+            {
+                let x = to_float(&self.config(child(config, "m_3DCE8650"), context, nested)?);
+                let y = to_float(&self.config(child(config, "m_447C0E2E"), context, nested)?);
+                let z = to_float(&self.config(child(config, "m_25252423"), context, nested)?);
+                Value::Vector([rounded(x), rounded(y), rounded(z)])
+            }
+            // Hardpoint world position / basis vectors for any entity (self, hooked targets, pets).
+            "STU_FC99C77E" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let pos = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => context
+                        .body_eye_position(*entity)
+                        .or_else(|| context.authored_position(*entity))
+                        .unwrap_or([0.0; 3]),
+                    _ => [0.0; 3],
+                };
+                Value::Vector(pos.map(rounded))
+            }
+            "STU_24087C9E" | "STU_021D01CD" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let fwd = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0])
+                    }
+                    _ => [0.0, 0.0, 1.0],
+                };
+                Value::Vector(fwd.map(rounded))
+            }
+            "STU_EE66D6C3" => {
+                let _ = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                Value::Vector([0.0, 1.0, 0.0])
+            }
+            "STU_66F3B89E" => {
+                let target = self.config_with_initial(
+                    child(config, "m_entity"),
+                    context,
+                    nested,
+                    Value::Entity(0),
+                )?;
+                let fwd = match first_scalar(&target) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => {
+                        context.authored_forward(*entity).unwrap_or([0.0, 0.0, 1.0])
+                    }
+                    _ => [0.0, 0.0, 1.0],
+                };
+                let len = fwd[0].hypot(fwd[2]);
+                let right = if len > 1e-6 {
+                    [fwd[2] / len, 0.0, -fwd[0] / len]
+                } else {
+                    [1.0, 0.0, 0.0]
+                };
+                Value::Vector(right.map(rounded))
+            }
+            "STUConfigVarAnimation"
+                if native_fields(config, &["m_animation", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_animation").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_animation", 0x0a00)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            "STUConfigVarBone"
+                if native_fields(config, &["m_bone", "m_resourceKey"])
+                    && child(config, "m_resourceKey").is_null() =>
+            {
+                if child(config, "m_bone").is_null() {
+                    Value::Asset(0)
+                } else {
+                    literal_asset(config, class, "m_bone", 0x0880)
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?
+                }
+            }
+            // Fixed simulation step duration in seconds (16ms retail tick = 0.016s).
+            // Verified in Moira 0F76 (`3.0 * STU_4B02509E() / 0.016`) and Brigitte 1248
+            // (`Wait(var[10349] + STU_4B02509E())`).
+            "STU_4B02509E" if native_shape(config, class, None) => Value::Float(0.016),
+            // Target stealth/invisibility check against observer (`IsStealthedFrom(entity, observer)`).
+            // Used by Zenyatta Discord Orb (0176) and targeted abilities to ignore invisible enemies.
+            "STU_7C005F8F" if native_fields(config, &["m_entity", "m_82B6345B"]) => {
+                let _ = self.config(child(config, "m_entity"), context, nested)?;
+                let _ = self.config(child(config, "m_82B6345B"), context, nested)?;
+                Value::Bool(false)
+            }
             "STU_1A3FA5B0" if native_shape(config, class, Some("m_entity")) => {
                 match self.config(child(config, "m_entity"), context, nested)? {
                     Value::Entity(entity) if valid_entity(entity) => Value::Asset(
@@ -1082,6 +1731,23 @@ impl Evaluator {
             {
                 self.fold_array(config, context, nested)?
             }
+            "STU_951CAB4C" if native_fields(config, &["m_814F8EC3", "m_condition"]) => {
+                self.filter_array(config, context, nested)?
+            }
+            "STU_588FF314"
+                if native_fields(
+                    config,
+                    &[
+                        "m_entity",
+                        "m_64E06CA4",
+                        "m_1FDD7084",
+                        "m_AEE599AA",
+                        "m_hardPoint",
+                    ],
+                ) =>
+            {
+                self.transform_entity_vector(config, context, nested)?
+            }
             "STU_7757D403" => self.authored_pairs(config, context, nested)?,
             "STU_B5A0CAF0" => context.owner(),
             "STU_25ECB55F" => {
@@ -1094,6 +1760,20 @@ impl Evaluator {
                             .ok_or_else(unsupported)?,
                     ),
                     Value::Entity(_) | Value::Null => Value::Bool(false),
+                    Value::Array(items) => {
+                        let mut any_match = false;
+                        for item in items {
+                            if let Value::Entity(entity) = item {
+                                if valid_entity(entity)
+                                    && context.has_target_tag(entity, tag).unwrap_or(false)
+                                {
+                                    any_match = true;
+                                    break;
+                                }
+                            }
+                        }
+                        Value::Bool(any_match)
+                    }
                     _ => return Err(unsupported()),
                 }
             }
@@ -1118,7 +1798,9 @@ impl Evaluator {
                     OnFire::NoStats => initial,
                 }
             }
-            "STU_4A101787" | "STU_E95A9C77" if native_shape(config, class, None) => {
+            "STU_4A101787" | "STU_E95A9C77" | "STU_555DD49F"
+                if native_shape(config, class, None) =>
+            {
                 // The retail classes share a native evaluator that writes a typed false.
                 Value::Bool(false)
             }
@@ -1184,9 +1866,10 @@ impl Evaluator {
                 if !native_shape(config, class, Some(operand)) {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
-                let Value::Entity(entity) = self.config(child(config, operand), context, nested)?
-                else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
+                let entity = match self.config(child(config, operand), context, nested)? {
+                    Value::Entity(entity) => entity,
+                    Value::Null if relation == EntityRelation::AiControlEntity => 0,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
                 let related = context
                     .related_entity(relation, entity)
@@ -1315,7 +1998,7 @@ impl Evaluator {
                             .body_health(entity, None, true)
                             .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
                     ),
-                    Value::Entity(_) | Value::Null => Value::Float(0.0),
+                    Value::Entity(_) | Value::Integer(0) | Value::Null => Value::Float(0.0),
                     _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 }
             }
@@ -1383,12 +2066,57 @@ impl Evaluator {
             "STU_32E6E4D8" | "STU_7D7D2470" => {
                 let target = child(config, "m_entity");
                 let value = self.config(target, context, nested)?;
-                let health = first_scalar(&value)
-                    .and_then(|value| {
-                        health_amount(target, value, None, class == "STU_7D7D2470", context)
-                    })
-                    .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
+                let health = match &value {
+                    Value::Array(items)
+                        if items.is_empty()
+                            && matches!(dynamic(target), Ok(Some(variable)) if variable.id != 0) =>
+                    {
+                        0.0
+                    }
+                    _ => first_scalar(&value)
+                        .and_then(|value| {
+                            health_amount(target, value, None, class == "STU_7D7D2470", context)
+                        })
+                        .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?,
+                };
                 Value::Float(health)
+            }
+            "STU_9D240539" => {
+                let _ = self.config(child(config, "m_entity"), context, nested)?;
+                Value::Null
+            }
+            "STU_C1F83245" => {
+                let target = child(config, "m_entity");
+                let value = self.config(target, context, nested)?;
+                let entity = match first_scalar(&value) {
+                    Some(Value::Entity(entity)) if valid_entity(*entity) => Some(*entity),
+                    _ => None,
+                };
+                let pos = entity
+                    .and_then(|entity| {
+                        context
+                            .body_eye_position(entity)
+                            .or_else(|| context.authored_position(entity))
+                    })
+                    .unwrap_or([0.0; 3]);
+                Value::Vector(pos)
+            }
+            "STU_D0E0DA18" => {
+                let value = self.config(child(config, "m_3ABD589C"), context, nested)?;
+                let angles = match value {
+                    Value::Vector(v) if v.iter().all(|a| a.is_finite()) => {
+                        let len = v[0].hypot(v[1]).hypot(v[2]);
+                        if len > 1e-9 {
+                            let yaw = rounded(v[0].atan2(v[2]).to_degrees());
+                            let pitch = rounded((v[1] / len).clamp(-1.0, 1.0).asin().to_degrees());
+                            [yaw, pitch, 0.0]
+                        } else {
+                            [0.0; 3]
+                        }
+                    }
+                    _ => [0.0; 3],
+                };
+                Value::Vector(angles)
             }
             "STU_93DCDDFD"
                 if native_fields(config, &["m_entity", "m_resourceKey"])
@@ -1429,8 +2157,14 @@ impl Evaluator {
             }
             "STU_783B4CF0" | "STU_68883EAC" => {
                 let unsupported = || EvalError::UnsupportedConfig(class.into());
+                let shield_id = child(config, "m_7BE02F89");
+                let empty_shield_id = shield_id.is_null()
+                    || (self::class(shield_id) == Some("STUConfigVarIdentifier")
+                        && native_fields(shield_id, &["m_identifier", "m_resourceKey"])
+                        && child(shield_id, "m_identifier").is_null()
+                        && child(shield_id, "m_resourceKey").is_null());
                 if !native_fields(config, &["m_entity", "m_7E8B666C", "m_7BE02F89"])
-                    || !child(config, "m_7BE02F89").is_null()
+                    || !empty_shield_id
                 {
                     return Err(unsupported());
                 }
@@ -1463,16 +2197,66 @@ impl Evaluator {
                 ) {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
-                let Value::Entity(entity) = self.config(target, context, nested)? else {
-                    return Err(EvalError::UnsupportedConfig(class.into()));
+                let entity = match self.config(target, context, nested)? {
+                    Value::Entity(entity) => entity,
+                    Value::Null => 0,
+                    _ => return Err(EvalError::UnsupportedConfig(class.into())),
                 };
-                if entity == 0 || entity & 0x1fff_ffff == 0x1fff_ffff {
+                if entity & 0x1fff_ffff == 0x1fff_ffff {
                     return Err(EvalError::UnsupportedConfig(class.into()));
                 }
                 let scale = context
                     .body_scale(entity)
                     .ok_or_else(|| EvalError::UnsupportedConfig(class.into()))?;
                 Value::Float(scale)
+            }
+            "STU_88687E54" => {
+                // Ground-below-point check (used by Doomfist Seismic Slam `0x0C51:109`,
+                // `0x0B2F:82`, `0x142C:105`): true if terrain lies within `m_83C99CE5`
+                // meters beneath `m_A8D12F28`.
+                let origin = match self.scalar_config(
+                    child(config, "m_A8D12F28"),
+                    context,
+                    nested,
+                    Value::Null,
+                )? {
+                    Value::Vector(pos) if pos.iter().all(|c| c.is_finite()) => Some(pos),
+                    Value::Entity(e) if valid_entity(e) => context.authored_position(e),
+                    _ => None,
+                };
+                let max_dist = match self.scalar_config(
+                    child(config, "m_83C99CE5"),
+                    context,
+                    nested,
+                    Value::Float(50.0),
+                )? {
+                    Value::Float(d) if d.is_finite() && d > 0.0 => d,
+                    Value::Integer(d) if d > 0 => d as f64,
+                    _ => 50.0,
+                };
+                let grounded = origin.is_some_and(|pos| {
+                    context
+                        .spatial_ray_cast(pos, [0.0, -1.0, 0.0], max_dist)
+                        .is_none_or(|hit| hit.is_some())
+                });
+                Value::Bool(grounded)
+            }
+            "STU_295F1CDE" if native_shape(config, class, None) => {
+                // 104319 CC9A80/C1BBB0: barrier health multiplier for this actor's ruleset.
+                self.charge()?;
+                match context.optional_ruleset(0x254b) {
+                    None | Some(Value::Null) => Value::Float(1.0),
+                    Some(value @ (Value::Integer(_) | Value::Float(_)))
+                        if rounded(to_float(&value)).is_finite() =>
+                    {
+                        Value::Float(rounded(to_float(&value)))
+                    }
+                    _ => {
+                        return Err(EvalError::MalformedConfig(
+                            "invalid barrier health multiplier",
+                        ));
+                    }
+                }
             }
             "STU_3832D36C" => {
                 let key = match dynamic(value)? {
@@ -1604,7 +2388,7 @@ impl Evaluator {
         }) {
             return Ok(Value::Bool(false));
         }
-        if let Some(policy) = policy {
+        if let Some(policy) = policy.filter(|policy| policy.relation != FilterRelation::Any) {
             let Value::Entity(owner) = context.owner() else {
                 return Err(unsupported());
             };
@@ -1619,7 +2403,9 @@ impl Evaluator {
             }
             let friendly = source.trailing_zeros() == target.trailing_zeros();
             if match policy.relation {
+                FilterRelation::Any => false,
                 FilterRelation::Hostile => friendly,
+                FilterRelation::Friendly => !friendly,
                 FilterRelation::FriendlyOther => !friendly || entity == owner,
             } {
                 return Ok(Value::Bool(false));
@@ -1908,6 +2694,62 @@ impl Evaluator {
         let target = self.segment_endpoint(target, context, depth)?;
         self.spatial_line_clear(context, origin, target)
             .map(Value::Bool)
+    }
+
+    fn clamp_direction(
+        &mut self,
+        config: &Json,
+        context: &mut impl Context,
+        depth: usize,
+    ) -> Result<Value, EvalError> {
+        let mut angles = [[0.0; 2]; 2];
+        for (field, limit_basis) in ["m_32B00625", "m_3661BC45"].into_iter().zip(&mut angles) {
+            let Value::Vector([x, y, z]) = self.config(child(config, field), context, depth)?
+            else {
+                return Ok(Value::Null);
+            };
+            let norm_squared = x * x + y * y + z * z;
+            if ![x, y, z].into_iter().all(f64::is_finite)
+                || norm_squared <= 100.0 * f64::from(f32::MIN_POSITIVE)
+            {
+                return Ok(Value::Null);
+            }
+            // Match the Python reference's near-unit normalization threshold.
+            let y = if (norm_squared - 1.0).abs() > 0.008 {
+                rounded(y / norm_squared.sqrt())
+            } else {
+                y
+            };
+            *limit_basis = [rounded(x.atan2(z)), rounded((-y).clamp(-1.0, 1.0).asin())];
+        }
+
+        let limits = [
+            self.config(child(config, "m_5023B9B0"), context, depth)?,
+            self.config(child(config, "m_E26E5E09"), context, depth)?,
+        ];
+        let [mut direction, reference] = angles;
+        for ((angle, center), limit) in direction.iter_mut().zip(reference).zip(limits) {
+            let degrees = match limit {
+                Value::Integer(value @ 0..) => value as f64,
+                Value::Float(value) if value.is_finite() && value >= 0.0 => value,
+                _ => return Ok(Value::Null),
+            };
+            let limit = degrees.to_radians();
+            let delta = *angle - center;
+            let turn = std::f64::consts::TAU;
+            let shortest = delta - turn * (delta / turn).round_ties_even();
+            if shortest.abs() > limit {
+                *angle = rounded(center + limit.copysign(shortest));
+            }
+        }
+
+        let [yaw, pitch] = direction;
+        let horizontal = pitch.cos();
+        Ok(Value::Vector([
+            rounded(yaw.sin() * horizontal),
+            rounded(-pitch.sin()),
+            rounded(yaw.cos() * horizontal),
+        ]))
     }
 
     fn ray_cast(
@@ -2520,6 +3362,10 @@ impl Evaluator {
                         _ => unreachable!(),
                     };
                     Value::Float(rounded(value))
+                }
+                49 => {
+                    let (y, x) = pair(&mut stack, pc)?;
+                    Value::Float(rounded(to_float(&y).atan2(to_float(&x)).to_degrees()))
                 }
                 50 | 51 => {
                     let value = pop(&mut stack, pc)?;

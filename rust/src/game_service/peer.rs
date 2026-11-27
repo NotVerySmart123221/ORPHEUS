@@ -26,6 +26,25 @@ pub(super) struct Peer {
 pub(super) struct CombatUi {
     notices: VecDeque<PendingCombatNotice>,
     replacements: VecDeque<(Duration, BotReplacement)>,
+    /// Recent `(shooter_body, target, shot_frame, critical, killed)` hit notices
+    /// already admitted to the wire, preventing multi-pellet shotguns (Doomfist,
+    /// Reaper) whose pellets land across adjacent ticks from replaying hit dings.
+    recent_hit_notices: VecDeque<(BodyId, u32, u32, bool, bool)>,
+    /// Recent `(healer_body, target, last_frame)` heal confirmation notices
+    /// throttled to ~100ms (6 ticks) so continuous beams emit crisp heal cues.
+    recent_heal_notices: VecDeque<(BodyId, u32, u32)>,
+}
+
+impl CombatUi {
+    pub(super) fn queue_legacy(&mut self, notice: CombatNotice) {
+        if self.notices.len() >= MAX_PENDING_COMBAT_NOTICES {
+            self.notices.pop_front();
+        }
+        self.notices.push_back(PendingCombatNotice {
+            notice,
+            audience: CombatAudience::Legacy,
+        });
+    }
 }
 
 struct AuthoredCueIdentity {
@@ -63,8 +82,10 @@ impl PendingCombatNotice {
                 body == Some(*recipient)
             }
             CombatAudience::Authored(cue) => {
-                let CombatNotice::Voice { listener, .. } = self.notice else {
-                    return false;
+                let listener = match self.notice {
+                    CombatNotice::Voice { listener, .. } => listener,
+                    CombatNotice::DamageReceived { victim, .. } => victim,
+                    _ => return false,
                 };
                 body == Some(cue.listener)
                     && cue.listener.entity == listener
@@ -140,7 +161,6 @@ impl Peer {
     }
 
     pub(super) fn bot_hit(&mut self, hit: BotHit) {
-        self.world.queue_health(hit.health);
         if let Some(body) = self
             .world
             .active_body_id()
@@ -153,6 +173,147 @@ impl Peer {
     }
 
     pub(super) fn queue_shooter_notice(&mut self, body: BodyId, notice: CombatNotice) {
+        if let CombatNotice::Hit {
+            target,
+            dealt,
+            critical,
+            killed,
+            shot_frame,
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::Hit {
+                        dealt: existing_dealt,
+                        critical: existing_critical,
+                        killed: existing_killed,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::Hit {
+                            target: existing_target,
+                            shot_frame: existing_frame,
+                            ..
+                        }
+                    ) if *existing_body == body
+                        && *existing_target == target
+                        && *existing_frame == shot_frame
+                )
+            }) {
+                *existing_dealt += dealt;
+                *existing_critical |= critical;
+                *existing_killed |= killed;
+                return;
+            }
+            if let Some(recent) = self
+                .combat_ui
+                .recent_hit_notices
+                .iter_mut()
+                .rev()
+                .find(|entry| {
+                    entry.0 == body && entry.1 == target && entry.2.abs_diff(shot_frame) <= 2
+                })
+            {
+                let upgrades_audio = (critical && !recent.3) || (killed && !recent.4);
+                recent.3 |= critical;
+                recent.4 |= killed;
+                if !upgrades_audio {
+                    return;
+                }
+            } else {
+                if self.combat_ui.recent_hit_notices.len() >= 32 {
+                    self.combat_ui.recent_hit_notices.pop_front();
+                }
+                self.combat_ui
+                    .recent_hit_notices
+                    .push_back((body, target, shot_frame, critical, killed));
+            }
+        } else if let CombatNotice::HealConfirm {
+            target,
+            amount,
+            shot_frame,
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::HealConfirm {
+                        amount: existing_amount,
+                        shot_frame: existing_frame,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::HealConfirm {
+                            target: existing_target,
+                            ..
+                        }
+                    ) if *existing_body == body && *existing_target == target
+                )
+            }) {
+                *existing_amount += amount;
+                *existing_frame = (*existing_frame).max(shot_frame);
+                return;
+            }
+            if let Some(recent) = self
+                .combat_ui
+                .recent_heal_notices
+                .iter_mut()
+                .rev()
+                .find(|entry| entry.0 == body && entry.1 == target)
+            {
+                if shot_frame.saturating_sub(recent.2) < 6 {
+                    return;
+                }
+                recent.2 = shot_frame;
+            } else {
+                if self.combat_ui.recent_heal_notices.len() >= 32 {
+                    self.combat_ui.recent_heal_notices.pop_front();
+                }
+                self.combat_ui
+                    .recent_heal_notices
+                    .push_back((body, target, shot_frame));
+            }
+        } else if let CombatNotice::HealEvent {
+            target,
+            amount,
+            full,
+            ..
+        } = notice
+        {
+            if let Some(PendingCombatNotice {
+                notice:
+                    CombatNotice::HealEvent {
+                        amount: existing_amount,
+                        full: existing_full,
+                        ..
+                    },
+                ..
+            }) = self.combat_ui.notices.iter_mut().rev().find(|pending| {
+                matches!(
+                    (&pending.audience, &pending.notice),
+                    (
+                        CombatAudience::Shooter(existing_body),
+                        CombatNotice::HealEvent {
+                            target: existing_target,
+                            ..
+                        }
+                    ) if *existing_body == body && *existing_target == target
+                )
+            }) {
+                *existing_amount += amount;
+                *existing_full |= full;
+                return;
+            }
+        }
         self.queue_notice(notice, CombatAudience::Shooter(body));
     }
 
@@ -165,6 +326,7 @@ impl Peer {
         {
             // Intermediate generations held here were never published to this peer.
             pending.created = replacement.created;
+            pending.waits_for_presentation = replacement.waits_for_presentation;
         } else if self.world.tracks_current_bot(replacement.retired) {
             self.combat_ui
                 .replacements
@@ -268,11 +430,13 @@ impl Peer {
                 CombatAudience::Authored(cue) => Some(cue),
                 _ => None,
             };
+            let is_voice = matches!(notice, CombatNotice::Voice { .. });
             if authored.is_some_and(|cue| {
                 !self.world.identity_ready(cue.listener.entity)
-                    || self.authored_cue_ordinal.is_some_and(|ordinal| {
-                        self.egress.oldest_pending_reliable() <= u64::from(ordinal)
-                    })
+                    || (is_voice
+                        && self.authored_cue_ordinal.is_some_and(|ordinal| {
+                            self.egress.oldest_pending_reliable() <= u64::from(ordinal)
+                        }))
             }) {
                 self.combat_ui.notices.push_back(pending);
                 continue;
@@ -286,9 +450,24 @@ impl Peer {
                 self.combat_ui.notices.push_back(pending);
                 continue;
             }
-            let bytes = notice.encode(schemas)?;
+            let bytes = match notice.encode(schemas) {
+                Ok(bytes) => bytes,
+                Err(crate::game_messages::ChannelError::UnknownMessage { .. })
+                    if matches!(
+                        notice,
+                        CombatNotice::HealEvent { .. }
+                            | CombatNotice::ScorePopup { .. }
+                            | CombatNotice::HighlightHeader { .. }
+                            | CombatNotice::CommendationCardNotice { .. }
+                            | CombatNotice::CardVoteUpdate { .. }
+                    ) =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             let ordinal = self.egress.queue_reliable(bytes)?;
-            if authored.is_some() {
+            if authored.is_some() && is_voice {
                 self.authored_cue_ordinal = Some(ordinal);
             }
             #[cfg(feature = "inspector")]
@@ -303,6 +482,17 @@ impl Peer {
                     } => {
                         crate::owner_trace::playtest(format_args!(
                             "combat hit admitted owner={:08X} frame={shot_frame} target={target:08X} dealt={dealt} critical={critical} killed={killed} ordinal={ordinal}",
+                            self.world.owner(),
+                        ));
+                    }
+                    CombatNotice::DamageReceived {
+                        source,
+                        victim,
+                        dealt,
+                        ..
+                    } => {
+                        crate::owner_trace::playtest(format_args!(
+                            "received damage admitted owner={:08X} source={source:08X} victim={victim:08X} dealt={dealt} ordinal={ordinal}",
                             self.world.owner(),
                         ));
                     }

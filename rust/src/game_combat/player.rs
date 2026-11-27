@@ -1,22 +1,22 @@
 //! Room-authoritative player bodies and generation-checked lifecycle in `RoomSimulation`.
 
-use std::{collections::BTreeMap, io, sync::Arc};
+use std::{collections::BTreeMap, io, sync::Arc, time::Duration};
 
 use bevy_ecs::component::Component;
 
 use crate::{
     game_combat::{
-        AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, HealingPulse,
-        HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation, SampledBody,
-        eligible_target, eye_height, script_eye_position,
+        AdmittedFlight, AppliedDamage, BioticField, BotHit, CombatError, EliminationStreak,
+        HealingPulse, HealthDamageEvidence, HealthEventContext, PosedHitscan, RoomSimulation,
+        SampledBody, script_eye_position,
     },
     game_combat_messages::CombatNotice,
     game_hitscan::{HurtPose, Impact, TargetHistory, TargetPose, ViewFrame},
     game_instance::TeamMemberCounts,
     game_projectiles::ProjectileToken,
     game_replication::{BodyId, OwnerBodyRuntime, OwnerRoomActivity},
-    junkenstein_messages::{DefenderMessage, DefenderSighting},
     mover::Mover,
+    pve_encounter::messages::{DefenderMessage, DefenderSighting},
     script_enemy::EnemyTarget,
     script_init::HealthTargetFacts,
     script_snapshot_wire::SceneProjection,
@@ -64,19 +64,27 @@ pub(crate) enum PlayerBodyEvent {
 pub(crate) struct PlayerBodyState {
     pub(crate) id: BodyId,
     pub(crate) owner: u32,
+    pub(crate) name: String,
     pub(crate) slot: u8,
     pub(crate) team: u8,
     pub(crate) hero: u64,
-    pub(super) body_template: u64,
+    pub(crate) body_template: u64,
+    pub(super) elimination_streak: Option<EliminationStreak>,
     pub(crate) mover: Mover,
     pub(crate) history: TargetHistory,
     pub(crate) runtime: Option<Box<dyn OwnerBodyRuntime>>,
+    runtime_halted: bool,
     halted_vitals: Option<Vitals>,
     pub(crate) frame: u32,
     pub(crate) fields: Vec<(ProjectileToken, BioticField)>,
     pub(crate) launches: Vec<AdmittedFlight>,
-    pub(crate) hitscan: Vec<PosedHitscan>,
+    pub(crate) hitscan: Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)>,
     pub(crate) observer_create: Option<EntityUpdate>,
+    pub(crate) respawn_at: Option<Duration>,
+    pub(crate) last_buttons: u32,
+    pub(crate) pending_pressed_buttons: u32,
+    pub(crate) pending_released_buttons: u32,
+    pub(super) recent_hit_feedback: std::collections::VecDeque<(u32, u32, bool, bool)>,
 }
 
 impl PlayerBodyState {
@@ -95,20 +103,54 @@ impl PlayerBodyState {
         Self {
             id,
             owner,
+            name: format!("player_{owner:08x}"),
             slot,
             team,
             hero,
             body_template: 0,
+            elimination_streak: None,
             mover,
             history: TargetHistory::new(None),
             runtime,
+            runtime_halted: false,
             halted_vitals: None,
             frame,
             fields: Vec::new(),
             launches: Vec::new(),
             hitscan: Vec::new(),
             observer_create,
+            respawn_at: None,
+            last_buttons: 0,
+            pending_pressed_buttons: 0,
+            pending_released_buttons: 0,
+            recent_hit_feedback: std::collections::VecDeque::new(),
         }
+    }
+
+    pub(super) fn should_emit_hit_feedback(
+        &mut self,
+        target: u32,
+        frame: u32,
+        critical: bool,
+        killed: bool,
+    ) -> bool {
+        if let Some(entry) = self
+            .recent_hit_feedback
+            .iter_mut()
+            .rev()
+            .find(|e| e.0 == target && e.1.abs_diff(frame) <= 2)
+        {
+            let upgrades = (critical && !entry.2) || (killed && !entry.3);
+            entry.2 |= critical;
+            entry.3 |= killed;
+            return upgrades;
+        }
+        if self.recent_hit_feedback.len() >= 32 {
+            self.recent_hit_feedback.pop_front();
+        }
+        self.recent_hit_feedback
+            .push_back((target, frame, critical, killed));
+        true
     }
 
     pub(crate) fn with_body_template(mut self, body_template: u64) -> Self {
@@ -116,8 +158,17 @@ impl PlayerBodyState {
         self
     }
 
+    #[cfg(all(test, feature = "lua-mods"))]
+    pub(crate) fn set_test_halted_vitals(&mut self, vitals: Vitals) {
+        self.halted_vitals = Some(vitals);
+    }
+
     pub(crate) fn alive(&self) -> bool {
         self.vitals().is_none_or(|vitals| vitals.death().is_none())
+    }
+
+    pub(crate) fn needs_runtime_restart(&self) -> bool {
+        self.runtime_halted && self.alive()
     }
 
     pub(crate) fn vitals(&self) -> Option<&Vitals> {
@@ -182,7 +233,7 @@ impl PlayerBodyState {
             feet: self.mover.pose().position,
             height,
             radius,
-            eye: eye_height(self.hero, self.mover.crouched()),
+            eye: self.mover.eye_height(),
         }
     }
 
@@ -302,6 +353,9 @@ impl RoomSimulation {
     ) -> Option<(Vec<HealingPulse>, Vec<ProjectileToken>)> {
         let (pulses, expired_tokens, healed) = self.player_body_mut(owner)?.advance_fields(tick);
         self.record_health_applied(owner.entity, owner.entity, healed, false, None);
+        if healed > 0.0 {
+            self.deliver_applied_heal(owner.entity, owner.entity, healed);
+        }
         Some((pulses, expired_tokens))
     }
 
@@ -315,13 +369,28 @@ impl RoomSimulation {
             .ok_or_else(|| invalid("player body lifetime exhausted"))
     }
 
-    pub(crate) fn set_cassidy_protected(&mut self, protected: bool) {
-        self.cassidy_protected = protected;
+    pub(crate) fn set_protected_hero(&mut self, protected: Option<u64>) {
+        self.protected_hero = protected;
     }
 
     pub(crate) fn spawn_player_body(
         &mut self,
+        state: PlayerBodyState,
+    ) -> io::Result<PlayerBodyHandle> {
+        self.spawn_player_body_inner(state, false)
+    }
+
+    pub(crate) fn swap_player_body(
+        &mut self,
+        state: PlayerBodyState,
+    ) -> io::Result<PlayerBodyHandle> {
+        self.spawn_player_body_inner(state, true)
+    }
+
+    fn spawn_player_body_inner(
+        &mut self,
         mut state: PlayerBodyState,
+        transfer_pets: bool,
     ) -> io::Result<PlayerBodyHandle> {
         let id = state.id;
         let owner = state.owner;
@@ -357,7 +426,8 @@ impl RoomSimulation {
             }
         }
         if let Some(previous) = self.players_by_owner.shift_remove(&owner) {
-            self.despawn_player_handle(previous);
+            let transfer_to = transfer_pets.then_some(id.entity);
+            self.despawn_player_handle_inner(previous, transfer_to);
         }
         self.player_generations.insert(owner, id.generation);
         self.latest_wire_generations
@@ -369,12 +439,26 @@ impl RoomSimulation {
             }
             state.mover.set_authored_facing(runtime.authored_facing());
         }
+        if let Some(name) = self.player_names.get(&owner) {
+            state.name = name.clone();
+        }
         let observer_create = state.observer_create.take();
+        let spawn_frame = state.frame;
+        let spawn_hero = state.hero;
+        let spawn_team = state.team;
+        let spawn_name = state.name.clone();
         let entity = self.world.spawn(state).id();
         let handle = PlayerBodyHandle { entity, id };
         self.players_by_wire.insert(id.entity, entity);
         self.players_by_owner.insert(owner, handle);
         self.player_targets_active = true;
+        self.scoreboard.register_player(
+            owner,
+            spawn_team,
+            spawn_hero,
+            spawn_name,
+            f64::from(spawn_frame) * crate::game_clock::TICK_PERIOD.as_secs_f64(),
+        );
         if let Some(update) = observer_create {
             self.player_events.push(PlayerBodyEvent::Created {
                 owner,
@@ -382,6 +466,13 @@ impl RoomSimulation {
                 update: Box::new(update),
             });
         }
+        if !transfer_pets {
+            self.queue_hero_spawn_voice(owner, id, spawn_hero, 0, spawn_frame);
+        }
+        #[cfg(feature = "lua-mods")]
+        self.mod_on_player_spawn(id, spawn_frame);
+        #[cfg(not(feature = "lua-mods"))]
+        let _ = spawn_frame;
         self.debug_assert_player_invariants();
         Ok(handle)
     }
@@ -406,6 +497,14 @@ impl RoomSimulation {
     }
 
     fn despawn_player_handle(&mut self, handle: PlayerBodyHandle) -> bool {
+        self.despawn_player_handle_inner(handle, None)
+    }
+
+    fn despawn_player_handle_inner(
+        &mut self,
+        handle: PlayerBodyHandle,
+        transfer_pets_to: Option<u32>,
+    ) -> bool {
         let Some(state) = self.world.get::<PlayerBodyState>(handle.entity) else {
             return false;
         };
@@ -416,6 +515,10 @@ impl RoomSimulation {
         let id = state.id;
         if self.players_by_wire.get(&id.entity).copied() == Some(handle.entity) {
             self.players_by_wire.shift_remove(&id.entity);
+            self.scripted_health
+                .retain(|update| update.entity != id.entity);
+            self.observer_player_health
+                .retain(|(_, update)| update.entity != id.entity);
         }
         if self
             .players_by_owner
@@ -424,7 +527,13 @@ impl RoomSimulation {
         {
             self.players_by_owner.shift_remove(&owner);
         }
+        self.actor_statuses.remove(&id.entity);
         Arc::make_mut(&mut self.retired_entity_ids).insert(id.entity);
+        if let Some(new_owner) = transfer_pets_to {
+            self.transfer_owner_pets_and_deployables(id.entity, new_owner);
+        } else {
+            self.retire_owner_pets_and_deployables(id.entity);
+        }
         self.world.despawn(handle.entity);
         self.player_events
             .push(PlayerBodyEvent::Retired { owner, id });
@@ -442,6 +551,11 @@ impl RoomSimulation {
 
     pub(crate) fn retire_player_owner(&mut self, owner: u32) -> Option<BodyId> {
         let handle = self.players_by_owner.shift_remove(&owner)?;
+        #[cfg(feature = "lua-mods")]
+        {
+            let tick = self.spatial_frame.as_ref().map_or(0, |(t, _)| *t);
+            self.mod_on_player_leave(owner, handle.id, tick);
+        }
         self.despawn_player_handle(handle).then_some(handle.id)
     }
 
@@ -464,6 +578,7 @@ impl RoomSimulation {
         state.mover.set_authored_facing(None);
         state.mover.clear_pending_script_motion();
         if let Some(mut runtime) = state.runtime.take() {
+            state.runtime_halted = true;
             state.halted_vitals = runtime.take_vitals();
             if let Some(vitals) = &mut state.halted_vitals {
                 vitals.clear_temporary_shields();
@@ -544,22 +659,28 @@ impl RoomSimulation {
         std::mem::take(&mut self.observer_player_health)
     }
 
-    pub(crate) fn player_has_deadeye(&self, id: BodyId) -> bool {
-        self.player_body(id)
-            .and_then(|state| state.runtime.as_ref())
-            .is_some_and(|runtime| runtime.has_deadeye())
+    pub(crate) fn schedule_player_respawn(&mut self, body: BodyId, due: Duration) {
+        if let Some(state) = self.player_body_mut(body) {
+            if !state.alive() && state.respawn_at.is_none() {
+                state.respawn_at = Some(due);
+            }
+        }
     }
 
-    pub(crate) fn set_player_deadeye_targets(
-        &mut self,
-        id: BodyId,
-        scene: crate::script_player::DeadeyeScene,
-    ) {
-        if let Some(runtime) = self
-            .player_body_mut(id)
-            .and_then(|state| state.runtime.as_mut())
-        {
-            runtime.set_deadeye_targets(scene);
+    pub(crate) fn pending_player_respawn(&self, body: BodyId) -> Option<Duration> {
+        self.player_body(body)
+            .filter(|state| !state.alive())
+            .and_then(|state| state.respawn_at)
+    }
+
+    pub(crate) fn is_player_respawn_due(&self, body: BodyId, now: Duration) -> bool {
+        self.pending_player_respawn(body)
+            .is_some_and(|due| now >= due)
+    }
+
+    pub(crate) fn clear_player_respawn(&mut self, body: BodyId) {
+        if let Some(state) = self.player_body_mut(body) {
+            state.respawn_at = None;
         }
     }
 
@@ -584,6 +705,34 @@ impl RoomSimulation {
         }
     }
 
+    pub(crate) fn deliver_coalesced_hits(&mut self, owner: u32, hits: &[BotHit]) {
+        let mut merged: Vec<AppliedDamage> = Vec::new();
+        for hit in hits {
+            if let Some(existing) = merged.iter_mut().find(|d| {
+                d.source == hit.damage.source
+                    && d.target_facts.target == hit.damage.target_facts.target
+            }) {
+                existing.amount += hit.damage.amount;
+                for loss in &hit.damage.named_pool_losses {
+                    if let Some(prev) = existing
+                        .named_pool_losses
+                        .iter_mut()
+                        .find(|l| l.identifier == loss.identifier)
+                    {
+                        prev.amount += loss.amount;
+                    } else {
+                        existing.named_pool_losses.push(loss.clone());
+                    }
+                }
+            } else {
+                merged.push(hit.damage.clone());
+            }
+        }
+        for damage in merged {
+            self.deliver_applied_damage(owner, damage);
+        }
+    }
+
     pub(crate) fn deliver_applied_damage(&mut self, owner: u32, damage: AppliedDamage) {
         if let Some(state) = self.player_body_by_owner_mut(owner) {
             if state.id.entity == damage.source {
@@ -599,6 +748,93 @@ impl RoomSimulation {
         }
     }
 
+    pub(crate) fn deliver_applied_damage_by_wire(&mut self, damage: AppliedDamage) {
+        if let Some(id) = self.player_handle_for_wire(damage.source) {
+            if let Some(owner) = self.player_body(id).map(|body| body.owner) {
+                self.deliver_applied_damage(owner, damage);
+            }
+        }
+    }
+
+    pub(crate) fn deliver_applied_heal(&mut self, source: u32, target: u32, amount: f64) {
+        if !amount.is_finite() || amount <= 0.0 {
+            return;
+        }
+        let mut heal_cue = None;
+        if let Some(id) = self.player_handle_for_wire(source) {
+            if let Some(state) = self.player_body_mut(id) {
+                if let Some(runtime) = &mut state.runtime {
+                    if let Err(error) = runtime.receive_applied_heal(source, target, amount) {
+                        eprintln!(
+                            "Owner heal event failed for {:08x}: {error}",
+                            state.id.entity
+                        );
+                    }
+                }
+                if target != source {
+                    heal_cue = Some((state.owner, state.id, state.frame));
+                }
+            }
+        }
+        if let Some((owner, listener, shot_frame)) = heal_cue {
+            let now_secs = f64::from(shot_frame) * crate::game_clock::TICK_PERIOD.as_secs_f64();
+            self.scoreboard.record_heal(owner, amount, now_secs);
+            self.replay.record_event(crate::game_replay::ReplayEvent {
+                tick: shot_frame,
+                kind: crate::game_replay::ReplayEventKind::HealBurst {
+                    healer: source,
+                    amount,
+                },
+            });
+            if let Some(target_sample) = self.sample_health_body(target) {
+                let target_full = self
+                    .by_wire
+                    .get(&target)
+                    .and_then(|&entity| self.world.get::<super::BotState>(entity))
+                    .map(|b| b.vitals.total() + 0.5 >= b.vitals.maximum())
+                    .or_else(|| {
+                        self.players_by_wire
+                            .get(&target)
+                            .and_then(|&entity| self.world.get::<PlayerBodyState>(entity))
+                            .and_then(|p| p.vitals())
+                            .map(|v| v.total() + 0.5 >= v.maximum())
+                    })
+                    .unwrap_or(false);
+                let target_id = target_sample.identity();
+                self.player_cues.push(super::PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: target_id,
+                    notice: CombatNotice::HealConfirm {
+                        target,
+                        amount,
+                        shot_frame,
+                    },
+                });
+                self.player_cues.push(super::PlayerRoomCue {
+                    owner,
+                    listener,
+                    source: target_id,
+                    notice: CombatNotice::HealEvent {
+                        healer: source,
+                        target,
+                        amount,
+                        full: target_full,
+                        loadout: 0,
+                    },
+                });
+            }
+            if amount >= 15.0 && self.by_wire.contains_key(&target) {
+                self.schedule_bot_voice_reply(
+                    target,
+                    crate::actor_voice::STIMULUS_THANKS,
+                    24,
+                    shot_frame,
+                );
+            }
+        }
+    }
+
     pub(crate) fn take_player_projectile_launches(
         &mut self,
         id: BodyId,
@@ -607,7 +843,10 @@ impl RoomSimulation {
         Some(std::mem::take(&mut state.launches))
     }
 
-    pub(crate) fn take_player_hitscan(&mut self, id: BodyId) -> Vec<PosedHitscan> {
+    pub(crate) fn take_player_hitscan(
+        &mut self,
+        id: BodyId,
+    ) -> Vec<(PosedHitscan, crate::game_hitscan::HitTargetPolicy)> {
         self.player_body_mut(id)
             .map_or_else(Vec::new, |state| std::mem::take(&mut state.hitscan))
     }
@@ -768,12 +1007,7 @@ impl RoomSimulation {
                 if !message.accepts_body(id.entity) {
                     continue;
                 }
-                let cloned_deadeye = if self.player_has_deadeye(id) {
-                    deadeye.cloned()
-                } else {
-                    None
-                };
-                self.deliver_player_defender_message(id, cloned_deadeye, message.clone());
+                self.deliver_player_defender_message(id, deadeye.cloned(), message.clone());
             }
         }
     }
@@ -785,13 +1019,17 @@ impl RoomSimulation {
         source: Death,
         impact: Option<(&Impact, &HealthTargetFacts)>,
     ) -> Option<(u32, Damage, Option<EntityUpdate>)> {
-        let cassidy_protected = self.cassidy_protected;
+        let protected_hero = self.protected_hero;
         let state = self.player_body_mut(id)?;
-        if cassidy_protected && state.hero == crate::game_heroes::CASSIDY {
+        if protected_hero == Some(state.hero) {
             return None;
         }
         let owner = state.owner;
         let entity = state.id.entity;
+        let had_armor_or_shield = state.vitals().is_some_and(|v| {
+            v.amount(Some(crate::vitals::PoolKind::Armour), false) > 0.0
+                || v.amount(Some(crate::vitals::PoolKind::Shields), false) > 0.0
+        });
         let outcome = state.receive_damage(amount, source);
         let health = state.take_health_update().map(|component| EntityUpdate {
             entity,
@@ -824,6 +1062,21 @@ impl RoomSimulation {
                 frame: Some(source.frame),
             }),
         );
+        if !outcome.killed {
+            let critical = impact.is_some_and(|(impact, _)| impact.critical);
+            let armor_or_shield =
+                had_armor_or_shield || outcome.named_pool_losses.iter().any(|l| l.amount > 0.0);
+            self.record_received_damage(
+                owner,
+                id,
+                source.killer,
+                outcome.dealt as f32,
+                impact.and_then(|(impact, _)| impact.geometry),
+                critical,
+                armor_or_shield,
+                false,
+            );
+        }
         if let Some(error) = death_script_fault {
             eprintln!("player {entity:08X} death script stopped: {error}");
             self.retire_faulted_player_script(id);
@@ -844,13 +1097,8 @@ impl RoomSimulation {
         let state = self
             .world
             .get::<super::BotState>(*self.by_wire.get(&wire)?)?;
-        let mut target = state.health_target_facts();
-        if let Some(script) = &state.stock_script {
-            target.tags = script.target_tags();
-            target.script_state = script.script_state();
-        }
         Some(super::DeathSourceFacts {
-            target,
+            target: state.health_target_facts(),
             velocity: state.bot.velocity,
         })
     }
@@ -951,34 +1199,74 @@ impl RoomSimulation {
         }
     }
 
-    pub(super) fn push_player_hitscan_candidates(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn push_player_hitscan_candidates_with_policy(
         &self,
         source: u32,
         team: u8,
+        policy: crate::game_hitscan::HitTargetPolicy,
         queries: &crate::scene_assets::BotQueries<'_>,
         view: ViewFrame,
         visible: &impl Fn(u32) -> bool,
         candidates: &mut Vec<(u32, HurtPose)>,
     ) {
+        #[cfg(feature = "lua-mods")]
+        let free_for_all = queries.free_for_all() || self.mod_friendly_fire();
+        #[cfg(not(feature = "lua-mods"))]
+        let free_for_all = queries.free_for_all();
         for &entity in self.players_by_wire.values() {
             let Some(state) = self.world.get::<PlayerBodyState>(entity) else {
                 continue;
             };
-            if !eligible_target(
-                state.id.entity,
-                state.alive(),
-                state.team,
-                source,
-                team,
-                queries.free_for_all(),
-            ) || !visible(state.id.entity)
-            {
+            if !state.alive() || state.id.entity == source || !visible(state.id.entity) {
+                continue;
+            }
+            // In friendly-fire mods, keep heal-only ally beams/shots (e.g. Ana) treating teammates
+            // as allies so healing still lands while damaging shots can hit everyone.
+            let heal_only_ally = policy.affects_allies && !policy.affects_enemies;
+            let same_team = if heal_only_ally {
+                state.team == team
+            } else {
+                !free_for_all && state.team == team
+            };
+            let allowed = if same_team {
+                policy.affects_allies
+            } else {
+                policy.affects_enemies
+            };
+            if !allowed {
                 continue;
             }
             if let Some(pose) = state.history.at(view, state.target_pose()) {
+                let m_pose = state.mover.pose();
+                let speed = m_pose.velocity[0].hypot(m_pose.velocity[2]);
+                let postures = self.ability_rules.postures;
+                let is_ball_roll = (state.body_template == postures.wrecking_ball_body
+                    || pose.radius >= postures.wrecking_ball_roll_min_radius)
+                    && pose.height <= postures.wrecking_ball_roll_max_height
+                    && speed > postures.wrecking_ball_roll_min_speed;
+                let posture = if is_ball_roll {
+                    crate::game_hitscan::HurtPosture::Ball
+                } else if state.body_template == postures.bastion_body
+                    && state.mover.crouched()
+                    && speed < postures.bastion_sentry_max_speed
+                {
+                    crate::game_hitscan::HurtPosture::Sentry
+                } else {
+                    crate::game_hitscan::HurtPosture::Standard
+                };
+                let stance = crate::game_hitscan::SkeletalStance {
+                    yaw: m_pose.yaw,
+                    speed,
+                    crouched: state.mover.crouched(),
+                    head_protected: is_ball_roll,
+                    posture,
+                };
                 candidates.push((
                     state.id.entity,
-                    queries.hurt_pose(state.body_template, pose),
+                    queries
+                        .hurt_pose(state.body_template, pose)
+                        .with_stance(stance),
                 ));
             }
         }
@@ -1019,15 +1307,44 @@ impl RoomSimulation {
                 .get(&id.entity)
                 .expect("checked wire handle"),
         })?;
-        if (self.cassidy_protected && state.hero == crate::game_heroes::CASSIDY) || !state.alive() {
+        if self.protected_hero == Some(state.hero) || !state.alive() {
             return Ok(None);
         }
         let victim_team = state.team;
         let fallback_health = state.vitals().map(Vitals::cumulative_component);
         let target_facts = state.health_target_facts();
+        let (attacker_out_dmg, _, _, _, _) = self.actor_combat_modifiers(source);
+        let (_, victim_in_dmg, _, _, _) = self.actor_combat_modifiers(impact.entity);
+        let invulnerable = self
+            .actor_statuses
+            .get(&impact.entity)
+            .and_then(|s| s.invulnerable_until)
+            .is_some_and(|until| context.tick < until);
+        let raw_damage = if invulnerable {
+            0.0
+        } else {
+            impact.damage * attacker_out_dmg * victim_in_dmg
+        };
+        #[cfg(feature = "lua-mods")]
+        let damage_amount = self.mod_evaluate_damage(
+            source,
+            impact.entity,
+            raw_damage,
+            impact.critical,
+            false,
+            0,
+            context.tick,
+            context.now,
+        );
+        #[cfg(not(feature = "lua-mods"))]
+        let damage_amount = raw_damage;
+        if damage_amount <= 0.0 {
+            return Ok(None);
+        }
+        self.wake_sleeping_actor(impact.entity, context.tick)?;
         let Some((owner, outcome, health)) = self.damage_player_body_by_wire(
             id,
-            impact.damage,
+            damage_amount,
             Death {
                 time: context.now.as_secs_f64(),
                 frame: context.tick,
@@ -1051,10 +1368,18 @@ impl RoomSimulation {
         }) else {
             return Ok(None);
         };
-        self.scripted_health.push(health.clone());
-        self.record_actor_hurt_voice(id.entity, false, impact.critical, killed, context.tick);
+        self.scripted_health.push(health);
+        self.record_actor_hurt_voice(
+            id.entity,
+            false,
+            source,
+            impact.critical,
+            killed,
+            context.tick,
+        );
         let self_hit = source == id.entity;
         if killed {
+            self.actor_statuses.remove(&id.entity);
             self.player_deaths.push(PlayerDeath {
                 owner,
                 body: id,
@@ -1062,6 +1387,14 @@ impl RoomSimulation {
                 killed_by: !self_hit,
             });
             self.record_enemy_elimination(source, id.entity, victim_team, context.tick);
+            #[cfg(feature = "lua-mods")]
+            self.mod_on_kill(
+                source,
+                id.entity,
+                impact.critical,
+                context.tick,
+                context.now,
+            );
         }
         if self_hit {
             return Ok(None);
@@ -1085,9 +1418,11 @@ impl RoomSimulation {
                 killed.then_some(CombatNotice::Elimination {
                     killer: source,
                     victim: id.entity,
+                    loadout: impact.loadout.unwrap_or(0),
+                    fire: 100,
+                    critical: impact.critical,
                 }),
             ],
-            health,
         }))
     }
 
@@ -1097,12 +1432,37 @@ impl RoomSimulation {
         skip_wire: Option<u32>,
         source: Option<SampledBody>,
         pulses: &[HealingPulse],
-        updates: &mut Vec<EntityUpdate>,
     ) {
+        #[cfg(feature = "lua-mods")]
+        let healing_scale = self.mod_healing_scale();
+        let source_out_heal = source.map_or(1.0, |owner| self.actor_combat_modifiers(owner.wire).2);
+        let current_tick = self.spatial_frame.as_ref().map_or(0, |(tick, _)| *tick);
+        let mut credited_heals = Vec::new();
         for (&wire, &entity) in &self.players_by_wire {
             if Some(wire) == skip_wire {
                 continue;
             }
+            let status_scale = match self.actor_statuses.get(&wire) {
+                Some(status)
+                    if status
+                        .anti_heal_until
+                        .is_some_and(|until| current_tick < until) =>
+                {
+                    0.0
+                }
+                Some(status)
+                    if status
+                        .heal_boost_until
+                        .is_some_and(|until| current_tick < until) =>
+                {
+                    1.5
+                }
+                _ => 1.0,
+            };
+            if status_scale <= 0.0 {
+                continue;
+            }
+            let (_, _, _, victim_in_heal, _) = self.actor_combat_modifiers(wire);
             let Some(state) = self.world.get_mut::<PlayerBodyState>(entity) else {
                 continue;
             };
@@ -1110,33 +1470,45 @@ impl RoomSimulation {
             if state.id.entity != wire || state.team != team || !state.alive() {
                 continue;
             }
-            let amount = HealingPulse::total_at(pulses, state.target_pose());
+            let amount = HealingPulse::total_at(pulses, state.target_pose())
+                * source_out_heal
+                * victim_in_heal
+                * status_scale;
+            #[cfg(feature = "lua-mods")]
+            let amount = amount * healing_scale;
             if amount <= 0.0 {
                 continue;
             }
-            if state.vitals().is_some() {
-                let healed = state.heal(amount);
-                if let Some(component) = state.take_health_update() {
-                    updates.push(EntityUpdate {
-                        entity: wire,
-                        operation: Some(Operation::Update(vec![component])),
-                        ..EntityUpdate::default()
-                    });
-                }
-                let target = SampledBody { wire, entity };
-                let room_status = self.sample_health_target_room_status(target);
-                self.health_events.stage(
-                    source,
-                    target,
-                    healed,
-                    false,
-                    HealthEventContext {
-                        world: &self.world,
-                        damage: None,
-                    },
-                    room_status,
-                );
+            let healed = state.heal(amount);
+            if healed <= 0.0 {
+                continue;
             }
+            if let Some(component) = state.take_health_update() {
+                self.scripted_health.push(EntityUpdate {
+                    entity: wire,
+                    operation: Some(Operation::Update(vec![component])),
+                    ..EntityUpdate::default()
+                });
+            }
+            if let Some(owner_body) = source {
+                credited_heals.push((owner_body.wire, wire, healed));
+            }
+            let target = SampledBody { wire, entity };
+            let room_status = self.sample_health_target_room_status(target);
+            self.health_events.stage(
+                source,
+                target,
+                healed,
+                false,
+                HealthEventContext {
+                    world: &self.world,
+                    damage: None,
+                },
+                room_status,
+            );
+        }
+        for (healer, target, healed) in credited_heals {
+            self.deliver_applied_heal(healer, target, healed);
         }
     }
 

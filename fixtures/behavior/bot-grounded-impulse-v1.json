@@ -5,6 +5,10 @@
   "impulse": [1.0, 0.0, 0.0],
   "arrival_ticks": [12, 24],
   "max_travel_per_tick": 0.016,
+  "settling": {
+    "tick": 12,
+    "velocity": [1e-21, 0.0, -1e-21]
+  },
   "overlap": {
     "blocker_offset": 0.15,
     "impulse": [0.0, 7.0, 0.0],

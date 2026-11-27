@@ -25,10 +25,28 @@ use super::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SprayPlacement {
+    /// Point and normal are local to the attachment when one is present.
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    /// The original spray direction stays in world space.
+    pub direction: [f32; 3],
+    pub attachment: Option<SprayAttachment>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SprayAttachment {
+    pub entity: u32,
+    /// None selects the entity root transform.
+    pub key: Option<NonZeroU32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StateKind {
     RollMovementParameter,
     ExplosionContact,
     TrackedTargets,
+    GenericTrackedTargets,
     ViewTargets {
         next_sample: u32,
     },
@@ -36,8 +54,15 @@ pub enum StateKind {
     WitchStaffEffect,
     WitchStaffHealing,
     SummonerBeamRay,
+    GroundRay,
     SummonerBeamDamage,
     ModifyHealth,
+    GenericModifyHealth {
+        continuous: bool,
+    },
+    Pet {
+        entity: Option<u32>,
+    },
     ShieldRecharge,
     NamedShieldDecay,
     ForCode,
@@ -136,6 +161,7 @@ pub enum StateKind {
     ProjectedSelfSend,
     PersistentSend(u64),
     CosmeticEntity,
+    SprayPlacement(Option<(u64, SprayPlacement)>),
     ChaseVar,
     Watch,
     Observe {
@@ -161,6 +187,59 @@ pub enum StateKind {
     MoveTo {
         movement: Option<([f64; 3], f64)>,
     },
+    CombatModFilter {
+        registered: bool,
+    },
+    DeflectProjectiles {
+        reflect: bool,
+        half_angle_deg: f64,
+    },
+    GenericContactSweep,
+    TargetAura {
+        effect: u64,
+    },
+    TargetSubScript {
+        child: Option<u16>,
+    },
+    ConstantAccel,
+    WallClimb,
+    Grapple,
+    RecallHistory,
+    RecallRewind,
+    BallRoll {
+        fireball: bool,
+    },
+    SpatialQuery,
+    PhysicsExplosion,
+    HitTracker {
+        hit_count: u16,
+    },
+    RayCast,
+    EntityAttach {
+        target: u32,
+    },
+    ModifierControl {
+        blocks_input: bool,
+    },
+    KinematicsControl {
+        mode: u8,
+    },
+    PlacementCast {
+        valid: bool,
+    },
+    TeleportEffect,
+    ProximityTrigger {
+        triggered: bool,
+    },
+    EntityStatus {
+        mode: u8,
+    },
+    UxPresenter,
+    SyncVars,
+    HeroOverride,
+    AiTactic,
+    FieldDrivenState,
+    FilterArray,
     WeaponVolley {
         volleys: u8,
         offset_ms: u64,
@@ -176,9 +255,22 @@ pub(super) struct BufferedPress {
     pub(super) button: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GrappleState {
+    pub(super) anchor: [f64; 3],
+    pub(super) speed: f64,
+    pub(super) pendulum: bool,
+    pub(super) rope_len: f64,
+    pub(super) started_ms: u64,
+    pub(super) last_dist: f64,
+    pub(super) stall_ticks: u16,
+}
+
 #[derive(Clone, Debug)]
 pub struct State {
     pub tracked_targets: Vec<u32>,
+    pub(super) ground_wave: Option<Box<super::world::GroundWave>>,
+    pub(super) grapple: Option<Box<GrappleState>>,
     pub(super) target_children: BTreeMap<u32, u16>,
     pub active: bool,
     pub activation: u16,
@@ -215,8 +307,16 @@ impl State {
     }
 
     pub fn move_request(&self) -> Option<([f64; 3], f64)> {
+        if !self.active {
+            return None;
+        }
         match self.kind {
-            StateKind::MoveTo { movement } if self.active => movement,
+            StateKind::MoveTo { movement } => movement,
+            StateKind::Grapple => self
+                .grapple
+                .as_deref()
+                .filter(|g| !g.pendulum)
+                .map(|g| (g.anchor, g.speed)),
             _ => None,
         }
     }
@@ -224,6 +324,8 @@ impl State {
     pub(super) fn dormant(kind: StateKind) -> Self {
         Self {
             tracked_targets: Vec::new(),
+            ground_wave: None,
+            grapple: None,
             target_children: BTreeMap::new(),
             active: false,
             activation: 0,
@@ -347,6 +449,10 @@ pub struct Instance {
 }
 
 impl Instance {
+    pub fn started_at_ms(&self) -> u64 {
+        self.start_ms
+    }
+
     pub fn is_server_only(&self) -> bool {
         self.scope.is_server_only()
     }
@@ -435,6 +541,9 @@ impl NodeObservations {
 pub struct Snapshot {
     pub entity: u32,
     pub now_ms: u64,
+    /// Monotonically incremented whenever any projected field of the snapshot
+    /// (variables, instances, states, bindings, callouts, diagnostics) mutates.
+    pub revision: u64,
     pub variables: Variables,
     pub instances: IndexMap<u16, Instance>,
     /// Pending state timers and finishes in their per-instance execution order.
@@ -497,6 +606,22 @@ impl Snapshot {
         self.diagnostics
             .iter()
             .all(|diagnostic| diagnostic.issue == Issue::ObservationUnavailable)
+    }
+
+    /// True if any active state's projected wire payload depends on `now_ms`
+    /// advancing while the rest of the snapshot is unchanged.
+    pub fn has_time_sensitive_projection(&self) -> bool {
+        self.instances.values().any(|instance| {
+            instance.states.values().any(|state| {
+                matches!(
+                    state.kind,
+                    StateKind::ClientPulse {
+                        fresh_at: Some(at),
+                        ..
+                    } if state.active && self.now_ms.saturating_sub(at) <= 600
+                )
+            })
+        })
     }
 }
 
@@ -616,4 +741,8 @@ pub struct ShotEvent {
 pub struct ReportedShot {
     pub event: ShotEvent,
     pub presentation: Vec<(Variable, Value)>,
+    /// Active remote-networked `m_subgraphPlug` child state slots of the volley at fire time.
+    pub presentation_states: Vec<u16>,
+    /// Normalized spread for the authored direct-launch ramp at this round.
+    pub normalized_spread: Option<f32>,
 }

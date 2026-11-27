@@ -70,6 +70,7 @@ pub(crate) struct PlayerBodyFactory {
     target_tags: Option<BTreeSet<u64>>,
     controller_on_fire: bool,
     charge_route: charge::ChargeRoute,
+    anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -123,6 +124,12 @@ impl PlayerBodyFactory {
             .bodies()
             .get(&hero.body)
             .filter(|body| body.hero.as_deref().and_then(parse_guid) == Some(hero.guid))
+            .or_else(|| {
+                graphs.entity_body(hero.body).filter(|body| {
+                    body.hero.is_none()
+                        || body.hero.as_deref().and_then(parse_guid) == Some(hero.guid)
+                })
+            })
             .ok_or(OwnerBodyPreparationError::MissingBody)?;
         let mut roots = crate::script_init::player_roots(body, &graphs)
             .map_err(OwnerBodyPreparationError::RootLayout)?;
@@ -148,9 +155,26 @@ impl PlayerBodyFactory {
                 return Err(OwnerBodyPreparationError::AuthoredChargeRoot(graph));
             }
         }
+        let pools = if body.hero.is_none() || pools.is_none() {
+            crate::game_pools::authored_pools(&graphs, body)
+                .ok()
+                .flatten()
+                .or(pools)
+        } else {
+            pools
+        };
         let health = pools.unwrap_or(FALLBACK_POOLS).total();
         let variables = crate::script_init::player_entity_variables(body, health, health);
-        let target_tags = body.target_tags.clone();
+        let target_tags = body.target_tags.clone().or_else(|| {
+            if body.hero.is_some() {
+                return None;
+            }
+            graphs
+                .bodies()
+                .values()
+                .find(|primary| primary.hero.as_deref().and_then(parse_guid) == Some(hero.guid))
+                .and_then(|primary| primary.target_tags.clone())
+        });
         let charge_route = charge::ChargeRoute::prepare(body, mode, &roots)?;
         Ok(Self {
             graphs,
@@ -164,7 +188,16 @@ impl PlayerBodyFactory {
             target_tags,
             controller_on_fire,
             charge_route,
+            anim_timing: None,
         })
+    }
+
+    pub(crate) fn with_anim_timing(
+        mut self,
+        anim_timing: Option<Arc<crate::anim_timing::AnimationTiming>>,
+    ) -> Self {
+        self.anim_timing = anim_timing;
+        self
     }
 
     pub(crate) fn probe_startup(
@@ -246,6 +279,8 @@ impl PlayerBodyFactory {
             throttles: [0; 2],
             mode: self.mode,
             hero: self.hero,
+            body_definition: self.body,
+            anim_timing: self.anim_timing.clone(),
             vitals: if has_authored_pools {
                 Vitals::empty()
             } else {
@@ -253,24 +288,35 @@ impl PlayerBodyFactory {
             },
             pool_types_known: self.pools.is_some() || has_authored_pools,
             target_tags: self.target_tags.clone(),
-            model_hardpoints: self
-                .graphs
-                .bodies()
-                .get(&self.body)
-                .and_then(|body| body.model_hardpoints(spawn.skin)),
+            command_views: Default::default(),
+            wheel_cosmetics: Default::default(),
+            model_hardpoints: self.graphs.bodies().get(&self.body).and_then(|body| {
+                body.model_hardpoints(spawn.skin)
+                    .or_else(|| (!body.has_model_hardpoints()).then(Arc::default))
+            }),
             target_tag_effects: TargetTagEffects::default(),
             controller_on_fire: self.controller_on_fire,
             defenders: Arc::default(),
             sightings: Vec::new(),
             sighting_source: None,
             death_source: None,
-            cinematic_aim: None,
+            cinematic_aim: Default::default(),
             facing_claims: Default::default(),
             deadeye_scene: DeadeyeScene::default(),
             velocity_changes: Vec::new(),
             scripted_motion: None,
+            voice_variant_counter: 0,
+            voice_cooldowns: Default::default(),
+            pet_positions: Default::default(),
+            spawned_possessables: Default::default(),
+            pending_body_swap: None,
+            combat_mods: Default::default(),
+            deflect: Default::default(),
+            recall_history: Default::default(),
+            active_auras: Default::default(),
+            ball_roll_speed: None,
         };
-        let mut component = Component::start(
+        let mut component = Component::start_with_public_schema(
             Arc::clone(&self.graphs),
             spawn.entity,
             self.variables.clone(),
@@ -304,7 +350,9 @@ impl PlayerBodyFactory {
             modifiers,
             leases,
             frame: spawn.frame,
+            wheel_delivery_frame: spawn.frame,
             charge_binding: self.charge_route.bind(self.mode, self.hero),
+            ult_charge_scale: 1.0,
         };
         runtime
             .sync_charge_admission(true)

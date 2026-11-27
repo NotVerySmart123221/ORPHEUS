@@ -1,6 +1,8 @@
 # Runtime Data Guide (`rust`)
 
-Public Rust tests use synthetic JSON fixtures and run without game data. Starting `orpheus_server` or running `--ignored` prepared-runtime tests requires an authorized **1.74.0.0.104319 base Practice Range** pack (`ORPHEUS_RUNTIME_DIR`).
+Public Rust tests use synthetic JSON fixtures and run without game data. Starting `orpheus_server` or running `--ignored` prepared-runtime tests requires a unified **1.74.0.0.104319** runtime pack (`ORPHEUS_RUNTIME_DIR`) sourced strictly from your own local game installation.
+
+For one-click packing, preflight, and persistent-save launch, use [`scripts/setup_and_play.ps1`](../scripts/setup_and_play.ps1) (or double-click [`scripts/PLAY_ORPHEUS.cmd`](../scripts/PLAY_ORPHEUS.cmd)).
 
 Keep extracted game assets, XML dumps, keys, and generated packs out of Git.
 
@@ -69,9 +71,13 @@ and mode respawn delays. Practice Range has a shipped three-second default.
 Rust uses the optional map-specific `*.rays.col` for hitscan, scripted
 sight, and both point and swept projectile terrain queries. The runtime
 checks its map, collision key and applicable prop provenance against the
-catalogs. Character movement keeps its own cache. When expanded geometry
-is unavailable, combat uses the existing movement-based probes and sweeps.
-A valid point-ray view remains usable if its sweep view cannot be built.
+catalogs. An expanded cache can specify `weapon_terrain_category` as a
+nonzero 16-bit integer in its JSON header. Use a category verified for the
+target build. The room uses it for hitscan and both point and swept projectile
+terrain queries. `category_mask` continues to describe the cache's coverage.
+Character movement uses the movement cache. Caches without a weapon category
+use the legacy mover category. Missing or rejected expanded geometry uses
+movement-based probes and sweeps.
 
 ### 2. Prepared Research Data (Must Be Supplied in Source Pack)
 
@@ -89,8 +95,11 @@ A valid point-ray view remains usable if its sweep view cannot be built.
 | `data/resource_keys_174.json` | Content keys for event resources |
 | `data/lobby_state_blob.key` | Exact 64-byte lobby handshake signing key |
 | `data/junkenstein/junkenstein-npcs.json` | Explicit NPC definitions required for Junkenstein enemy tests/runs |
-| `data/combat_hurt_volumes.json` | Optional local measurements of standing bot combat regions, packed and hashed when present |
+| `data/combat_hurt_volumes.json` | Optional local combat regions measured per body, packed and hashed when present. Top-level body regions are standing measurements. A body may supply a `crouched` object with its own `body` and `head` regions. |
 | `data/combat_voice_174.json` | Optional local multikill and actor hurt/death voice catalog, packed and hashed when present |
+| `data/player_voice_174.json` | Optional actor voice catalog. Its `equipped` table maps playback effects to voice stimuli. |
+| `data/voice_effects_174.json` | Optional mapping from equipped voice unlocks to playback effects, preserved by the packer. Generate locally with `tools/extract_voice_effects.py` on the Python reference branch. |
+| `data/emote_aliases_174.json`, `data/emote_blend_trees_174.json` | Optional untagged emote mappings from equipped unlocks to animation aliases and blend trees. Generate locally with `tools/extract_emote_aliases.py` on the Python reference branch. |
 
 To enable actor hurt and death voice cues, provide locally verified entries in
 `hurt.minor`, `hurt.severe`, `hurt.death`, or `hurt.bot_death` and a positive

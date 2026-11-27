@@ -15,6 +15,7 @@ pub(crate) struct BotQueries<'a> {
     combat_rays: &'a CollisionScene,
     combat_sweeps: Option<&'a Arc<ContactWorld>>,
     contacts: Option<&'a Arc<ContactWorld>>,
+    breakables: Option<&'a Arc<crate::collision_scene::BreakableState>>,
     hurt_volumes: Option<&'a HurtVolumeCatalog>,
 }
 
@@ -32,17 +33,26 @@ impl<'a> BotQueries<'a> {
             combat_rays: ground,
             combat_sweeps: contacts,
             contacts,
+            breakables: None,
             hurt_volumes: None,
         }
     }
 
-    pub(super) fn with_combat_geometry(
+    pub(crate) fn with_combat_geometry(
         mut self,
         rays: &'a CollisionScene,
         sweeps: Option<&'a Arc<ContactWorld>>,
     ) -> Self {
         self.combat_rays = rays;
         self.combat_sweeps = sweeps.or(self.combat_sweeps);
+        self
+    }
+
+    pub(crate) fn with_breakables(
+        mut self,
+        breakables: &'a Arc<crate::collision_scene::BreakableState>,
+    ) -> Self {
+        self.breakables = Some(breakables);
         self
     }
 
@@ -59,10 +69,40 @@ impl<'a> BotQueries<'a> {
         self.attach_bot_mover(bot, MOVER_CATEGORY)
     }
 
-    pub(crate) fn attach_ai_walk_mover(&self, bot: &mut Bot) -> bool {
-        self.attach_bot_mover(
-            bot,
-            mover_category_for_team(self.free_for_all, bot.spawn.team),
+    pub(crate) fn step_ai_walk(&self, bot: &mut Bot, tick: u32, destination: Vec3, speed: f64) {
+        let category = mover_category_for_team(self.free_for_all, bot.spawn.team);
+        if bot.has_collision() || self.attach_bot_mover(bot, category) {
+            let body = bot.spawn.body;
+            bot.follow_walk_request(tick, destination, speed, |start| {
+                self.plan_walk(body, category, start, destination)
+            });
+        }
+    }
+
+    pub(crate) fn rejoin_patrol(&self, bot: &mut Bot, tick: u32, category: u16) {
+        let body = bot.spawn.body;
+        bot.rejoin_patrol(tick, |start, destination| {
+            self.plan_walk(body, category, start, destination)
+        });
+    }
+
+    fn plan_walk(
+        &self,
+        body: u64,
+        category: u16,
+        start: Vec3,
+        destination: Vec3,
+    ) -> crate::navigation::PathQuery {
+        use crate::navigation::{PathOptions, find_path};
+
+        let agent = self.movers.for_body(Some(body)).nav_agent(category);
+        find_path(
+            self.ground,
+            self.contacts.map(Arc::as_ref),
+            &agent,
+            start,
+            destination,
+            &PathOptions::default(),
         )
     }
 
@@ -76,12 +116,15 @@ impl<'a> BotQueries<'a> {
             category,
             ground_height(self.ground.triangles(), category),
         );
+        if let Some(breakables) = self.breakables {
+            bot.set_breakables(Arc::clone(breakables));
+        }
         true
     }
 
     pub(crate) fn step_gate_approach(
         &self,
-        approach: &mut crate::junkenstein_navigation::GateApproach,
+        approach: &mut crate::pve_encounter::navigation::GateApproach,
         bot: &mut Bot,
         tick: u32,
         speed_scale: f64,
@@ -97,7 +140,7 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn step_reaper_exit(
         &self,
-        exit: &mut crate::junkenstein_navigation::ReaperExit,
+        exit: &mut crate::pve_encounter::navigation::ReaperExit,
         bot: &mut Bot,
         tick: u32,
         can_walk: bool,
@@ -120,12 +163,12 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn step_boss_pursuit(
         &self,
-        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        pursuit: &mut crate::pve_encounter::navigation::BossPursuit,
         bot: &mut Bot,
         tick: u32,
         defenders: &[crate::script_enemy::EnemyTarget],
-        arc: Option<crate::junkenstein_navigation::GrenadeArc>,
-    ) -> Option<crate::junkenstein_navigation::BossTarget> {
+        arc: Option<crate::pve_encounter::navigation::GrenadeArc>,
+    ) -> Option<crate::pve_encounter::navigation::BossTarget> {
         pursuit.step(
             bot,
             tick,
@@ -141,7 +184,7 @@ impl<'a> BotQueries<'a> {
 
     pub(crate) fn pursue_caster_target(
         &self,
-        pursuit: &mut crate::junkenstein_navigation::BossPursuit,
+        pursuit: &mut crate::pve_encounter::navigation::BossPursuit,
         bot: &mut Bot,
         tick: u32,
         target: &crate::script_enemy::EnemyTarget,
@@ -173,8 +216,16 @@ impl<'a> BotQueries<'a> {
         body: u64,
         pose: crate::game_hitscan::TargetPose,
     ) -> crate::game_hitscan::HurtPose {
-        self.hurt_volumes
-            .map_or_else(|| pose.into(), |volumes| volumes.pose(body, pose))
+        let Some(volumes) = self.hurt_volumes else {
+            return pose.into();
+        };
+        let settings = self.movers.for_body(Some(body));
+        // Rewound hitscan poses carry their sampled mover dimensions.
+        let crouched = pose.height == settings.crouch_height
+            && pose.radius == settings.crouch_radius
+            && (settings.crouch_height, settings.crouch_radius)
+                != (settings.stand_height, settings.stand_radius);
+        volumes.pose(body, pose, crouched)
     }
 
     pub(crate) fn hitscan_wall(
@@ -193,8 +244,67 @@ impl<'a> BotQueries<'a> {
         direction: [f64; 3],
         reach: f64,
     ) -> Result<Option<crate::collision_index::RayHit>, crate::collision_index::IndexError> {
-        self.combat_rays
-            .cast_ray(origin, direction, reach, MOVER_CATEGORY)
+        self.combat_rays.cast_ray_with_breakables(
+            origin,
+            direction,
+            reach,
+            self.weapon_terrain_category(),
+            self.breakables.map(Arc::as_ref),
+        )
+    }
+
+    pub(crate) fn combat_weapon_ray(
+        &self,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        reach: f64,
+    ) -> Result<crate::collision_scene::WeaponRayHit, crate::collision_index::IndexError> {
+        self.combat_rays.cast_weapon_ray(
+            origin,
+            direction,
+            reach,
+            self.weapon_terrain_category(),
+            self.breakables.map(Arc::as_ref),
+        )
+    }
+
+    pub(crate) fn mark_breakable(&self, placement: usize) {
+        if let Some(breakables) = self.breakables {
+            breakables.mark_broken(placement);
+        }
+    }
+
+    pub(crate) fn break_in_sphere(&self, center: [f64; 3], radius: f64) {
+        let Some(breakables) = self.breakables else {
+            return;
+        };
+        for placement in
+            self.combat_rays
+                .breakables_in_sphere(center, radius, Some(breakables.as_ref()))
+        {
+            breakables.mark_broken(placement);
+        }
+    }
+
+    fn weapon_terrain_category(&self) -> u16 {
+        super::weapon_terrain_category(self.combat_rays)
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn combat_ray_geometry(&self) -> &'static str {
+        if std::ptr::eq(self.combat_rays, self.ground) {
+            "movement"
+        } else {
+            "expanded"
+        }
+    }
+
+    #[cfg(any(test, feature = "inspector"))]
+    pub(crate) fn combat_ray_source(
+        &self,
+        hit: crate::collision_index::RayHit,
+    ) -> Option<crate::collision_scene::StaticRaySource> {
+        self.combat_rays.ray_source(hit)
     }
 
     /// Sweep the authored terrain hull through the prepared combat geometry.
@@ -206,6 +316,29 @@ impl<'a> BotQueries<'a> {
         reach: f64,
         radius: f32,
     ) -> Result<Option<SurfaceHit>, IndexError> {
+        self.projectile_wall_inner(origin, direction, reach, radius, true)
+    }
+
+    /// Sweep terrain without breaking map breakables on the server (used for
+    /// NPC projectiles whose impacts are not replicated as client break events).
+    pub(crate) fn projectile_wall_readonly(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+        radius: f32,
+    ) -> Result<Option<SurfaceHit>, IndexError> {
+        self.projectile_wall_inner(origin, direction, reach, radius, false)
+    }
+
+    fn projectile_wall_inner(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        reach: f64,
+        radius: f32,
+        break_on_hit: bool,
+    ) -> Result<Option<SurfaceHit>, IndexError> {
         if reach <= 0.0 {
             return Ok(None);
         }
@@ -216,25 +349,42 @@ impl<'a> BotQueries<'a> {
                 return Err(IndexError::InvalidSweep);
             }
             return world
-                .scene_sweep(MeshProbe {
-                    points: &[[0.0; 3]],
-                    radius,
-                    start,
-                    end,
-                    category: MOVER_CATEGORY,
-                })
+                .projectile_sweep_with_breakables(
+                    MeshProbe {
+                        points: &[[0.0; 3]],
+                        radius,
+                        start,
+                        end,
+                        category: self.weapon_terrain_category(),
+                    },
+                    self.breakables.map(Arc::as_ref),
+                )
                 .map(|hit| {
-                    hit.map(|result| SurfaceHit {
-                        distance: reach * f64::from(result.hit.fraction),
-                        normal: result.hit.normal.map(f64::from),
+                    hit.map(|result| {
+                        if break_on_hit {
+                            if let Some(placement) = world.shape_breakable_placement(result.shape) {
+                                self.mark_breakable(placement);
+                            }
+                        }
+                        SurfaceHit {
+                            distance: reach * f64::from(result.hit.fraction),
+                            normal: result.hit.normal.map(f64::from),
+                        }
                     })
                 })
                 .map_err(|_| IndexError::InvalidSweep);
         }
         self.combat_wall(origin, direction, reach).map(|hit| {
-            hit.map(|hit| SurfaceHit {
-                distance: hit.distance,
-                normal: hit.normal,
+            hit.map(|hit| {
+                if break_on_hit {
+                    if let Some(placement) = self.combat_rays.ray_hit_breakable_placement(hit) {
+                        self.mark_breakable(placement);
+                    }
+                }
+                SurfaceHit {
+                    distance: hit.distance,
+                    normal: hit.normal,
+                }
             })
         })
     }

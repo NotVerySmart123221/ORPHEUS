@@ -4,7 +4,7 @@ use crate::{
     game_content::JUNKENSTEIN_REVENGE,
     game_heroes::Hero,
     game_pools::HealthPools,
-    junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING, SightingSource},
+    pve_encounter::messages::{DefenderMessage, DefenderSighting, SIGHTING, SightingSource},
     script_player::{OwnerBodySpawn, PlayerBodyFactory},
     world::Create,
 };

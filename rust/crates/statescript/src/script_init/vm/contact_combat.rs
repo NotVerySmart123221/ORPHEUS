@@ -109,9 +109,14 @@ impl<'graph, W: World> Vm<'graph, '_, '_, W> {
             let health = &node.fields["m_modifyHealth"];
             let payload = self.with_instance_context(site, None, |context| {
                 let mut eval = |config: &serde_json::Value| script_expr::evaluate(config, context);
-                let amount = pool_number(eval(&health["m_amount"])?)
-                    .filter(|value| (0.0..=f64::from(f32::MAX)).contains(value))
-                    .ok_or(EvalError::MalformedConfig("contact damage amount"))?;
+                let raw_amount = eval(&health["m_amount"])?;
+                let amount = if matches!(raw_amount, Value::Null) {
+                    0.0
+                } else {
+                    pool_number(raw_amount)
+                        .filter(|value| (0.0..=f64::from(f32::MAX)).contains(value))
+                        .ok_or(EvalError::MalformedConfig("contact damage amount"))?
+                };
                 let force = Knockback::from_authored(health, &mut eval);
                 let origin = if force.is_some() {
                     let Value::Vector(origin) = eval(&health["m_C0139FA6"])? else {

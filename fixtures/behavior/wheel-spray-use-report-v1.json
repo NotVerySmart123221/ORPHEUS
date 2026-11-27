@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "case_id": "wheel-spray-use-report-v1",
+  "target_build": 104319,
+  "source": {
+    "revision": "cedec602",
+    "paths": [
+      "docs/COMMUNICATION_WHEEL.txt",
+      "src/ow174/game/match.py"
+    ],
+    "notes": "The envelope and single asset parameter follow the pinned reference. The entity, instance, unlock and malformed payloads are synthetic."
+  },
+  "evidence": "synthetic-reference",
+  "sent_history": {
+    "graph": 61095,
+    "state": 3,
+    "instance_start_ms": 1440,
+    "sent_frame": 100,
+    "last_eligible_frame": 225,
+    "first_expired_frame": 226
+  },
+  "input": {
+    "entity": "0xA0000101",
+    "instance": 31,
+    "unlock": "0x0250000000000009",
+    "parameters_hex": "0000000001c33b05400a0409000000000050020000000000000000",
+    "invalid_byte_changes": [
+      [
+        6,
+        60
+      ],
+      [
+        10,
+        1
+      ],
+      [
+        17,
+        81
+      ],
+      [
+        19,
+        1
+      ]
+    ]
+  }
+}

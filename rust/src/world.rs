@@ -162,6 +162,8 @@ enum Field {
     F32,
 }
 
+pub(crate) const EQUIPPED_COSMETICS: u8 = 65;
+
 fn layout(index: u8) -> Result<&'static [Field], WorldError> {
     use Field::*;
     const HEALTH: [Field; 53] = {
@@ -194,6 +196,7 @@ fn layout(index: u8) -> Result<&'static [Field], WorldError> {
         44 => &[Entity, Entity, Entity],
         51 => &HEALTH,
         64 => &STATS,
+        EQUIPPED_COSMETICS => &[Id; 9],
         74 => &[Id, I16, I8, U8, U8, I8, U8, U8, U8],
         75 => &[Id; 6],
         90 => &[Leases],
@@ -928,6 +931,34 @@ mod tests {
             spring_speed: 1.625,
             fall: -3.5,
         }
+    }
+
+    #[test]
+    fn controller_emote_fields_match_the_reference_cosmetics_update() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../fixtures/behavior/wheel-emote-presentation-v1.json"
+        ))
+        .unwrap();
+        let mut slots = [None, None, None, None, None, None, None, None, None];
+        for (field, guid) in slots[5..].iter_mut().zip(
+            fixture["input"]["emote_slots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .chain(std::iter::once(&serde_json::Value::String("0x0".into()))),
+        ) {
+            *field = Some(ComponentValue::Id(
+                crate::accounts::parse_guid(guid.as_str().unwrap()).unwrap(),
+            ));
+        }
+        let mut writer = BitWriter::new();
+        write_components(&mut writer, 0, &[component(EQUIPPED_COSMETICS, slots)]).unwrap();
+        assert_eq!(
+            writer.into_bytes(),
+            hex(fixture["expected"]["controller_cosmetics_update_hex"]
+                .as_str()
+                .unwrap())
+        );
     }
 
     #[test]

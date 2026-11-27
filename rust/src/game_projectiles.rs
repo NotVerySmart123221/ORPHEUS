@@ -135,7 +135,10 @@ impl ProjectileLeases {
         mut evaluate: impl FnMut(u16, u16, &Json) -> Result<Value, EvalError>,
     ) -> io::Result<Self> {
         let mut definitions = Vec::new();
+        let mut visited_graphs = HashSet::new();
+        let mut subgraph_queue = Vec::new();
         for (&instance, state) in &snapshot.instances {
+            visited_graphs.insert(state.graph);
             let graph = graphs
                 .graph(state.graph)
                 .ok_or_else(|| invalid("missing volley graph"))?;
@@ -155,6 +158,26 @@ impl ProjectileLeases {
                     }
                 }
             }
+            collect_subgraph_indices(graph, &mut visited_graphs, &mut subgraph_queue);
+        }
+        // Also collect locally-predicted projectile definitions from lazily mounted
+        // hero subgraphs (e.g. Echo Sticky Bombs, Ashe Dynamite/B.O.B., Roadhog RMB)
+        // so their leases exist when the ability activates mid-life.
+        while let Some(gid) = subgraph_queue.pop() {
+            let Some(graph) = graphs.graph(gid) else {
+                continue;
+            };
+            for raw in 0..graph.states.len() {
+                let Some(node) = graph.state(raw) else {
+                    continue;
+                };
+                if node.class == "STUStatescriptStateWeaponVolley" && local_prediction(node) {
+                    if let Some(field) = node.field("m_projectileEntity") {
+                        projectile_definitions(field, &mut definitions);
+                    }
+                }
+            }
+            collect_subgraph_indices(graph, &mut visited_graphs, &mut subgraph_queue);
         }
         Self::new(slot, frame, definitions)
     }
@@ -202,6 +225,40 @@ pub fn predicted_sync(
         && field("m_numProjectilesPerShot", 1.0)? <= 7.0)
 }
 
+fn collect_subgraph_indices(
+    graph: &crate::script_graph::Graph,
+    visited: &mut HashSet<u32>,
+    queue: &mut Vec<u32>,
+) {
+    fn scan(value: &Json, visited: &mut HashSet<u32>, queue: &mut Vec<u32>) {
+        match value {
+            Json::String(_) => {
+                if let Some(gid) =
+                    asset_guid(value).and_then(crate::script_graph::graph_asset_index)
+                {
+                    if visited.insert(gid) {
+                        queue.push(gid);
+                    }
+                }
+            }
+            Json::Object(map) => {
+                for v in map.values() {
+                    scan(v, visited, queue);
+                }
+            }
+            Json::Array(items) => {
+                for v in items {
+                    scan(v, visited, queue);
+                }
+            }
+            _ => {}
+        }
+    }
+    for node in &graph.nodes {
+        scan(&node.fields, visited, queue);
+    }
+}
+
 fn projectile_definitions(value: &Json, out: &mut Vec<u64>) {
     match value {
         Json::Object(fields) => {
@@ -227,6 +284,13 @@ fn projectile_definitions(value: &Json, out: &mut Vec<u64>) {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProjectileToken(u64);
+
+impl ProjectileToken {
+    /// Allocate a non-predicted server-authoritative token outside the predicted counter range.
+    pub(crate) const fn server_only(seq: u64) -> Self {
+        Self(seq | (1u64 << 63))
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct OwnerReport {

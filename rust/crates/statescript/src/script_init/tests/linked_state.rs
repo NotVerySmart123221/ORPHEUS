@@ -9,6 +9,7 @@ struct Contract {
     input: Input,
     expected: Expected,
     registry_only_pair: RegistryCases,
+    animation_registry: AnimationRegistry,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +38,12 @@ struct RegistryCases {
     roots: Vec<RegistryExample>,
     rejected: Vec<RegistryExample>,
     client_only: Vec<RegistryExample>,
+    initial_links: Vec<Option<(u16, u16)>>,
+}
+
+#[derive(Deserialize)]
+struct AnimationRegistry {
+    roots: Vec<RegistryExample>,
     initial_links: Vec<Option<(u16, u16)>>,
 }
 
@@ -259,6 +266,43 @@ fn resource_free_states_register_per_class_and_keep_nested_lifecycle() {
         StateKind::Registered { next: None }
     );
     assert!(snapshot.instances[&2].states[&1].active);
+}
+
+#[test]
+fn animation_blend_tree_links_follow_registration_and_retirement() {
+    let cases = contract().animation_registry;
+    let mut component = start_registry_pair(&cases.roots);
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    for (id, next) in (1..).zip(cases.initial_links) {
+        let states = &snapshot.instances[&id].states;
+        assert_eq!(states[&0].kind, StateKind::Registered { next });
+        assert!(states[&0].active && states[&1].active);
+    }
+
+    component.debug_end_state(3, 0, &mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.instances[&1].states[&0].kind,
+        StateKind::Registered { next: Some((4, 0)) }
+    );
+    assert!(!snapshot.instances[&3].states[&1].active);
+    component.debug_exit_instance(4, &mut EmptyWorld).unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert_eq!(
+        snapshot.instances[&1].states[&0].kind,
+        StateKind::Registered { next: None }
+    );
+    assert!(snapshot.instances[&1].states[&1].active);
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
 }
 
 #[test]

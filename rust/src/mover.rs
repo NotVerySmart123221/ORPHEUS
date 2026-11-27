@@ -18,7 +18,7 @@ use crate::{
         CROUCHED, IN_AIR, JUMPED, NOT_GROUND_UNDER, Posture, PostureStep, TOUCHING, snap,
     },
     mover_settings::MoverSettings,
-    script_init::{Relocation, ScriptedMotion, SweptDisplacement},
+    script_init::{Relocation, ScriptedMotion, SweptDisplacement, VelocityAxis},
     world::{Movement, NO_INPUT},
 };
 
@@ -31,12 +31,38 @@ pub enum VelocityChange {
     Delta([f64; 3]),
     Impulse([f64; 3]),
     HorizontalCap(f64),
-    VerticalImpulse { vertical: f64, delta: [f64; 3] },
+    VerticalImpulse {
+        vertical: f64,
+        delta: [f64; 3],
+    },
+    SetVelocity([f64; 3]),
+    SetHorizontalVelocity([f64; 2]),
+    SetAxisSpeed {
+        axis: VelocityAxis,
+        value: f64,
+    },
+    CapAxisSpeed {
+        axis: VelocityAxis,
+        max: f64,
+    },
+    ScaleAxisSpeed {
+        axis: VelocityAxis,
+        factor: f64,
+    },
+    ClampAxisSpeed {
+        axis: VelocityAxis,
+        min: f64,
+        max: f64,
+    },
 }
 
 impl VelocityChange {
     /// Apply this edit and report a positive launch that should leave the ground.
     pub(crate) fn apply(self, velocity: &mut [f64; 3]) -> bool {
+        self.apply_with_jump(velocity, 6.0)
+    }
+
+    pub(crate) fn apply_with_jump(self, velocity: &mut [f64; 3], jump_speed: f64) -> bool {
         match self {
             Self::Delta(delta) => {
                 for (axis, delta) in velocity.iter_mut().zip(delta) {
@@ -68,20 +94,151 @@ impl VelocityChange {
                     return next[1] > 0.0;
                 }
             }
+            Self::SetVelocity(target) => {
+                let next = target.map(|axis| f64::from(axis as f32));
+                if next.iter().all(|axis| axis.is_finite()) {
+                    *velocity = next;
+                    return next[1] > 0.0;
+                }
+            }
+            Self::SetHorizontalVelocity([vx, vz]) => {
+                let nx = f64::from(vx as f32);
+                let nz = f64::from(vz as f32);
+                if nx.is_finite() && nz.is_finite() {
+                    velocity[0] = nx;
+                    velocity[2] = nz;
+                }
+            }
+            Self::SetAxisSpeed { axis, value } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let scale = value / speed;
+                        for comp in velocity.iter_mut() {
+                            *comp = f64::from((*comp * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    let speed = velocity[0].hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let scale = value / speed;
+                        for idx in [0, 2] {
+                            velocity[idx] = f64::from((velocity[idx] * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Vertical => {
+                    velocity[1] = f64::from(value as f32);
+                    return velocity[1] > 0.0;
+                }
+                VelocityAxis::VerticalUp => {
+                    // Retail `STU_9AF0FA80` with `m_A9561CA0 == 3` encodes a jump_speed
+                    // multiplier (e.g. Genji Double Jump 1.5x, Lucio wallride hop 1.15x).
+                    let next = f64::from((value * jump_speed) as f32);
+                    if next > velocity[1] {
+                        velocity[1] = next;
+                        return velocity[1] > 0.0;
+                    }
+                }
+            },
+            Self::CapAxisSpeed { axis, max } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > max && speed > 0.0 {
+                        let scale = max / speed;
+                        for comp in velocity.iter_mut() {
+                            *comp = f64::from((*comp * scale) as f32);
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    Self::HorizontalCap(max).apply(velocity);
+                }
+                VelocityAxis::Vertical => {
+                    if velocity[1].abs() > max {
+                        velocity[1] = f64::from((velocity[1].signum() * max) as f32);
+                    }
+                }
+                VelocityAxis::VerticalUp => {
+                    if velocity[1] > max {
+                        velocity[1] = f64::from(max as f32);
+                    }
+                }
+            },
+            Self::ScaleAxisSpeed { axis, factor } => match axis {
+                VelocityAxis::All => {
+                    for comp in velocity.iter_mut() {
+                        *comp = f64::from((*comp * factor) as f32);
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    for idx in [0, 2] {
+                        velocity[idx] = f64::from((velocity[idx] * factor) as f32);
+                    }
+                }
+                VelocityAxis::Vertical | VelocityAxis::VerticalUp => {
+                    velocity[1] = f64::from((velocity[1] * factor) as f32);
+                }
+            },
+            Self::ClampAxisSpeed { axis, min, max } => match axis {
+                VelocityAxis::All => {
+                    let speed = velocity[0].hypot(velocity[1]).hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let clamped = speed.clamp(min, max);
+                        if (clamped - speed).abs() > 1e-9 {
+                            let scale = clamped / speed;
+                            for comp in velocity.iter_mut() {
+                                *comp = f64::from((*comp * scale) as f32);
+                            }
+                        }
+                    }
+                }
+                VelocityAxis::Horizontal => {
+                    let speed = velocity[0].hypot(velocity[2]);
+                    if speed > 1e-6 {
+                        let clamped = speed.clamp(min, max);
+                        if (clamped - speed).abs() > 1e-9 {
+                            let scale = clamped / speed;
+                            for idx in [0, 2] {
+                                velocity[idx] = f64::from((velocity[idx] * scale) as f32);
+                            }
+                        }
+                    }
+                }
+                VelocityAxis::Vertical => {
+                    velocity[1] = f64::from(velocity[1].clamp(min, max) as f32);
+                }
+                VelocityAxis::VerticalUp => {
+                    if velocity[1] > 0.0 {
+                        velocity[1] = f64::from(velocity[1].clamp(min, max) as f32);
+                    }
+                }
+            },
         }
         false
     }
 
     pub(crate) fn valid(self) -> bool {
         match self {
-            Self::Delta(delta) | Self::Impulse(delta) => {
+            Self::Delta(delta) | Self::Impulse(delta) | Self::SetVelocity(delta) => {
                 delta.iter().all(|value| (*value as f32).is_finite())
             }
-            Self::HorizontalCap(cap) => (cap as f32).is_finite() && cap >= 0.0,
+            Self::SetHorizontalVelocity(delta) => {
+                delta.iter().all(|value| (*value as f32).is_finite())
+            }
+            Self::HorizontalCap(cap) | Self::CapAxisSpeed { max: cap, .. } => {
+                (cap as f32).is_finite() && cap >= 0.0
+            }
             Self::VerticalImpulse { vertical, delta } => {
                 (vertical as f32).is_finite()
                     && Self::Delta(delta).valid()
                     && (vertical as f32 + delta[1] as f32).is_finite()
+            }
+            Self::SetAxisSpeed { value, .. } => (value as f32).is_finite(),
+            Self::ScaleAxisSpeed { factor, .. } => (factor as f32).is_finite() && factor >= 0.0,
+            Self::ClampAxisSpeed { min, max, .. } => {
+                (min as f32).is_finite() && (max as f32).is_finite() && min <= max
             }
         }
     }
@@ -123,13 +280,21 @@ pub struct Mover {
     modifiers: ModifierTimeline,
     cinematic_aim: Option<[i32; 2]>,
     authored_facing: Option<[i32; 2]>,
+    move_request: Option<([f64; 3], f64)>,
     player_input_blocked: bool,
     velocity_changes: Vec<(u32, VelocityChange)>,
     scripted_motion: Option<(u32, ScriptedMotion)>,
     scripted_motion_frame: Option<u32>,
+    actor_contact: bool,
+    pending_ally_separation: [f64; 2],
+    ball_roll_speed: Option<f64>,
     last_command: Option<Command>,
     last_input: Option<u32>,
     pose: Movement,
+    #[cfg(feature = "lua-mods")]
+    mod_gravity_scale: f64,
+    #[cfg(feature = "lua-mods")]
+    mod_speed_scale: f64,
     #[cfg(any(test, feature = "inspector"))]
     last_ground_probe: Option<crate::game_debug::DebugGroundProbe>,
     #[cfg(any(test, feature = "inspector"))]
@@ -154,10 +319,14 @@ impl Mover {
             modifiers: ModifierTimeline::default(),
             cinematic_aim: None,
             authored_facing: None,
+            move_request: None,
             player_input_blocked: false,
             velocity_changes: Vec::new(),
             scripted_motion: None,
             scripted_motion_frame: None,
+            actor_contact: false,
+            pending_ally_separation: [0.0; 2],
+            ball_roll_speed: None,
             last_command: None,
             last_input: None,
             pose: Movement {
@@ -166,6 +335,10 @@ impl Mover {
                 gravity: base.gravity_scale,
                 ..Movement::default()
             },
+            #[cfg(feature = "lua-mods")]
+            mod_gravity_scale: 1.0,
+            #[cfg(feature = "lua-mods")]
+            mod_speed_scale: 1.0,
             #[cfg(any(test, feature = "inspector"))]
             last_ground_probe: None,
             #[cfg(any(test, feature = "inspector"))]
@@ -177,8 +350,35 @@ impl Mover {
         self.pose
     }
 
+    pub(crate) fn eye_height(&self) -> f64 {
+        self.base.eye_height(self.crouched())
+    }
+
     pub(crate) fn contact_capsule(&self) -> CapsulePose {
         self.body.capsule_pose()
+    }
+
+    pub(crate) fn set_breakables(
+        &mut self,
+        breakables: Arc<crate::collision_scene::BreakableState>,
+    ) {
+        self.body.set_breakables(breakables);
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_scales(&mut self, gravity_scale: f64, speed_scale: f64) {
+        if gravity_scale.is_finite() && gravity_scale > 0.0 {
+            self.mod_gravity_scale = gravity_scale.clamp(0.05, 10.0);
+            self.pose.gravity = self.base.gravity_scale * self.mod_gravity_scale;
+        }
+        if speed_scale.is_finite() && speed_scale > 0.0 {
+            self.mod_speed_scale = speed_scale.clamp(0.1, 10.0);
+        }
+    }
+
+    #[cfg(all(test, feature = "lua-mods"))]
+    pub(crate) fn mod_scales(&self) -> (f64, f64) {
+        (self.mod_gravity_scale, self.mod_speed_scale)
     }
 
     #[cfg(any(test, feature = "inspector"))]
@@ -241,10 +441,36 @@ impl Mover {
         self.authored_facing = facing;
     }
 
+    pub(crate) fn set_move_request(&mut self, request: Option<([f64; 3], f64)>) {
+        self.move_request = request;
+    }
+
     pub(crate) fn queue_velocity_change(&mut self, frame: u32, change: VelocityChange) {
-        if change.valid() {
-            self.velocity_changes.push((frame, change));
+        Self::push_merged_velocity_change(&mut self.velocity_changes, frame, change);
+    }
+
+    pub(crate) fn push_merged_velocity_change(
+        queue: &mut Vec<(u32, VelocityChange)>,
+        frame: u32,
+        change: VelocityChange,
+    ) {
+        if !change.valid() {
+            return;
         }
+        if let VelocityChange::Impulse(incoming) = change {
+            if let Some((_, VelocityChange::Impulse(existing))) = queue
+                .iter_mut()
+                .find(|(due, queued)| *due == frame && matches!(queued, VelocityChange::Impulse(_)))
+            {
+                for axis in 0..3 {
+                    if incoming[axis].abs() > existing[axis].abs() {
+                        existing[axis] = incoming[axis];
+                    }
+                }
+                return;
+            }
+        }
+        queue.push((frame, change));
     }
 
     /// Keep the first request until its first actual pose at or after `frame`.
@@ -254,6 +480,17 @@ impl Mover {
         }
         self.scripted_motion = Some((frame, motion));
         true
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn force_scripted_motion(&mut self, frame: u32, motion: ScriptedMotion) {
+        self.scripted_motion = Some((frame, motion));
+    }
+
+    #[cfg(feature = "lua-mods")]
+    pub(crate) fn set_mod_facing(&mut self, yaw: i32, pitch: i32) {
+        self.pose.yaw = yaw;
+        self.pose.pitch = pitch;
     }
 
     #[cfg(test)]
@@ -284,6 +521,58 @@ impl Mover {
     /// Whether this successfully completed pose moved through a script request.
     pub(crate) fn scripted_motion_at(&self, frame: u32) -> bool {
         self.scripted_motion_frame == Some(frame)
+    }
+
+    pub(crate) fn needs_owner_correction_at(&self, frame: u32) -> bool {
+        self.scripted_motion_at(frame) || (self.pose.frame == Some(frame) && self.actor_contact)
+    }
+
+    pub(crate) fn set_ally_separation(&mut self, delta: [f64; 2]) {
+        if delta[0].is_finite() && delta[1].is_finite() {
+            self.pending_ally_separation = delta;
+        }
+    }
+
+    pub(crate) fn set_ball_roll_speed(&mut self, speed: Option<f64>) {
+        self.ball_roll_speed = speed.filter(|s| s.is_finite() && *s > 0.0);
+    }
+
+    /// Apply a soft horizontal separation nudge when overlapping an allied actor.
+    pub(crate) fn apply_ally_separation(
+        &mut self,
+        delta: [f64; 2],
+        blockers: &[CapsulePose],
+        dt: f64,
+    ) -> bool {
+        if delta == [0.0; 2]
+            || !delta[0].is_finite()
+            || !delta[1].is_finite()
+            || dt <= 0.0
+            || !dt.is_finite()
+        {
+            return false;
+        }
+        let start = self.body.position();
+        let mut staged = self.body.fresh_at(start);
+        let Ok(moved) = staged.move_capsule_against(
+            [delta[0] as f32, 0.0, delta[1] as f32],
+            dt as f32,
+            blockers,
+        ) else {
+            return false;
+        };
+        let feet = std::array::from_fn(|axis| {
+            self.pose.position[axis] + f64::from(moved.position[axis]) - f64::from(start[axis])
+        })
+        .map(snap);
+        if feet == self.pose.position {
+            return false;
+        }
+        staged.teleport(self.capsule_origin(feet));
+        self.body = staged;
+        self.pose.position = feet;
+        self.actor_contact = true;
+        true
     }
 
     /// Simulate the newest command and any reconstructible poses before it.
@@ -366,7 +655,31 @@ impl Mover {
         blockers: &[CapsulePose],
     ) -> Result<(), HullContactError> {
         let active = self.modifiers.at(command.frame);
-        let settings = active.settings(&self.base);
+        #[cfg(feature = "lua-mods")]
+        let settings = {
+            let mut settings = active.settings(&self.base);
+            if (self.mod_gravity_scale - 1.0).abs() > 1e-6 {
+                settings.gravity_scale *= self.mod_gravity_scale;
+            }
+            if (self.mod_speed_scale - 1.0).abs() > 1e-6 {
+                settings.run_forward *= self.mod_speed_scale;
+                settings.run_backward *= self.mod_speed_scale;
+                settings.run_strafe *= self.mod_speed_scale;
+                settings.crouch_forward *= self.mod_speed_scale;
+                settings.crouch_backward *= self.mod_speed_scale;
+                settings.crouch_strafe *= self.mod_speed_scale;
+            }
+            settings
+        };
+        #[cfg(not(feature = "lua-mods"))]
+        let mut settings = active.settings(&self.base);
+        #[cfg(feature = "lua-mods")]
+        let mut settings = settings;
+        if let Some(roll_speed) = self.ball_roll_speed {
+            settings.run_forward = settings.run_forward.max(roll_speed);
+            settings.run_backward = settings.run_backward.max(roll_speed);
+            settings.run_strafe = settings.run_strafe.max(roll_speed);
+        }
         let blockers = if settings.character_collision != 0 {
             blockers
         } else {
@@ -389,6 +702,9 @@ impl Mover {
                     ScriptedMotion::Relocate(relocation) => {
                         self.apply_relocation(relocation, blockers)?;
                     }
+                    ScriptedMotion::Teleport(relocation) => {
+                        self.apply_teleport(relocation, blockers)?;
+                    }
                 }
                 scripted_motion_changed = self.pose.position != before;
             }
@@ -397,14 +713,46 @@ impl Mover {
         self.velocity_changes.retain(|&(frame, change)| {
             if frame <= command.frame {
                 let before = self.pose.velocity;
-                launched |= change.apply(&mut self.pose.velocity);
+                launched |= change.apply_with_jump(&mut self.pose.velocity, settings.jump_speed);
+                if self.pose.velocity[1] > 0.0 && before[1] <= 0.0 {
+                    launched = true;
+                }
                 scripted_motion_changed |=
-                    matches!(change, VelocityChange::Impulse(_)) && self.pose.velocity != before;
+                    !matches!(change, VelocityChange::Delta(_)) && self.pose.velocity != before;
                 false
             } else {
                 true
             }
         });
+        let move_to_velocity = self.move_request.and_then(|(dest, speed)| {
+            let delta = [
+                dest[0] - self.pose.position[0],
+                dest[1] - self.pose.position[1],
+                dest[2] - self.pose.position[2],
+            ];
+            let dist = delta[0].hypot(delta[1]).hypot(delta[2]);
+            if dist <= 0.1 || !dist.is_finite() || speed <= 0.0 {
+                return None;
+            }
+            let step_speed = speed.min(dist / dt.max(1e-4));
+            let scale = step_speed / dist;
+            let hop_y = if dist > 2.2
+                && (-0.25..0.75).contains(&delta[1])
+                && self.posture.ground() == Ground::Standing
+            {
+                4.8
+            } else {
+                delta[1] * scale
+            };
+            Some([delta[0] * scale, hop_y, delta[2] * scale])
+        });
+        if let Some(mv) = move_to_velocity {
+            self.pose.velocity = mv;
+            if mv[1] > 0.0 {
+                launched = true;
+            }
+            scripted_motion_changed = true;
+        }
         if launched && self.pose.velocity[1] > 0.0 {
             self.posture.begin_velocity_launch();
         }
@@ -419,7 +767,7 @@ impl Mover {
             input.pitch = pitch;
             input.pitch_held = false;
         }
-        let probe = self.probe.probe(
+        let mut probe = self.probe.probe(
             rays,
             self.body.world(),
             &settings,
@@ -433,6 +781,42 @@ impl Mover {
             dt,
             self.category,
         )?;
+        // Allow standing solidly on top of an enemy actor's head capsule.
+        let mut standing_on_actor = false;
+        if !blockers.is_empty() && self.pose.velocity[1] <= 0.5 {
+            let self_radius = if self.posture.crouched() {
+                settings.crouch_radius
+            } else {
+                settings.stand_radius
+            };
+            let feet_y = self.pose.position[1];
+            let mut best_crown: Option<f64> = None;
+            for blocker in blockers {
+                let b_top = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                let dx = self.pose.position[0] - f64::from(blocker.position[0]);
+                let dz = self.pose.position[2] - f64::from(blocker.position[2]);
+                let min_dist = self_radius + f64::from(blocker.radius);
+                if dx.hypot(dz) < min_dist
+                    && feet_y >= b_top - 0.55
+                    && feet_y <= b_top + settings.step_down + 0.15
+                    && best_crown.is_none_or(|prev| b_top > prev)
+                {
+                    best_crown = Some(b_top);
+                }
+            }
+            if let Some(crown_y) = best_crown {
+                if probe.ground.is_none_or(|hit| crown_y > hit.y) {
+                    probe.ground = Some(crate::collision_index::GroundHit {
+                        y: crown_y,
+                        normal: [0.0, 1.0, 0.0],
+                        plane_offset: 0.0,
+                        mask: self.category,
+                        surface: 0,
+                    });
+                    standing_on_actor = true;
+                }
+            }
+        }
         #[cfg(any(test, feature = "inspector"))]
         {
             let origin = self.pose.position;
@@ -461,21 +845,39 @@ impl Mover {
             |radius, top| self.body.try_resize(radius, top),
         )?;
         let ground = self.posture.ground();
-        let velocity = VelocityStep {
-            base: &self.base,
-            settings: &settings,
-            input,
-            ground,
-            crouched: self.posture.crouched(),
-            dt,
-        }
-        .advance(self.pose.velocity);
-        if ground != Ground::Standing {
+        let velocity = if let Some(mv) = move_to_velocity {
+            mv
+        } else {
+            VelocityStep {
+                base: &self.base,
+                settings: &settings,
+                input,
+                ground,
+                crouched: self.posture.crouched(),
+                dt,
+            }
+            .advance(self.pose.velocity)
+        };
+        if ground != Ground::Standing && move_to_velocity.is_none() {
             self.posture.apply_fall(settings.gravity_scale, dt);
         }
         let normal = probe.ground.map_or([0.0, 1.0, 0.0], |hit| hit.normal);
-        let vertical = self.move_body(rays, velocity, normal, dt, command.frame, blockers)?;
+        let (vertical, actor_contact) = self.move_body(
+            rays,
+            velocity,
+            normal,
+            dt,
+            command.frame,
+            blockers,
+            settings.gravity_scale,
+        )?;
         self.posture.finish_fall(settings.gravity_scale, vertical);
+        let pending_ally = std::mem::take(&mut self.pending_ally_separation);
+        let ally_pushed = if pending_ally != [0.0; 2] {
+            self.apply_ally_separation(pending_ally, blockers, dt)
+        } else {
+            false
+        };
 
         if input.throttles != [0; 2] {
             self.last_input = Some(command.frame);
@@ -497,6 +899,7 @@ impl Mover {
         self.pose.spring_speed = f64::from(self.posture.spring_speed());
         self.pose.fall = self.posture.fall;
         self.scripted_motion_frame = scripted_motion_changed.then_some(command.frame);
+        self.actor_contact = actor_contact || standing_on_actor || ally_pushed;
         Ok(())
     }
 
@@ -543,11 +946,36 @@ impl Mover {
         Ok(())
     }
 
+    fn apply_teleport(
+        &mut self,
+        relocation: Relocation,
+        blockers: &[CapsulePose],
+    ) -> Result<(), HullContactError> {
+        let Some(feet) = relocation.teleport_destination().map(|feet| feet.map(snap)) else {
+            return Ok(());
+        };
+        let origin = self.capsule_origin(feet);
+        if self.body.relocate_if_clear(origin, blockers)? {
+            self.pose.position = feet;
+            return Ok(());
+        }
+        let lifted = [feet[0], feet[1] + 0.35, feet[2]];
+        let lifted_origin = self.capsule_origin(lifted);
+        if self.body.relocate_if_clear(lifted_origin, blockers)? {
+            self.pose.position = lifted;
+        } else {
+            self.body.teleport(origin);
+            self.pose.position = feet;
+        }
+        Ok(())
+    }
+
     fn capsule_origin(&self, [x, y, z]: [f64; 3]) -> [f32; 3] {
         let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
         [x as f32, (y + f64::from(lift)) as f32, z as f32]
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn move_body(
         &mut self,
         rays: &TriangleIndex,
@@ -556,7 +984,8 @@ impl Mover {
         dt: f64,
         _frame: u32,
         blockers: &[CapsulePose],
-    ) -> Result<f64, HullContactError> {
+        gravity_scale: f64,
+    ) -> Result<(f64, bool), HullContactError> {
         let grounded = self.posture.ground() == Ground::Standing;
         let [x, y, z] = velocity;
         let velocity = if grounded && (x * x + y * y) + z * z >= EPSILON {
@@ -573,6 +1002,7 @@ impl Mover {
             ((0.0 * rise + z) * dt) + 0.0,
         ];
         let movement = self.body.move_capsule_against(displacement, dt, blockers)?;
+        let mut actor_contact = movement.actor_contact;
         let [mut x, mut y, mut z] = clip_velocity([x, y, z], movement.planes).map(f64::from);
         if grounded {
             let squared = (x * x + y * y) + z * z;
@@ -584,27 +1014,101 @@ impl Mover {
         }
         self.posture.flags =
             (self.posture.flags & !TOUCHING) | (u32::from(movement.touching) * TOUCHING);
+        // Preserve wall-ride / wall-climb vertical glide when touching a wall with
+        // reduced gravity so Lúcio/Genji/Hanzo are not dragged down by wall friction.
+        if !grounded && movement.touching && gravity_scale <= 0.25 && y < 0.0 {
+            y = 0.0;
+        }
         let lift = pogo(&self.base, self.posture.crouched()) as f32 + self.posture.spring_offset();
+        #[cfg(any(test, feature = "inspector"))]
+        let contact_planes: Vec<[f64; 3]> = movement
+            .planes
+            .iter()
+            .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
+            .map(|plane| plane.normal.map(f64::from))
+            .collect();
         let [px, py, pz] = movement.position;
         let feet = f64::from(py - lift);
         let floor = rays.lowest() - ABYSS;
-        self.pose.position = [f64::from(px), feet.max(floor), f64::from(pz)].map(snap);
+        let mut resolved = [f64::from(px), feet.max(floor), f64::from(pz)];
+        // Hard-block against enemy capsules: use true standing bounds (`blocker.position[1]`
+        // is `feet + pogo` and `blocker.top` is `segment + radius`), allow standing cleanly
+        // on top of an enemy's head, and wall-safely depenetrate all side overlaps.
+        if !blockers.is_empty() {
+            let self_radius = if self.posture.crouched() {
+                self.base.crouch_radius
+            } else {
+                self.base.stand_radius
+            };
+            let self_height = if self.posture.crouched() {
+                self.base.crouch_height
+            } else {
+                self.base.stand_height
+            };
+            let self_top = resolved[1] + self_height;
+            let mut depen_x = 0.0_f64;
+            let mut depen_z = 0.0_f64;
+            for blocker in blockers {
+                let b_top = f64::from(blocker.position[1] + blocker.top + blocker.radius);
+                let b_bottom = f64::from(blocker.position[1] - blocker.radius) - 0.55;
+                if resolved[1] >= b_top - 0.35 || b_bottom >= self_top {
+                    continue;
+                }
+                let cur_x = resolved[0] + depen_x;
+                let cur_z = resolved[2] + depen_z;
+                let dx = cur_x - f64::from(blocker.position[0]);
+                let dz = cur_z - f64::from(blocker.position[2]);
+                let min_dist = self_radius + f64::from(blocker.radius);
+                let dist = dx.hypot(dz);
+                if dist < min_dist && min_dist > 0.0 {
+                    let (nx, nz) = if dist > 1.0e-5 {
+                        (dx / dist, dz / dist)
+                    } else {
+                        (1.0, 0.0)
+                    };
+                    let push = min_dist - dist + 0.01;
+                    depen_x += nx * push;
+                    depen_z += nz * push;
+                    let inward = x * nx + z * nz;
+                    if inward < 0.0 {
+                        x -= inward * nx;
+                        z -= inward * nz;
+                    }
+                    actor_contact = true;
+                }
+            }
+            if depen_x != 0.0 || depen_z != 0.0 {
+                let start = [
+                    resolved[0] as f32,
+                    (resolved[1] + f64::from(lift)) as f32,
+                    resolved[2] as f32,
+                ];
+                let mut staged = self.body.fresh_at(start);
+                if let Ok(pushed) =
+                    staged.move_capsule_against([depen_x as f32, 0.0, depen_z as f32], dt, &[])
+                {
+                    resolved[0] += f64::from(pushed.position[0]) - f64::from(start[0]);
+                    resolved[2] += f64::from(pushed.position[2]) - f64::from(start[2]);
+                } else {
+                    resolved[0] += depen_x;
+                    resolved[2] += depen_z;
+                }
+            }
+        }
+        self.pose.position = resolved.map(snap);
         #[cfg(any(test, feature = "inspector"))]
         {
             let point = self.pose.position;
             self.last_contact_normals.clear();
-            self.last_contact_normals.extend(
-                movement
-                    .planes
-                    .iter()
-                    .take(crate::game_debug::MAX_DEBUG_MOVER_NORMALS)
-                    .map(|plane| crate::game_debug::DebugContactNormal {
+            self.last_contact_normals
+                .extend(contact_planes.into_iter().map(|normal| {
+                    crate::game_debug::DebugContactNormal {
                         tick: _frame,
                         entity: 0,
                         point,
-                        normal: plane.normal.map(f64::from),
-                    }),
-            );
+                        normal,
+                    }
+                }));
         }
         let [px, py, pz] = self.pose.position;
         self.body
@@ -613,7 +1117,7 @@ impl Mover {
             y = 0.0;
         }
         self.pose.velocity = [x, y, z].map(snap);
-        Ok(y)
+        Ok((y, actor_contact))
     }
 }
 

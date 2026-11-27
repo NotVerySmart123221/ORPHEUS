@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "case_id": "received-damage-feedback.synthetic.v1",
+  "evidence": "synthetic-rust",
+  "input": {
+    "damage": 9,
+    "ray_distance": 4,
+    "script_source_position": [-6.25, 0.5, 8.75]
+  },
+  "expected": {
+    "direct_hit_outward_normal": [-1.0, 0.0, 0.0]
+  },
+  "jam_schema": {
+    "8F89E0DF": {
+      "25000": [
+        {"type": 7, "off": 120, "size": 4, "count": 0, "array": false},
+        {"type": 14, "off": 124, "size": 4, "count": 0, "array": false, "fields": [{"type": 6, "off": 0, "size": 4, "count": 0, "array": false}]},
+        {"type": 14, "off": 128, "size": 4, "count": 0, "array": false, "fields": [{"type": 6, "off": 0, "size": 4, "count": 0, "array": false}]},
+        {"type": 14, "off": 132, "size": 12, "count": 0, "array": false, "fields": [{"type": 10, "off": 0, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 4, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 8, "size": 4, "count": 0, "array": false}]},
+        {"type": 14, "off": 144, "size": 12, "count": 0, "array": false, "fields": [{"type": 10, "off": 0, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 4, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 8, "size": 4, "count": 0, "array": false}]},
+        {"type": 14, "off": 156, "size": 12, "count": 0, "array": false, "fields": [{"type": 10, "off": 0, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 4, "size": 4, "count": 0, "array": false}, {"type": 10, "off": 8, "size": 4, "count": 0, "array": false}]},
+        {"type": 6, "off": 168, "size": 4, "count": -1, "array": true},
+        {"type": 10, "off": 192, "size": 4, "count": 0, "array": false},
+        {"type": 6, "off": 196, "size": 4, "count": 0, "array": false},
+        {"type": 4, "off": 200, "size": 2, "count": 0, "array": false},
+        {"type": 4, "off": 202, "size": 2, "count": 0, "array": false},
+        {"type": 10, "off": 204, "size": 4, "count": 0, "array": false},
+        {"type": 2, "off": 208, "size": 1, "count": 0, "array": false},
+        {"type": 10, "off": 216, "size": 4, "count": -1, "array": true},
+        {"type": 8, "off": 240, "size": 8, "count": -1, "array": true},
+        {"type": 2, "off": 264, "size": 1, "count": 0, "array": false}
+      ]
+    }
+  }
+}

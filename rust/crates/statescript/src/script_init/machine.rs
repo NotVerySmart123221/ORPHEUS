@@ -30,6 +30,7 @@ use super::{
 #[derive(Clone, Copy)]
 enum MessageDestination {
     Ordinary(Option<u16>, u64),
+    Command(u64, Option<u32>),
     SettledDamage(u16, u64),
     Room(u64),
     Host(HostEventKind),
@@ -38,9 +39,10 @@ enum MessageDestination {
 impl MessageDestination {
     fn topic(self) -> EntryTopic {
         match self {
-            Self::Ordinary(_, message) | Self::SettledDamage(_, message) | Self::Room(message) => {
-                EntryTopic::Message(message)
-            }
+            Self::Ordinary(_, message)
+            | Self::Command(message, _)
+            | Self::SettledDamage(_, message)
+            | Self::Room(message) => EntryTopic::Message(message),
             Self::Host(kind) => EntryTopic::Host(kind),
         }
     }
@@ -90,6 +92,7 @@ pub(super) enum RegisteredClass {
     CinematicAim,
     EntityControl,
     State9028E035,
+    AnimationBlendTree,
     State43994F1B,
     State93B8758C,
 }
@@ -132,6 +135,8 @@ pub(super) struct Volley {
     pub(super) per_shot: i64,
     pub(super) rate: f64,
     pub(super) spread: f64,
+    pub(super) spread_ramp: Option<f32>,
+    pub(super) spread_delay_ms: u64,
     pub(super) planned: u32,
     // Index of the next due round, including rounds skipped without a pose.
     pub(super) reported: u32,
@@ -140,14 +145,42 @@ pub(super) struct Volley {
 }
 
 impl Volley {
+    pub(super) fn normalized_shot_spread(
+        initial: f64,
+        ramp: Option<f32>,
+        delay_ms: u64,
+        elapsed_ms: u64,
+        rate: f64,
+    ) -> Option<f32> {
+        let ramp = ramp?;
+        if delay_ms > 0 && elapsed_ms < delay_ms {
+            return Some((initial as f32).clamp(0.0, 1.0));
+        }
+        let ramp_elapsed = elapsed_ms.saturating_sub(delay_ms);
+        Some(if ramp < 1.0e-7 {
+            1.0
+        } else {
+            (Self::due_shots(ramp_elapsed, rate) as f32 / ramp + initial as f32).min(1.0)
+        })
+    }
+
+    fn due_shots(elapsed_ms: u64, rate: f64) -> i64 {
+        let seconds = f64::from(elapsed_ms as f32 * 0.001_f32);
+        let ordinal = ((seconds * rate) as f32).floor() as i64;
+        ordinal.saturating_add(1)
+    }
+
     fn ammo_at(&self, now_ms: u64, permit_shots: bool) -> i64 {
         let Some(elapsed) = now_ms.checked_sub(self.start_ms) else {
             return self.ammo0;
         };
         let due = if permit_shots {
-            let seconds = f64::from(elapsed as f32 * 0.001_f32);
-            let ordinal = ((seconds * self.rate) as f32).floor() as i64;
-            ordinal.saturating_add(1)
+            let due = Self::due_shots(elapsed, self.rate);
+            if self.planned > 0 {
+                due.min(i64::from(self.planned))
+            } else {
+                due
+            }
         } else {
             i64::from(self.reported)
         };
@@ -273,10 +306,13 @@ pub(super) struct Machine {
     pub(super) code_pending: [Vec<u64>; 2],
     pub(super) code_observers: Vec<(u64, Option<u64>)>,
     pub(super) snapshot: Snapshot,
+    pub(super) snapshot_dirty: bool,
     pub(super) registered: IndexMap<StateKey, RegisteredState>,
     pub(super) queues: Timeline<Event>,
     pub(super) watchers: BTreeMap<VarKey, Vec<StateKey>>,
+    pub(super) state_watches: BTreeMap<StateKey, Vec<VarKey>>,
     pub(super) foreign_watchers: BTreeMap<(u32, u32), Vec<StateKey>>,
+    pub(super) state_foreign_watches: BTreeMap<StateKey, Vec<(u32, u32)>>,
     pub(super) ticking: BTreeMap<u16, IndexMap<u16, u64>>,
     pub(super) actor_target_guards: BTreeMap<u16, ActorTargetGuard>,
     pub(super) deferred: BTreeMap<u16, Vec<(f64, u16)>>,
@@ -296,12 +332,14 @@ pub(super) struct Machine {
     random_initial_seed: u64,
     pub(super) random_state: AtomicU64,
     pub(super) command_buttons: u32,
+    pub(super) command_directions: u8,
     pub(super) held_buttons: Vec<u8>,
     pub(super) button_blocks: [usize; 256],
     pub(super) owner_dead: bool,
     pub(super) logical_buttons_need_resync: bool,
     pub(super) control_blocked: bool,
     pub(super) disabled_start_entries: HashSet<(u16, u16)>,
+    pub(super) cooldown_scale: f64,
 }
 
 impl Clone for Machine {
@@ -312,10 +350,13 @@ impl Clone for Machine {
             code_pending: self.code_pending.clone(),
             code_observers: self.code_observers.clone(),
             snapshot: self.snapshot.clone(),
+            snapshot_dirty: self.snapshot_dirty,
             registered: self.registered.clone(),
             queues: self.queues.clone(),
             watchers: self.watchers.clone(),
+            state_watches: self.state_watches.clone(),
             foreign_watchers: self.foreign_watchers.clone(),
+            state_foreign_watches: self.state_foreign_watches.clone(),
             ticking: self.ticking.clone(),
             actor_target_guards: self.actor_target_guards.clone(),
             deferred: self.deferred.clone(),
@@ -335,12 +376,14 @@ impl Clone for Machine {
             random_initial_seed: self.random_initial_seed,
             random_state: AtomicU64::new(self.random_state.load(Ordering::Relaxed)),
             command_buttons: self.command_buttons,
+            command_directions: self.command_directions,
             held_buttons: self.held_buttons.clone(),
             button_blocks: self.button_blocks,
             owner_dead: self.owner_dead,
             logical_buttons_need_resync: self.logical_buttons_need_resync,
             control_blocked: self.control_blocked,
             disabled_start_entries: self.disabled_start_entries.clone(),
+            cooldown_scale: self.cooldown_scale,
         }
     }
 }
@@ -387,6 +430,7 @@ impl Machine {
             snapshot: Snapshot {
                 entity,
                 now_ms: frame_start(frame),
+                revision: 1,
                 variables,
                 instances: IndexMap::new(),
                 pending_timers: IndexMap::new(),
@@ -397,10 +441,13 @@ impl Machine {
                 #[cfg(feature = "node-observations")]
                 node_observations: Default::default(),
             },
+            snapshot_dirty: true,
             queues: Timeline::new(MAX_PENDING_EVENTS),
             registered: IndexMap::new(),
             watchers: BTreeMap::new(),
+            state_watches: BTreeMap::new(),
             foreign_watchers: BTreeMap::new(),
+            state_foreign_watches: BTreeMap::new(),
             ticking: BTreeMap::new(),
             actor_target_guards: BTreeMap::new(),
             deferred: BTreeMap::new(),
@@ -420,12 +467,14 @@ impl Machine {
             random_initial_seed,
             random_state: AtomicU64::new(random_initial_seed),
             command_buttons: 0,
+            command_directions: 0,
             held_buttons: Vec::new(),
             button_blocks: [0; 256],
             owner_dead: false,
             logical_buttons_need_resync: false,
             control_blocked: false,
             disabled_start_entries: HashSet::new(),
+            cooldown_scale: 1.0,
             public_schemas: false,
         })
     }
@@ -486,8 +535,8 @@ impl Machine {
                 self.snapshot.pending_timers.insert(id, timers);
             }
         }
-        self.snapshot.bindings.clear();
-        self.snapshot.resolved_bindings.clear();
+        let mut next_bindings = IndexMap::with_capacity(self.links.len());
+        let mut next_resolved = IndexMap::with_capacity(self.links.len());
         for (&variable, entries) in &self.links {
             let key = match variable {
                 VarKey::Entity(id) => (0, id),
@@ -505,10 +554,18 @@ impl Machine {
                 })
                 .collect();
             if !bindings.is_empty() {
-                self.snapshot.bindings.insert(key, bindings);
+                next_bindings.insert(key, bindings);
             }
             let resolved = self.link_value(top);
-            self.snapshot.resolved_bindings.insert(key, resolved);
+            next_resolved.insert(key, resolved);
+        }
+        let links_changed = self.snapshot.bindings != next_bindings
+            || self.snapshot.resolved_bindings != next_resolved;
+        self.snapshot.bindings = next_bindings;
+        self.snapshot.resolved_bindings = next_resolved;
+        if self.snapshot_dirty || links_changed {
+            self.snapshot.revision = self.snapshot.revision.wrapping_add(1).max(1);
+            self.snapshot_dirty = false;
         }
     }
 
@@ -537,6 +594,23 @@ impl Machine {
             MessageDestination::Ordinary(recipient, message),
             sender,
             parameters,
+            due_ms,
+            HostHealthContext::default(),
+        )
+    }
+
+    pub(super) fn queue_command_entries(
+        &mut self,
+        graphs: &GraphStore,
+        message: RoomMessage,
+        command_frame: Option<u32>,
+        due_ms: u64,
+    ) -> Result<usize, InitFault> {
+        self.queue_message_entries(
+            graphs,
+            MessageDestination::Command(message.id, command_frame),
+            Some(self.snapshot.entity),
+            message.parameters,
             due_ms,
             HostHealthContext::default(),
         )
@@ -644,6 +718,7 @@ impl Machine {
                             || node.accepts_directed_numeric_message(&parameters)
                     }
                     MessageDestination::Ordinary(_, _)
+                    | MessageDestination::Command(_, _)
                     | MessageDestination::SettledDamage(_, _) => {
                         !node.declares_room_message_entry()
                             && (node.is_message_entry()
@@ -662,8 +737,12 @@ impl Machine {
             }
         }
         let parameters = Arc::new(parameters);
+        let command_frame = match destination {
+            MessageDestination::Command(_, frame) => frame,
+            _ => None,
+        };
         for &(instance, position) in &entries {
-            self.queues.push(
+            self.queues.push_with_command_frame(
                 instance,
                 due_ms,
                 Event::Message {
@@ -674,6 +753,7 @@ impl Machine {
                     settled_damage: matches!(destination, MessageDestination::SettledDamage(_, _)),
                     room_directed: matches!(destination, MessageDestination::Room(_)),
                 },
+                command_frame,
             )?;
         }
         Ok(entries.len())

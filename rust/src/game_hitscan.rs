@@ -13,18 +13,64 @@ use crate::{
     commands::Command,
     script_expr::{EvalError, to_float},
     script_wire::Value,
-    static_ray::Vec3,
+    static_ray::{Vec3, along},
 };
 
 mod hurt_volumes;
 
 pub use crate::script_init::HitTags as DamageTags;
-pub(crate) use hurt_volumes::{HurtPose, HurtVolumeCatalog};
+pub(crate) use hurt_volumes::{HurtPose, HurtPosture, HurtVolumeCatalog, SkeletalStance};
 
 pub const DEFAULT_REACH: f64 = 200.0;
 const HISTORY: usize = 64;
 const HEAD_BELOW_EYE: f64 = 0.2;
 const ANGLE_STEP: f64 = std::f64::consts::TAU / 65536.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HitTargetPolicy {
+    pub healing: bool,
+    pub affects_allies: bool,
+    pub affects_enemies: bool,
+}
+
+impl Default for HitTargetPolicy {
+    fn default() -> Self {
+        Self {
+            healing: false,
+            affects_allies: false,
+            affects_enemies: true,
+        }
+    }
+}
+
+impl HitTargetPolicy {
+    pub fn from_authored(config: &Json) -> Self {
+        if !config.is_object() {
+            return Self::default();
+        }
+        let modify = &config["m_modifyHealth"];
+        let healing =
+            modify.is_object() && modify.get("m_93CDFD2F").and_then(Json::as_u64) == Some(0);
+        let ally_flag = config.get("m_09528B11").and_then(Json::as_u64) == Some(1);
+        let ally_heal_flag = config.get("m_50C84E9E").and_then(Json::as_u64).unwrap_or(1) == 1;
+        let affects_allies = healing || (ally_flag && ally_heal_flag);
+        let affects_enemies =
+            !healing && config.get("m_3E7A533D").and_then(Json::as_u64).unwrap_or(1) != 0;
+        Self {
+            healing,
+            affects_allies,
+            affects_enemies,
+        }
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            healing: self.healing && other.healing,
+            affects_allies: self.affects_allies || other.affects_allies,
+            affects_enemies: self.affects_enemies || other.affects_enemies,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HitDefinition {
@@ -96,7 +142,9 @@ impl HitDefinition {
             number(field(config, "m_157E5BC5")?),
             number(field(config, "m_72A81154")?),
         ) {
-            (Some(start), Some(end), Some(floor)) if start < end => {
+            (Some(start), Some(end), Some(floor))
+                if start >= 0.0 && start < end && (0.0..=1.0).contains(&floor) =>
+            {
                 Some(DamageFalloff { start, end, floor })
             }
             _ => None,
@@ -217,15 +265,10 @@ impl TargetHistory {
                     feet: std::array::from_fn(|axis| {
                         earlier.feet[axis] + (later.feet[axis] - earlier.feet[axis]) * share
                     }),
-                    height: posture.height,
-                    eye: posture.eye,
-                    ..current
+                    ..posture
                 }
             }
-            (Some(&(_, pose)), None) | (None, Some(&(_, pose))) => TargetPose {
-                radius: current.radius,
-                ..pose
-            },
+            (Some(&(_, pose)), None) | (None, Some(&(_, pose))) => pose,
             (None, None) => current,
         };
         Some(sampled)
@@ -248,6 +291,37 @@ pub struct Impact {
     pub critical: bool,
     pub loadout: Option<u64>,
     pub impulse: Option<Vec3>,
+    pub geometry: Option<ImpactGeometry>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ImpactGeometry {
+    Direct {
+        /// The ray origin or the start of the contacting projectile segment.
+        origin: Vec3,
+        /// Point on the target's hurt volume at the first contact.
+        point: Vec3,
+        direction: Vec3,
+        normal: Vec3,
+    },
+    Blast {
+        origin: Vec3,
+    },
+}
+
+impl ImpactGeometry {
+    pub(crate) fn surface_normal(self) -> Option<Vec3> {
+        match self {
+            Self::Direct { normal, .. } => Some(normal),
+            Self::Blast { .. } => None,
+        }
+    }
+
+    pub(crate) fn origin(self) -> Vec3 {
+        match self {
+            Self::Direct { origin, .. } | Self::Blast { origin } => origin,
+        }
+    }
 }
 
 impl HitscanShot {
@@ -287,24 +361,29 @@ impl HitscanShot {
         if !self.hit.amount.is_finite() || self.hit.amount <= 0.0 {
             return Ok(None);
         }
-        let mut nearest = None;
+        let mut nearest: Option<(u32, hurt_volumes::HurtContact)> = None;
         for (entity, pose) in targets {
-            let length = nearest.map_or(self.reach, |(distance, _, _)| distance);
-            if let Some((distance, head)) =
-                pose.into()
-                    .contact(self.origin, self.direction, length, 0.0)
+            let length = nearest
+                .as_ref()
+                .map_or(self.reach, |(_, contact)| contact.hit.distance);
+            if let Some(contact) = pose
+                .into()
+                .contact(self.origin, self.direction, length, 0.0)
             {
+                let distance = contact.hit.distance;
                 if nearest.is_none() || distance < length {
-                    nearest = Some((distance, entity, head));
+                    nearest = Some((entity, contact));
                     if distance == 0.0 {
                         break;
                     }
                 }
             }
         }
-        let Some((distance, entity, head)) = nearest else {
+        let Some((entity, contact)) = nearest else {
             return Ok(None);
         };
+        let distance = contact.hit.distance;
+        let head = contact.head;
         if distance > 0.0
             && wall_distance(self.origin, self.direction, distance)?
                 .is_some_and(|wall| wall < distance)
@@ -319,6 +398,12 @@ impl HitscanShot {
             critical: head && self.hit.critical > 1.0,
             loadout: self.hit.loadout,
             impulse: None,
+            geometry: Some(ImpactGeometry::Direct {
+                origin: self.origin,
+                point: contact.point_on_body(along(self.origin, self.direction, distance)),
+                direction: self.direction,
+                normal: contact.hit.normal,
+            }),
         }))
     }
 }
@@ -414,6 +499,26 @@ mod tests {
             .unwrap();
             assert_eq!(hit.critical, expected);
         }
+        // Retail falloff bands (12-20m, 20-40m, 30-50m at 0.3 floor) and invalid bounds rejection.
+        for (start, end, floor, valid) in [
+            (12, 20, 0.3, true),
+            (20, 40, 0.3, true),
+            (30, 50, 0.3, true),
+            (-5, 20, 0.3, false),
+            (30, 20, 0.3, false),
+            (20, 40, 1.5, false),
+        ] {
+            let cfg = json!({
+                "m_EAD7F104": int(start),
+                "m_157E5BC5": int(end),
+                "m_72A81154": {"$": "STUConfigVarFloat", "m_value": floor},
+            });
+            let parsed =
+                HitDefinition::from_authored(&cfg, |value| evaluate(value, &mut EmptyContext))
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(parsed.falloff.is_some(), valid);
+        }
     }
 
     #[test]
@@ -456,6 +561,12 @@ mod tests {
                 critical: false,
                 loadout: RIFLE.loadout,
                 impulse: None,
+                geometry: Some(ImpactGeometry::Direct {
+                    origin: [0.0, 1.0, 0.0],
+                    point: [0.0, 1.0, 9.5],
+                    direction: [0.0, 0.0, 1.0],
+                    normal: [0.0, 0.0, -1.0],
+                }),
             }
         );
         assert_eq!(resolve(&coincident), Some(hit));
@@ -517,6 +628,7 @@ mod tests {
         let before = standing(8.0, 0.0);
         let crouched = TargetPose {
             height: 1.2,
+            radius: 0.3,
             eye: 1.05,
             ..standing(12.0, 0.0)
         };
@@ -525,10 +637,10 @@ mod tests {
         history.record(1, crouched);
         history.record(0, standing(50.0, 0.0)); // a late sample cannot reorder the history
         let pose = history
-            .at(ViewFrame::from_command(&command, 16_000), crouched)
+            .at(ViewFrame::from_command(&command, 16_000), before)
             .unwrap();
         assert_eq!(pose.feet, [10.5, 0.0, 0.0]);
-        assert_eq!((pose.height, pose.eye), (1.2, 1.05));
+        assert_eq!((pose.height, pose.radius, pose.eye), (1.2, 0.3, 1.05));
         assert!(
             shot.resolve([(7, pose)], |_, _, _| Ok(None))
                 .unwrap()
@@ -547,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn history_clamps_to_retained_samples_and_keeps_current_radius() {
+    fn history_clamps_to_retained_samples_with_their_original_radius() {
         let mut history = TargetHistory::new(None);
         for tick in 0..70 {
             history.record(tick, standing(f64::from(tick), 0.0));
@@ -570,7 +682,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        assert_eq!((seen(0).feet[0], seen(0).radius), (6.0, 0.4));
+        assert_eq!((seen(0).feet[0], seen(0).radius), (6.0, 0.5));
         assert_eq!(seen(69).feet, [69.0, 0.0, 0.0]);
         assert_eq!(seen(100).feet, [69.0, 0.0, 0.0]);
     }

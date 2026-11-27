@@ -1,0 +1,176 @@
+{
+  "version": 1,
+  "graphs": [
+    {
+      "index": 1,
+      "items": 6,
+      "nodes": [
+        {
+          "pos": 0,
+          "class": "STUStatescriptEntryGameMessage",
+          "uid": 0,
+          "rid": 0,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_gameMessage": {
+              "m_gameMessage": "0x024000000000F001"
+            },
+            "m_outPlug": {
+              "$": "Plug",
+              "links": [
+                [
+                  1,
+                  "m_inPlug"
+                ]
+              ],
+              "m_FF3DAF1E": []
+            }
+          }
+        },
+        {
+          "pos": 1,
+          "class": "STUStatescriptActionSetVar",
+          "uid": 1,
+          "rid": 1,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_out_Var": {
+              "$": "STUConfigVarDynamic",
+              "m_identifier": 3,
+              "m_60DB8F99": false
+            },
+            "m_value": 3,
+            "m_ADEB6E05": true
+          }
+        },
+        {
+          "pos": 2,
+          "class": "STUStatescriptEntryGameMessage",
+          "uid": 2,
+          "rid": 2,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_gameMessage": {
+              "m_gameMessage": "0x024000000000F002"
+            },
+            "m_outPlug": {
+              "$": "Plug",
+              "links": [
+                [
+                  3,
+                  "m_inPlug"
+                ]
+              ],
+              "m_FF3DAF1E": []
+            }
+          }
+        },
+        {
+          "pos": 3,
+          "class": "STUStatescriptActionSetVar",
+          "uid": 3,
+          "rid": 3,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_out_Var": {
+              "$": "STUConfigVarDynamic",
+              "m_identifier": 3,
+              "m_60DB8F99": false
+            },
+            "m_value": 1.2,
+            "m_ADEB6E05": true
+          }
+        },
+        {
+          "pos": 4,
+          "class": "STUStatescriptEntryGameMessage",
+          "uid": 4,
+          "rid": 4,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_gameMessage": {
+              "m_gameMessage": "0x024000000000F003"
+            },
+            "m_outPlug": {
+              "$": "Plug",
+              "links": [
+                [
+                  5,
+                  "m_inPlug"
+                ]
+              ],
+              "m_FF3DAF1E": []
+            }
+          }
+        },
+        {
+          "pos": 5,
+          "class": "STUStatescriptActionSetVar",
+          "uid": 5,
+          "rid": 5,
+          "remote": -1,
+          "state": null,
+          "client_only": false,
+          "server_only": false,
+          "fields": {
+            "m_out_Var": {
+              "$": "STUConfigVarDynamic",
+              "m_identifier": 3,
+              "m_60DB8F99": false
+            },
+            "m_value": {
+              "$": "STUConfigVarExpression",
+              "m_expression": {
+                "m_opcodes": [8, 0, 6, 0, 23, 8, 1, 27, 0],
+                "m_dynamicVars": [
+                  {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 1,
+                    "m_60DB8F99": false
+                  },
+                  {
+                    "$": "STUConfigVarDynamic",
+                    "m_identifier": 2,
+                    "m_60DB8F99": false
+                  }
+                ],
+                "m_D99EF254": [1]
+              }
+            },
+            "m_ADEB6E05": true
+          }
+        }
+      ],
+      "states": [],
+      "entries": [0, 2, 4],
+      "remote": [],
+      "sync_vars": [],
+      "containers": {},
+      "unknown_nodes": [],
+      "fields": {},
+      "header": {
+        "m_nodesBitCount": 4,
+        "m_statesBitCount": 4,
+        "m_remoteSyncNodesBitCount": 4,
+        "m_syncVarsBitCount": 4
+      }
+    }
+  ],
+  "bodies": {},
+  "missing": []
+}

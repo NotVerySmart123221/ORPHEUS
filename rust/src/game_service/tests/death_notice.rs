@@ -163,23 +163,27 @@ fn bot_hit_feedback_waits_for_possession_and_keeps_its_shooter_generation() {
             Some(CombatNotice::Elimination {
                 killer: shooter.entity,
                 victim: target,
+                loadout: 0,
+                fire: 100,
+                critical: false,
             }),
         ],
-        health: EntityUpdate {
-            entity: target,
-            operation: Some(Operation::Update(vec![health(
-                0.0,
-                amount as f32,
-                0.0,
-                0.0,
-            )])),
-            ..EntityUpdate::default()
-        },
     };
     // Only the envelope is needed to exercise reliable admission.
     let schemas = Schemas::from_json(r#"{"8F89E0DF":{"25001":[],"25005":[]}}"#).unwrap();
     let stale = pick_body(&mut peer, &mut scene, &viewer, first_hero);
     peer.bot_hit(hit(stale));
+    assert!(!peer.world.health_pending(target));
+    peer.world.queue_health(EntityUpdate {
+        entity: target,
+        operation: Some(Operation::Update(vec![health(
+            0.0,
+            amount as f32,
+            0.0,
+            0.0,
+        )])),
+        ..EntityUpdate::default()
+    });
     peer.flush_combat(&schemas, Duration::ZERO, None).unwrap();
     assert_eq!(
         peer.pending_combat_notices().count() as u64,
@@ -462,7 +466,15 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     assert!(updates.player_events.is_empty());
     let peer = room.members[&1].peer.as_ref().unwrap();
     assert_eq!(peer.world.active_body_id(), Some(old_body));
-    assert_eq!(peer.world.pending_player_respawn(), Some((old_body, delay)));
+    assert_eq!(
+        room.world
+            .as_ref()
+            .unwrap()
+            .scene
+            .simulation()
+            .pending_player_respawn(old_body),
+        Some(delay)
+    );
     assert_eq!(peer.pending_combat_notices().count(), 1);
     assert!(
         !room
@@ -488,7 +500,15 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     assert!(updates.player_events.is_empty());
     let peer = room.members[&1].peer.as_ref().unwrap();
     assert_eq!(peer.world.active_body_id(), Some(old_body));
-    assert_eq!(peer.world.pending_player_respawn(), Some((old_body, delay)));
+    assert_eq!(
+        room.world
+            .as_ref()
+            .unwrap()
+            .scene
+            .simulation()
+            .pending_player_respawn(old_body),
+        Some(delay)
+    );
 
     {
         let world = room.world.as_ref().unwrap();
@@ -515,7 +535,15 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     let fresh = peer.world.active_body_id().unwrap();
     assert_ne!(fresh, old_body);
     assert!(fresh.generation > old_body.generation);
-    assert_eq!(peer.world.pending_player_respawn(), None);
+    assert_eq!(
+        room.world
+            .as_ref()
+            .unwrap()
+            .scene
+            .simulation()
+            .pending_player_respawn(old_body),
+        None
+    );
     assert!(!peer.egress.delivered_through(0));
     assert!(matches!(
         updates.player_events.as_slice(),
@@ -539,5 +567,13 @@ fn room_respawn_waits_for_death_notice_admission_then_replaces_the_body_once() {
     assert!(updates.player_events.is_empty());
     let peer = room.members[&1].peer.as_ref().unwrap();
     assert_eq!(peer.world.active_body_id(), Some(fresh));
-    assert_eq!(peer.world.pending_player_respawn(), None);
+    assert_eq!(
+        room.world
+            .as_ref()
+            .unwrap()
+            .scene
+            .simulation()
+            .pending_player_respawn(fresh),
+        None
+    );
 }

@@ -5,6 +5,11 @@
     "basis": "Synthetic peer sends, with one deliberately lost NPC script datagram."
   },
   "evidence": "rust-synthetic",
+  "movement_budget": {
+    "actors": 15,
+    "bytes_available_before_movement": 120,
+    "walking_throttles": [0, 127]
+  },
   "input": {
     "npc": 3221233280,
     "placeable": 2147483719,

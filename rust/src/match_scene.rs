@@ -13,8 +13,8 @@ use crate::{
     script_init::{Snapshot, StateKind},
     script_wire::{self, Instance, Layout, Variables},
     world::{
-        Component, ComponentValue, Create, EntityUpdate, GAME_MODE_ENTITY, Operation, PLAYER_PATH,
-        SkinTheme, WITH_PARTICIPANT, WITH_SCALE, WITH_TRANSFORM, health,
+        Component, ComponentValue, Create, EQUIPPED_COSMETICS, EntityUpdate, GAME_MODE_ENTITY,
+        Operation, PLAYER_PATH, SkinTheme, WITH_PARTICIPANT, WITH_SCALE, WITH_TRANSFORM, health,
     },
 };
 
@@ -67,6 +67,36 @@ pub struct PlayerCard {
     pub ranked: Option<(i16, i16, i8)>,
     pub role: Option<i8>,
     pub skins: HashMap<u64, SkinTheme>,
+    pub(crate) wheel_cosmetics: HashMap<u64, WheelCosmetics>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WheelCosmetics {
+    pub sprays: [u64; 4],
+    pub emotes: [u64; 4],
+    pub emote_aliases: [u64; 4],
+    pub emote_blend_trees: [u64; 4],
+    pub voice_effects: [u64; 4],
+}
+
+impl PlayerCard {
+    pub(crate) fn possession_components(&self, possession: Possession) -> Vec<Component> {
+        let mut components = possession.components().to_vec();
+        if !self.wheel_cosmetics.is_empty() {
+            let loadout = self
+                .wheel_cosmetics
+                .get(&possession.hero)
+                .copied()
+                .unwrap_or_default();
+            let slots = |guids: [u64; 4]| guids.map(|guid| Some(ComponentValue::Id(guid)));
+            let mut values = slots(loadout.sprays).to_vec();
+            // Field four is outside the four spray and four emote slots.
+            values.push(None);
+            values.extend(slots(loadout.emotes));
+            components.push(fields(EQUIPPED_COSMETICS, values));
+        }
+        components
+    }
 }
 
 pub fn player_create(
@@ -114,7 +144,7 @@ pub fn player_create(
         ),
     ];
     if let Some(possession) = possession {
-        components.extend(possession.components());
+        components.extend(card.possession_components(possession));
     }
     if let Some(board) = owner_board {
         if board.index != GMP_STATS {
@@ -276,7 +306,7 @@ fn junkenstein_presentation_instances(
                         && node
                             .field("m_gameMessage.m_gameMessage")
                             .and_then(crate::script_graph::asset_guid)
-                            == Some(crate::junkenstein_messages::POST_MATCH_PHASE)
+                            == Some(crate::pve_encounter::messages::POST_MATCH_PHASE)
                 })
                 .ok_or_else(|| invalid("missing Junkenstein post-match listener"))?;
             if !instance
@@ -395,13 +425,17 @@ pub(crate) fn team_bit(team: u8) -> io::Result<u64> {
     Ok(TEAM_BIT << team)
 }
 
-/// Recover the assigned slot only from a canonical spawn team bit.
+/// Recover the assigned slot from a canonical spawn team bit (with optional HERO_BIT/DEAD_BIT).
 pub(crate) fn team_from_spawn_filter(filter: u64) -> Option<u8> {
-    let slot = filter
+    let team_bits = filter & !(HERO_BIT | DEAD_BIT);
+    if team_bits == 0 {
+        return None;
+    }
+    let slot = team_bits
         .trailing_zeros()
         .checked_sub(TEAM_BIT.trailing_zeros())?;
     let team = u8::try_from(slot).ok()?;
-    (team_bit(team).ok()? == filter).then_some(team)
+    (team_bit(team).ok()? == team_bits).then_some(team)
 }
 
 fn invalid(error: impl std::fmt::Display) -> io::Error {

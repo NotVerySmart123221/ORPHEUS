@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "case_id": "owner-hero-reselect-v1",
+  "source": {"basis": "Synthetic hero selections with healthy, absent and halted owner scripts."},
+  "evidence": "rust-headless-synthetic",
+  "input": {
+    "hero": 207165582859065107,
+    "cases": [
+      {"scripted": true, "input_fault": false},
+      {"scripted": false, "input_fault": false},
+      {"scripted": true, "input_fault": true}
+    ]
+  },
+  "expected": [1, 1, 2]
+}

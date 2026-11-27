@@ -15,6 +15,25 @@
     "start_angles": [8192, 1024],
     "mouse_angles": [-16384, -2048]
   },
+  "rust_cosmetic_resource": {
+    "class": "STU_ABEDF4B8",
+    "graph": 61094,
+    "ready_plug": {"$": "STU_774760EA", "links": [], "m_FF3DAF1E": null},
+    "readiness_rva": "D3FC40",
+    "codec": "none"
+  },
+  "rust_animation_mode": {
+    "class": "STU_58E77FC5",
+    "graph": 61093,
+    "literal_mode": 2,
+    "enter_rva": "90CA80",
+    "exit_rva": "90CDE0",
+    "codec": "none"
+  },
+  "rust_asset_lookup": {
+    "alias": "0x0C80000000000091",
+    "blend_tree": "0x0040000000000052"
+  },
   "expected": {
     "controller_cosmetics_update_hex": "014102e001c304095002c3e20b50020000",
     "package_slot": [1],

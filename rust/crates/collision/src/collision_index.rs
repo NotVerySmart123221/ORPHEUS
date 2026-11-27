@@ -47,6 +47,13 @@ pub struct RayHit {
     pub normal: Vec3,
     pub mask: u16,
     pub surface: u16,
+    pub(crate) primitive: RayPrimitive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RayPrimitive {
+    Triangle(u32),
+    Round(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +185,21 @@ impl TriangleIndex {
         self.triangles.len()
     }
 
+    pub fn triangle_aabb_within_radius(&self, index: usize, center: Vec3, radius_sq: f64) -> bool {
+        let Some(tri) = self.triangles.get(index) else {
+            return false;
+        };
+        let dist2: f64 = (0..3)
+            .map(|axis| {
+                let c = center[axis];
+                let clamped = c.clamp(tri.bounds.min[axis], tri.bounds.max[axis]);
+                let d = c - clamped;
+                d * d
+            })
+            .sum();
+        dist2 <= radius_sq
+    }
+
     pub fn scene_bounds(&self) -> Option<(Vec3, Vec3)> {
         self.scene_bounds
     }
@@ -280,6 +302,21 @@ impl TriangleIndex {
         length: f64,
         category: u16,
     ) -> Result<Option<RayHit>, IndexError> {
+        self.cast_ray_filtered(origin, direction, length, category, |_| true)
+    }
+
+    /// First triangle hit along a unit direction matching `allow_triangle`.
+    pub fn cast_ray_filtered<F>(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        length: f64,
+        category: u16,
+        allow_triangle: F,
+    ) -> Result<Option<RayHit>, IndexError>
+    where
+        F: Fn(u32) -> bool,
+    {
         if category == 0
             || self.triangles.is_empty()
             || length <= 0.0
@@ -312,6 +349,7 @@ impl TriangleIndex {
                     || candidate.bounds.max[1] < low
                     || candidate.bounds.min[1] > high
                     || !seen.insert(number)
+                    || !allow_triangle(number)
                 {
                     continue;
                 }
@@ -322,7 +360,7 @@ impl TriangleIndex {
                 };
                 if distance < best && distance <= length {
                     best = distance;
-                    hit = Some(candidate);
+                    hit = Some((number, candidate));
                 }
             }
             if best <= end || next_x.min(next_z) > length {
@@ -344,7 +382,7 @@ impl TriangleIndex {
                 return Err(IndexError::RayTraversalLimit);
             }
         }
-        Ok(hit.map(|candidate| {
+        Ok(hit.map(|(number, candidate)| {
             let normal = candidate.normal;
             let side = if dot(normal, direction) > 0.0 {
                 -1.0
@@ -357,6 +395,7 @@ impl TriangleIndex {
                 normal: normal.map(|component| side * component),
                 mask: candidate.triangle.mask,
                 surface: candidate.triangle.surface,
+                primitive: RayPrimitive::Triangle(number),
             }
         }))
     }

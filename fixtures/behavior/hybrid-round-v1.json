@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "case_id": "hybrid-capture-escort-104319-v1",
+  "target_build": "104319",
+  "source": "game/hybrid.py, game/assault.py, and game/escort.py; synthetic map with one capture point and a two-section payload route",
+  "evidence": "synthetic-reference",
+  "client_acceptance": "pending",
+  "input": {
+    "assembly_ends": 100,
+    "point": {"placement": 10, "position": [0, 0, 0], "seconds": 40, "capture_seconds": 10},
+    "cart": {"placement": 11, "position": [20, 0, 0], "unlock_delay": 2, "unlock_seconds": 3},
+    "checkpoints": [[12, 34, 20], [13, 48, 10]],
+    "gate": 14,
+    "automatic_first_node_x": 24,
+    "steps": [
+      [145, "empty"],
+      [146, "contested"],
+      [151, "point"],
+      [156, "point"],
+      [157, "cart"],
+      [158, "cart"],
+      [161, "cart"],
+      [172, "cart"],
+      [184, "cart"]
+    ]
+  },
+  "expected": {
+    "capture_speed": 2.0,
+    "room_flow": {"spawn_door": 20, "gate": 21, "sign": 22, "debris_delay": 3.0,
+                  "rubble": 23, "rubble_rail_node": 2, "rubble_seconds": 3.0,
+                  "required_spawn_placeables": [4, 2, 3], "checkpoint_offset": 1},
+    "steps": [
+      ["ACTIVE", 0, 185, 0, false, false, null],
+      ["ACTIVE", 0, 185, 0, false, false, null],
+      ["ACTIVE", 0, 185, 0, false, false, null],
+      ["ACTIVE", 1, 205, 0, false, true, null],
+      ["ACTIVE", 1, 205, 0, false, true, null],
+      ["ACTIVE", 1, 205, 0, true, true, null],
+      ["ACTIVE", 1, 205, 0, true, true, null],
+      ["ACTIVE", 2, 215, 15.4, true, true, null],
+      ["COMPLETE", 3, 215, 28, true, false, 1]
+    ],
+    "automatic_steps": [
+      [158, false, 0, 21, 0],
+      [161, false, 0, null, 0],
+      [162, false, 2, 22, 1],
+      [164, false, 4, 22, 1],
+      [165, false, 4, null, 0],
+      [167, true, 6.8, 17, 1],
+      [168, false, 6.8, null, 0],
+      [190, false, 4, 18, -1],
+      [191, false, 4, null, 0]
+    ]
+  }
+}

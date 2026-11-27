@@ -10,30 +10,32 @@ use crate::{
     commands::Command,
     game_combat::{
         BIOTIC_CANISTER, BIOTIC_FIELD_ENTITY, PosedBioticField, PosedHitscan, PosedProjectile,
-        PosedShot, Stun, eye_height, script_eye_position,
+        PosedShot, Stun, script_eye_position,
     },
     game_content::is_junkenstein_mode,
-    game_heroes::CASSIDY,
     game_hitscan::{HitDefinition, aim_direction},
     game_instance::TeamMemberCounts,
+    game_parameters::{ClientWheelAction, ClientWheelUse},
     game_projectiles::{
         ImpactSpawn, ProjectileLeases, authored_number, local_prediction, predicted_sync,
     },
     game_replication::{BodyStep, OwnerBodyRuntime, OwnerRoomActivity},
-    junkenstein_messages::{DefenderMessage, DefenderSighting, SIGHTING},
     mover::Mover,
     mover_modifiers::{Modifier, ModifierKey},
     projectile_flight::{ProjectileBallistics, authored_gravity, posed_projectile_direction},
+    pve_encounter::messages::{DefenderMessage, DefenderSighting, SIGHTING},
     script_codecs::CodecTable,
     script_control::LEGACY_PROJECTILE_CONTROL,
     script_expr::to_float,
     script_init::{
-        Component, HostEvent, HostHealthContext, InitFault, RoomMessage, ScriptedMotion, Snapshot,
+        Component, HostEvent, HostHealthContext, InitFault, ReportedShot, RoomMessage,
+        ScriptedMotion, Snapshot,
     },
     script_runtime::FRAME_MS,
     script_snapshot_wire::SnapshotEncoder,
     script_wire::Value,
     vitals::{Damage, Death, Vitals},
+    weapon_spread::for_each_authored_hitscan_direction,
     world::Component as EntityComponent,
 };
 
@@ -44,11 +46,20 @@ pub(crate) struct PlayerBodyRuntime {
     pub(super) modifiers: Option<BTreeMap<ModifierKey, Modifier>>,
     pub(super) leases: ProjectileLeases,
     pub(super) frame: u32,
+    pub(super) wheel_delivery_frame: u32,
     pub(super) charge_binding: Option<super::charge::ChargeBinding>,
+    pub(super) ult_charge_scale: f64,
 }
 
-pub(super) const DEADEYE_GRAPH: u32 = 0x022f;
-pub(super) const DEADEYE_TARGET_EFFECT: u32 = 0x01ee;
+impl PlayerBodyRuntime {
+    fn sync_body_health_logged(&mut self) {
+        if self.component.snapshot().is_some() {
+            if let Err(error) = self.component.sync_body_health(&mut self.world) {
+                eprintln!("Owner health synchronization failed: {error}");
+            }
+        }
+    }
+}
 
 impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn set_room_activity(&mut self, activity: OwnerRoomActivity) {
@@ -58,10 +69,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     fn set_encounter_active(&mut self, active: bool) -> io::Result<()> {
         if self
             .charge_binding
-            .is_some_and(|binding| binding.is_configured())
+            .is_some_and(|binding| binding.admits_regular_room())
             && self.world.room_activity == Some(OwnerRoomActivity::Regular)
         {
-            // Regular rooms report no encounter and still admit configured charge.
+            // Regular rooms report no encounter and still admit configured/common charge.
             return self.sync_charge_admission(true);
         }
         // The room normally supplies this phase before synchronizing charge.
@@ -83,6 +94,10 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         damage: crate::game_combat::AppliedDamage,
     ) -> io::Result<()> {
         self.credit_applied_damage(damage)
+    }
+
+    fn receive_applied_heal(&mut self, source: u32, target: u32, amount: f64) -> io::Result<()> {
+        self.credit_applied_heal(source, target, amount)
     }
 
     fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
@@ -115,7 +130,77 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.queue_room_message_from(sender, message)
     }
 
+    fn set_wheel_cosmetics(&mut self, cosmetics: crate::match_scene::WheelCosmetics) {
+        self.world.wheel_cosmetics = cosmetics;
+    }
+
+    fn wheel_actions_available(&self) -> bool {
+        self.world.graphs.has_asset_category_data() && self.component.snapshot().is_some()
+    }
+
+    fn queue_wheel_selection(
+        &mut self,
+        action: ClientWheelAction,
+        command_frame: Option<u32>,
+    ) -> Result<usize, InitFault> {
+        if !self.world.graphs.has_asset_category_entry(action.asset()) {
+            return Ok(0);
+        }
+        let view_frame = command_frame.filter(|_| action.confirmed());
+        let earliest = self
+            .wheel_delivery_frame
+            .max(view_frame.unwrap_or(self.frame));
+        let queued = self.component.queue_command_message(
+            action.into_local_message(),
+            view_frame,
+            earliest,
+        )?;
+        if queued != 0 {
+            self.wheel_delivery_frame = earliest;
+            // A reliable selection can arrive on its own. Dispatch it at the
+            // current VM time once its command frame has been simulated.
+            if earliest <= self.frame {
+                self.component.run_now(&mut self.world)?;
+            }
+        }
+        Ok(queued)
+    }
+
+    fn queue_wheel_use(
+        &mut self,
+        report: ClientWheelUse,
+        sent_instance_start: Option<u64>,
+    ) -> Result<usize, InitFault> {
+        use crate::script_init::StateKind;
+        if report.entity != self.world.entity {
+            return Ok(0);
+        }
+        let Some(instance) = self
+            .component
+            .snapshot()
+            .and_then(|snapshot| snapshot.instances.get(&report.instance))
+        else {
+            return Ok(0);
+        };
+        let states = || instance.states.values().filter(|state| state.active);
+        let current = states().any(|state| matches!(state.kind, StateKind::SprayPlacement(Some((unlock, _))) if unlock == report.unlock))
+            && states().any(|state| matches!(state.kind, StateKind::ClientPulse { .. }));
+        if !current && sent_instance_start != Some(instance.started_at_ms()) {
+            return Ok(0);
+        }
+        let queued = self
+            .component
+            .queue_local_instance_message(report.instance, report.into_local_message())?;
+        if queued != 0 {
+            self.component.run_now(&mut self.world)?;
+        }
+        Ok(queued)
+    }
+
     fn set_spatial_frame(&mut self, frame: Arc<crate::game_combat::RoomSpatialFrame>) {
+        self.world
+            .pet_positions
+            .retain(|&pet_id, _| !frame.is_retired(pet_id));
         self.world.spatial_frame = Some(frame);
     }
 
@@ -162,7 +247,7 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn cinematic_aim(&self) -> Option<[i32; 2]> {
-        self.world.cinematic_aim.map(|(_, aim)| aim)
+        self.world.cinematic_aim.last().map(|(_, aim)| *aim)
     }
 
     fn authored_facing(&self) -> Option<[i32; 2]> {
@@ -171,6 +256,120 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         }
         let (_, record) = crate::facing::winner(self.world.facing_claims.iter())?;
         crate::facing::angles(record.direction)
+    }
+
+    fn move_request(&self) -> Option<([f64; 3], f64)> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.component
+            .snapshot()?
+            .instances
+            .values()
+            .flat_map(|instance| instance.states.values())
+            .filter(|state| state.active)
+            .filter_map(|state| state.move_request())
+            .next()
+    }
+
+    fn ball_roll_speed(&self) -> Option<f64> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.world.ball_roll_speed
+    }
+
+    fn take_body_swap(&mut self) -> Option<u64> {
+        self.world.pending_body_swap.take()
+    }
+
+    fn deflect_state(&self) -> Option<crate::script_init::DeflectState> {
+        if self.world.vitals.death().is_some() {
+            return None;
+        }
+        self.world.deflect.values().last().copied()
+    }
+
+    fn combat_modifiers(&self) -> (f64, f64, f64, f64, bool) {
+        const OUT_DMG: u64 = 0x0d80_0000_0000_0317;
+        const IN_DMG: u64 = 0x0d80_0000_0000_0318;
+        const OUT_HEAL: u64 = 0x0d80_0000_0000_0319;
+        const IN_HEAL: u64 = 0x0d80_0000_0000_031a;
+        let (mut out_d, mut in_d, mut out_h, mut in_h, mut cc_immune) =
+            (1.0_f64, 1.0_f64, 1.0_f64, 1.0_f64, false);
+        for entry in self.world.combat_mods.values() {
+            cc_immune |= entry.cc_immune;
+            let apply = |slot: &mut f64| {
+                if entry.multiplicative {
+                    *slot *= entry.value.max(0.0);
+                } else {
+                    *slot = (*slot + entry.value).max(0.0);
+                }
+            };
+            match entry.stat {
+                OUT_DMG => apply(&mut out_d),
+                IN_DMG => apply(&mut in_d),
+                OUT_HEAL => apply(&mut out_h),
+                IN_HEAL => apply(&mut in_h),
+                _ => {}
+            }
+        }
+        (
+            out_d.clamp(0.0, 5.0),
+            in_d.clamp(0.0, 5.0),
+            out_h.clamp(0.0, 5.0),
+            in_h.clamp(0.0, 5.0),
+            cc_immune,
+        )
+    }
+
+    fn set_ult_charge_scale(&mut self, scale: f64) {
+        if scale.is_finite() && scale >= 0.0 {
+            self.ult_charge_scale = scale.clamp(0.0, 10.0);
+        }
+    }
+
+    fn set_cooldown_scale(&mut self, scale: f64) {
+        self.component.set_cooldown_scale(scale);
+    }
+
+    fn ult_charge_percent(&self) -> f64 {
+        PlayerBodyRuntime::ult_charge_percent(self)
+    }
+
+    fn add_ult_charge_points(&mut self, points: f64) -> io::Result<()> {
+        PlayerBodyRuntime::add_ult_charge_points(self, points)
+    }
+
+    fn set_ult_charge_percent(&mut self, percent: f64) -> io::Result<()> {
+        PlayerBodyRuntime::set_ult_charge_percent(self, percent)
+    }
+
+    fn reset_all_cooldowns(&mut self) -> io::Result<usize> {
+        self.component
+            .reset_all_cooldowns(&mut self.world)
+            .map_err(unsupported)
+    }
+
+    fn is_emoting(&self) -> bool {
+        self.component
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.instances.values().any(|inst| inst.graph == 0x023a))
+    }
+
+    fn set_on_fire(&mut self, active: bool) {
+        self.world.controller_on_fire = active;
+        // Enable Practice Range On-Fire HUD bar (`0x0D80000000006868` in `0x01CF:74` & `0x20E4:12`).
+        if self.world.mode == crate::game_content::PRACTICE_RANGE_MODE
+            && self
+                .component
+                .snapshot()
+                .is_some_and(|s| s.variables.get(&34841) != Some(&Value::Bool(true)))
+        {
+            let _ = self
+                .component
+                .set_entity_variable(34841, Value::Bool(true), &mut self.world);
+        }
     }
 
     fn vitals(&self) -> Option<&Vitals> {
@@ -189,8 +388,58 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         self.component.queue_host_event_with_context(event, context)
     }
 
+    fn receive_authored_hit_feedback(
+        &mut self,
+        event: HostEvent,
+        context: &HostHealthContext,
+        variant: f32,
+    ) -> Result<usize, InitFault> {
+        let result = self
+            .component
+            .queue_authored_hit_feedback(event, context, variant);
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() && !matches!(result, Ok(0)) {
+            let HostEvent::HealthApplied { target, .. } = event;
+            crate::owner_trace::playtest(format_args!(
+                "combat hit presentation body={:08X} target={target:08X} game_frame={:?} vm_frame={} critical={:?} queued={result:?}",
+                self.world.entity, context.damage_frame, self.frame, context.critical_hit
+            ));
+        }
+        result
+    }
+
+    fn receive_authored_elimination_feedback(
+        &mut self,
+        target: Arc<crate::script_init::HealthTargetFacts>,
+    ) -> Result<usize, InitFault> {
+        #[cfg(feature = "inspector")]
+        let victim = target.target;
+        let result = self
+            .component
+            .queue_authored_elimination_feedback(target, true);
+        let result = match result {
+            Ok(queued) if queued > 0 => {
+                self.component.run_now(&mut self.world)?;
+                Ok(queued)
+            }
+            other => other,
+        };
+        #[cfg(feature = "inspector")]
+        if crate::owner_trace::playtest_enabled() {
+            crate::owner_trace::playtest(format_args!(
+                "combat elimination presentation body={:08X} target={victim:08X} vm_frame={} queued={result:?}",
+                self.world.entity, self.frame
+            ));
+        }
+        result
+    }
+
     fn heal(&mut self, amount: f64) -> f64 {
-        self.world.vitals.heal(amount)
+        let healed = self.world.vitals.heal(amount);
+        if healed > 0.0 {
+            Self::sync_body_health_logged(self);
+        }
+        healed
     }
 
     fn receive_damage(&mut self, amount: f64, source: Death) -> Damage {
@@ -202,7 +451,47 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             if let Err(error) = self.sync_charge_admission(false) {
                 eprintln!("Owner death charge cleanup failed: {error}");
             }
+        } else if result.dealt > 0.0
+            && self.world.spatial_frame.is_some()
+            && crate::script_expr::valid_entity(source.killer)
+        {
+            const DAMAGE_TAKEN_MESSAGE: u64 = 0x0240_0000_0000_0011;
+            const TAG_HURT_FLINCH_ANIM: u64 = 0x0d80_0000_0000_078d;
+            const TAG_HURT_FLINCH_WEIGHT: u64 = 0x0d80_0000_0000_09a5;
+            let hit_dir = self
+                .world
+                .spatial_frame
+                .as_deref()
+                .and_then(|frame| frame.actor_eye_position(source.killer))
+                .map(|origin| {
+                    let dx = self.world.position[0] - origin[0];
+                    let dz = self.world.position[2] - origin[2];
+                    let len = (dx * dx + dz * dz).sqrt();
+                    if len > 1e-4 {
+                        [dx / len, 0.0, dz / len]
+                    } else {
+                        [0.0, 0.0, -1.0]
+                    }
+                })
+                .unwrap_or([0.0, 0.0, -1.0]);
+            let params = crate::script_wire::Variables::from([
+                (0x13, Value::Float(f64::from(result.dealt as f32))),
+                (
+                    0x3d,
+                    Value::Array(vec![
+                        Value::Asset(TAG_HURT_FLINCH_ANIM),
+                        Value::Asset(TAG_HURT_FLINCH_WEIGHT),
+                    ]),
+                ),
+                (0x65, Value::Vector(hit_dir)),
+            ]);
+            let _ = self.component.queue_entity_message_from(
+                source.killer,
+                DAMAGE_TAKEN_MESSAGE,
+                params,
+            );
         }
+        Self::sync_body_health_logged(self);
         result
     }
 
@@ -229,7 +518,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_health_update(&mut self) -> Option<EntityComponent> {
-        self.world.vitals.take_cumulative_update()
+        let update = self.world.vitals.take_cumulative_update()?;
+        Self::sync_body_health_logged(self);
+        Some(update)
     }
 
     fn snapshot(&self) -> Option<&Snapshot> {
@@ -277,11 +568,19 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
             }
         }
         let pose = mover.pose();
+        #[cfg(feature = "inspector")]
+        let before_effects = crate::owner_trace::playtest_enabled().then(|| {
+            self.component
+                .snapshot()
+                .and_then(|snapshot| snapshot.frame_actions.back())
+                .map_or(0, |action| action.callout.serial)
+        });
         self.world.position = pose.position;
         self.world.eye_position = script_eye_position(self.world.hero, mover);
         // Command gaps and timer advances retain the last movement record.
         if step == BodyStep::Posed {
             self.world.movement = pose;
+            self.world.record_command_view(command.frame);
         }
         if step == BodyStep::Posed {
             self.world.throttles = [command.right, command.forward];
@@ -297,6 +596,9 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 .advance_unposed(command.frame, boundary, &mut self.world)
                 .map_err(unsupported)?;
         }
+        self.component
+            .poll_voice(&mut self.world)
+            .map_err(unsupported)?;
         if step != BodyStep::UnposedTimer {
             self.modifiers = self
                 .component
@@ -304,6 +606,35 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                 .map_err(unsupported)?;
         }
         self.frame = command.frame;
+        #[cfg(feature = "inspector")]
+        if let Some((before, snapshot)) = before_effects.zip(self.component.snapshot()) {
+            for action in snapshot
+                .frame_actions
+                .iter()
+                .rev()
+                .take_while(|action| action.callout.serial > before)
+            {
+                let callout = action.callout;
+                let Some(instance) = snapshot.instances.get(&callout.instance) else {
+                    continue;
+                };
+                let effect = self
+                    .world
+                    .graphs
+                    .graph(instance.graph)
+                    .and_then(|graph| graph.node(callout.position))
+                    .filter(|node| node.class == "STUStatescriptActionEffect")
+                    .and_then(|node| {
+                        crate::script_graph::asset_guid(&node.fields["m_effect"]["m_effect"])
+                    });
+                if let Some(effect) = effect {
+                    crate::owner_trace::playtest(format_args!(
+                        "combat effect emitted body={:08X} vm_frame={} serial={} effect={effect:016X}",
+                        snapshot.entity, self.frame, callout.serial
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -334,11 +665,12 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
     }
 
     fn take_shots(&mut self, command: Option<Command>, mover: &Mover) -> Vec<PosedShot> {
-        let shots = self.component.take_shots().unwrap_or_default();
+        let shots = self.component.take_reported_shots().unwrap_or_default();
         #[cfg(feature = "inspector")]
         if !shots.is_empty() && crate::owner_trace::enabled() {
             let pose_frame = command.map(|command| command.frame);
-            for shot in &shots {
+            for report in &shots {
+                let shot = report.event;
                 crate::owner_trace::record(format_args!(
                     "owner-volley vm-shot body={:08x} shot_frame={} pose_frame={pose_frame:?} instance={} state={} counter={} start_ms={} ordinal={}",
                     shot.entity,
@@ -356,139 +688,359 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
         };
         let [x, y, z] = mover.pose().position;
         let hero = self.world.hero;
-        let origin = [x, y + eye_height(hero, mover.crouched()), z];
-        shots
-            .into_iter()
-            .filter_map(|shot| {
-                let node = self.component.shot_node(&shot)?;
-                let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
-                let stun_duration = flashbang
-                    .then(|| {
-                        LEGACY_PROJECTILE_CONTROL
-                            .duration(&self.world.graphs)
-                            .cloned()
-                    })
-                    .flatten();
-                // Python e1128509 declares this primary-only implicit policy;
-                // it is not a recovered global native critical default.
-                let default_critical = if (hero, shot.graph, node.pos) == (CASSIDY, 0x01d2, 31) {
-                    2.0
-                } else {
-                    1.0
-                };
-                let mut evaluate = |config: &Json| {
-                    self.component
-                        .evaluate_shot_config(&shot, config, &mut self.world)
-                };
-                if ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten()
-                    == Some(ImpactSpawn {
-                        definition: BIOTIC_FIELD_ENTITY,
-                        on_spawn_graph: None,
-                    })
-                    && node
-                        .field("m_projectileEntity.m_entityDef")
-                        .and_then(|config| evaluate(config).ok())
-                        == Some(Value::Asset(BIOTIC_CANISTER))
-                    && self.leases.entity(BIOTIC_CANISTER, shot.frame, 0).is_some()
+        let origin = [
+            x,
+            y + mover.eye_height() + f64::from(mover.spring_offset()),
+            z,
+        ];
+        let mut posed = Vec::with_capacity(shots.len());
+        let mut projected_observer = None;
+        let mut pose = |report: ReportedShot| -> Option<()> {
+            let shot = report.event;
+            let node = self.component.shot_node(&shot)?;
+            let flashbang = LEGACY_PROJECTILE_CONTROL.matches_shot(hero, shot.graph, node.pos);
+            let stun_duration = flashbang
+                .then(|| {
+                    LEGACY_PROJECTILE_CONTROL
+                        .duration(&self.world.graphs)
+                        .cloned()
+                })
+                .flatten();
+            // In retail 104319 data, every non-headshotting weapon explicitly sets
+            // `m_A872C70E = 1`, while headshotting weapons omit it and default to 2.0x.
+            let default_critical = 2.0;
+            let graphs_ref = Arc::clone(&self.world.graphs);
+            let deadeye_has_targets = self.world.deadeye_scene.collision.is_some()
+                || !self.world.deadeye_scene.targets.is_empty();
+            let deadeye_targets_non_empty = !self.world.deadeye_scene.targets.is_empty();
+            let locked_target = self.component.snapshot().and_then(|snapshot| {
+                // Cassidy Deadeye (`536` + `5874`) or Soldier: 76 Tactical Visor (`2337`).
+                if let Some(Value::Entity(entity)) = snapshot
+                    .instances
+                    .get(&shot.instance)
+                    .and_then(|inst| inst.variables.get(&536))
                 {
-                    return Some(PosedShot::BioticField(PosedBioticField {
-                        shot,
-                        feet: [x, y, z],
-                    }));
-                }
-                let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
-                if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
-                    let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
-                    if !node.is_networked()
-                        || !local_prediction(node)
-                        || !predicted_sync(node, &mut evaluate).ok()?
-                        || authored_number(
-                            node.field("m_numProjectilesPerShot"),
-                            1.0,
-                            &mut evaluate,
-                        )
-                        .ok()?
-                            != 1.0
-                    {
-                        return None;
+                    if let Some(Value::Array(visible)) = snapshot.variables.get(&5874) {
+                        if visible.contains(&Value::Entity(*entity)) {
+                            return Some(*entity);
+                        }
                     }
-                    let ballistics =
-                        ProjectileBallistics::from_authored(node, &mut evaluate).ok()??;
-                    let definition = ballistics.definition?;
-                    self.leases.entity(definition, shot.frame, 0)?;
-                    if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
-                        || ballistics
+                }
+                if let Some(&Value::Entity(entity)) = snapshot.variables.get(&2337) {
+                    if crate::script_expr::valid_entity(entity) && entity != shot.entity {
+                        return Some(entity);
+                    }
+                }
+                None
+            });
+            let locked_aim_dir = locked_target.and_then(|entity| {
+                if deadeye_has_targets {
+                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)
+                } else {
+                    self.world
+                        .spatial_frame
+                        .as_deref()?
+                        .target_aim_direction(origin, entity)
+                }
+            });
+            let mut evaluate = |config: &Json| {
+                self.component
+                    .evaluate_shot_config(&shot, config, &mut self.world)
+            };
+            let impact_spawn = ImpactSpawn::from_volley(node, &mut evaluate).ok().flatten();
+            if impact_spawn
+                == Some(ImpactSpawn {
+                    definition: BIOTIC_FIELD_ENTITY,
+                    on_spawn_graph: None,
+                })
+                && node
+                    .field("m_projectileEntity.m_entityDef")
+                    .and_then(|config| evaluate(config).ok())
+                    == Some(Value::Asset(BIOTIC_CANISTER))
+                && self.leases.entity(BIOTIC_CANISTER, shot.frame, 0).is_some()
+            {
+                posed.push(PosedShot::BioticField(PosedBioticField {
+                    shot,
+                    feet: [x, y, z],
+                }));
+                return Some(());
+            }
+            let speed = node.field("m_projectileSpeed").unwrap_or(&Json::Null);
+            if !speed.is_null() && to_float(&evaluate(speed).ok()?) != 0.0 {
+                let gravity = authored_gravity(&node.fields, &mut evaluate).ok()?;
+                let count =
+                    authored_number(node.field("m_numProjectilesPerShot"), 1.0, &mut evaluate)
+                        .ok()?;
+                if !count.is_finite() || count < 1.0 || count > 32.0 {
+                    return None;
+                }
+                let ballistics = ProjectileBallistics::from_authored_with_critical(
+                    node,
+                    default_critical,
+                    &mut evaluate,
+                )
+                .ok()??;
+                let direct_policy = node
+                    .field("m_6396149F")
+                    .map(crate::game_hitscan::HitTargetPolicy::from_authored);
+                let blast_policy = node
+                    .field("m_D2D11CE9")
+                    .map(crate::game_hitscan::HitTargetPolicy::from_authored);
+                let target_policy = match (
+                    direct_policy.filter(|_| ballistics.direct.is_some_and(|h| h.amount > 0.0)),
+                    blast_policy.filter(|_| {
+                        ballistics
                             .blast
                             .as_ref()
-                            .is_some_and(|blast| blast.hit.amount < 0.0)
-                    {
+                            .is_some_and(|b| b.hit.amount > 0.0 || b.knockback.is_some())
+                    }),
+                ) {
+                    (Some(d), Some(b)) => d.union(b),
+                    (Some(d), None) => d,
+                    (None, Some(b)) => b,
+                    (None, None) => crate::game_hitscan::HitTargetPolicy::default(),
+                };
+                let piercing = node
+                    .field("m_6396149F.m_0A5ED456")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v))
+                    && ballistics
+                        .blast
+                        .as_ref()
+                        .is_none_or(|b| b.hit.amount <= 0.0 && b.knockback.is_none());
+                let post_bounce_fuse = node
+                    .field("m_B752FBAE")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .map(|v| to_float(&v))
+                    .filter(|v| v.is_finite() && *v > 0.0);
+                let sticky_delay = node
+                    .field("m_55E8761C.m_12654E6E")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v))
+                    .then_some(1.0);
+                let persist_entity = node
+                    .field("m_55E8761C.m_147777B3")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .is_some_and(|v| crate::script_expr::truthy(&v));
+                let direct_effect = node
+                    .field("m_6396149F.m_modifyHealth.m_277A4ECA")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .and_then(|v| match v {
+                        Value::Asset(guid) if guid != 0 => Some(guid),
+                        _ => None,
+                    });
+                let blast_effect = node
+                    .field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")
+                    .filter(|v| !v.is_null())
+                    .and_then(|v| evaluate(v).ok())
+                    .and_then(|v| match v {
+                        Value::Asset(guid) if guid != 0 => Some(guid),
+                        _ => None,
+                    });
+                // If the volley specifies a persistent projectile entity (`m_147777B3 = true`)
+                // without an explicit `m_49CBA3BC` impact spawn (e.g. Concussion Mine,
+                // Dynamite, Translocator, Sentry Turret, Pulse Bomb), promote its authored
+                // entity definition and primary graph from the retail entity catalog.
+                let impact_spawn = impact_spawn.or_else(|| {
+                    if !persist_entity {
                         return None;
                     }
-                    if !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
-                        && !ballistics.blast.as_ref().is_some_and(|blast| {
-                            blast.hit.amount > 0.0 || blast.knockback.is_some()
-                        })
-                    {
+                    let definition = ballistics.definition?;
+                    let on_spawn_graph = graphs_ref.entity_body(definition).and_then(|b| {
+                        b.graphs
+                            .iter()
+                            .filter_map(|binding| binding.graph)
+                            .find(|&g| !matches!(g, 0x0015 | 0x0033 | 0x0043 | 0x004b | 0x08b6))
+                            .map(|idx| 0x0580_0000_0000_0000 | u64::from(idx))
+                    });
+                    Some(ImpactSpawn {
+                        definition,
+                        on_spawn_graph,
+                    })
+                });
+                if ballistics.direct.is_some_and(|hit| hit.amount < 0.0)
+                    || ballistics
+                        .blast
+                        .as_ref()
+                        .is_some_and(|blast| blast.hit.amount < 0.0)
+                {
+                    return None;
+                }
+                if impact_spawn.is_none()
+                    && ballistics.definition.is_none()
+                    && !ballistics.direct.is_some_and(|hit| hit.amount > 0.0)
+                    && !ballistics
+                        .blast
+                        .as_ref()
+                        .is_some_and(|blast| blast.hit.amount > 0.0 || blast.knockback.is_some())
+                {
+                    return None;
+                }
+                let predicted = node.is_networked()
+                    && local_prediction(node)
+                    && predicted_sync(node, &mut evaluate).ok()?
+                    && count == 1.0
+                    && ballistics
+                        .definition
+                        .is_some_and(|def| self.leases.entity(def, shot.frame, 0).is_some());
+                let stun = if flashbang {
+                    let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
+                    if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
                         return None;
                     }
-                    let direction =
-                        posed_projectile_direction(node, aim_direction(&command), &mut evaluate)?;
-                    let stun = if flashbang {
-                        let effect = node.field("m_D2D11CE9.m_modifyHealth.m_277A4ECA")?;
-                        if !LEGACY_PROJECTILE_CONTROL.has_effect_marker(&evaluate(effect).ok()?) {
-                            return None;
-                        }
-                        Some(Stun::from_seconds(to_float(
-                            &evaluate(stun_duration.as_ref()?).ok()?,
-                        ))?)
+                    Some(Stun::from_seconds(to_float(
+                        &evaluate(stun_duration.as_ref()?).ok()?,
+                    ))?)
+                } else {
+                    None
+                };
+                let skip_owner = local_prediction(node);
+                let can_present_volley = !predicted
+                    && node.is_networked()
+                    && ballistics.definition.is_some()
+                    && ballistics.speed.is_finite()
+                    && ballistics.speed > 0.0
+                    && ballistics.lifetime.is_finite()
+                    && ballistics.lifetime > 0.0
+                    && node.field("m_49CBA3BC").is_none_or(|value| {
+                        value.is_null() || value.as_array().is_some_and(Vec::is_empty)
+                    });
+                if count == 1.0 {
+                    let base_aim = locked_aim_dir.unwrap_or_else(|| aim_direction(&command));
+                    let direction = posed_projectile_direction(node, base_aim, &mut evaluate)?;
+                    let presentation = if can_present_volley {
+                        let def = ballistics.definition?;
+                        let snapshot = projected_observer
+                            .get_or_insert_with(|| {
+                                let snap = self.component.snapshot()?;
+                                SnapshotEncoder::new(&self.world.graphs, &self.codecs)
+                                    .project(snap, crate::script_snapshot_wire::View::Observer)
+                                    .ok()
+                            })
+                            .as_ref()?;
+                        let volley = snapshot.freeze_volley_with_states(
+                            shot,
+                            report.presentation,
+                            &report.presentation_states,
+                        )?;
+                        Some(Arc::new(
+                            crate::game_combat::ObservedShot::new(
+                                volley,
+                                def,
+                                origin,
+                                direction,
+                                shot.frame,
+                                ballistics.lifetime,
+                            )
+                            .with_skip_owner(skip_owner),
+                        ))
                     } else {
                         None
                     };
-                    return Some(PosedShot::Projectile(Box::new(PosedProjectile {
+                    posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
                         stun,
                         shot,
                         ballistics,
                         origin,
                         direction,
                         gravity,
+                        predicted,
+                        target_policy,
+                        piercing,
+                        impact_spawn,
+                        post_bounce_fuse,
+                        sticky_delay,
+                        direct_effect,
+                        blast_effect,
+                        presentation,
                     })));
-                }
-                let hit = HitDefinition::from_authored_with_critical(
-                    node.field("m_6396149F")?,
-                    default_critical,
-                    &mut evaluate,
-                )
-                .ok()??;
-                if hit.amount <= 0.0 {
-                    return None;
-                }
-                let reach = node.field("m_FEC435C6").unwrap_or(&Json::Null);
-                let reach = if reach.is_null() {
-                    0.0
                 } else {
-                    to_float(&evaluate(reach).ok()?)
-                };
-                let direction = if (shot.graph, node.pos) == (DEADEYE_TARGET_EFFECT, 14) {
-                    let snapshot = self.component.snapshot()?;
-                    let Value::Entity(entity) = *snapshot
-                        .instances
-                        .get(&shot.instance)?
-                        .variables
-                        .get(&536)?
-                    else {
-                        return None;
-                    };
-                    let Value::Array(visible) = snapshot.variables.get(&5874)? else {
-                        return None;
-                    };
-                    if !visible.contains(&Value::Entity(entity)) {
+                    if !node.field("m_5EC1EB38").is_some_and(Json::is_object) {
                         return None;
                     }
-                    DeadeyeScene::shot_direction(&self.world.deadeye_scene, origin, entity)?
-                } else {
-                    aim_direction(&command)
-                };
-                Some(PosedShot::Hitscan(Box::new(PosedHitscan {
+                    let mut directions = Vec::new();
+                    for_each_authored_hitscan_direction(
+                        node,
+                        &report,
+                        aim_direction(&command),
+                        &mut evaluate,
+                        |direction| directions.push(direction),
+                    );
+                    let presentation = if can_present_volley {
+                        let def = ballistics.definition?;
+                        let snapshot = projected_observer
+                            .get_or_insert_with(|| {
+                                let snap = self.component.snapshot()?;
+                                SnapshotEncoder::new(&self.world.graphs, &self.codecs)
+                                    .project(snap, crate::script_snapshot_wire::View::Observer)
+                                    .ok()
+                            })
+                            .as_ref()?;
+                        let volley = snapshot.freeze_volley_with_states(
+                            shot,
+                            report.presentation,
+                            &report.presentation_states,
+                        )?;
+                        Some(Arc::new(
+                            crate::game_combat::ObservedShot::new(
+                                volley,
+                                def,
+                                origin,
+                                aim_direction(&command),
+                                shot.frame,
+                                ballistics.lifetime,
+                            )
+                            .with_skip_owner(skip_owner),
+                        ))
+                    } else {
+                        None
+                    };
+                    for direction in directions {
+                        posed.push(PosedShot::Projectile(Box::new(PosedProjectile {
+                            stun,
+                            shot,
+                            ballistics: ballistics.clone(),
+                            origin,
+                            direction,
+                            gravity,
+                            predicted: false,
+                            target_policy,
+                            piercing,
+                            impact_spawn,
+                            post_bounce_fuse,
+                            sticky_delay,
+                            direct_effect,
+                            blast_effect,
+                            presentation: presentation.clone(),
+                        })));
+                    }
+                }
+                return Some(());
+            }
+            let hit_config = node.field("m_6396149F")?;
+            let hit = HitDefinition::from_authored_with_critical(
+                hit_config,
+                default_critical,
+                &mut evaluate,
+            )
+            .ok()??;
+            if hit.amount <= 0.0 {
+                return None;
+            }
+            let hit_policy = crate::game_hitscan::HitTargetPolicy::from_authored(hit_config);
+            let reach = node.field("m_FEC435C6").unwrap_or(&Json::Null);
+            let reach = if reach.is_null() {
+                0.0
+            } else {
+                to_float(&evaluate(reach).ok()?)
+            };
+            let mut push_hitscan = |direction| {
+                let shot_box = Box::new(PosedHitscan {
                     source: shot.entity,
                     origin,
                     direction,
@@ -496,8 +1048,31 @@ impl OwnerBodyRuntime for PlayerBodyRuntime {
                     shot_frame: shot.frame,
                     reach,
                     hit,
-                })))
-            })
-            .collect()
+                });
+                if hit_policy.affects_allies || hit_policy.healing {
+                    posed.push(PosedShot::AllyHitscan(shot_box, hit_policy));
+                } else {
+                    posed.push(PosedShot::Hitscan(shot_box));
+                }
+            };
+            if let Some(direction) = locked_aim_dir {
+                push_hitscan(direction);
+            } else if locked_target.is_some() && deadeye_targets_non_empty {
+                return None;
+            } else {
+                for_each_authored_hitscan_direction(
+                    node,
+                    &report,
+                    aim_direction(&command),
+                    &mut evaluate,
+                    push_hitscan,
+                );
+            }
+            Some(())
+        };
+        for report in shots {
+            pose(report);
+        }
+        posed
     }
 }

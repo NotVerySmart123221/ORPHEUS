@@ -75,6 +75,20 @@ pub struct Spawn {
     pub yaw: f64,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct MapObjective {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub placeable: Option<u32>,
+    #[serde(default)]
+    pub position: [f64; 3],
+    #[serde(default)]
+    pub rotation: Option<[f64; 4]>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameMap {
     pub name: String,
@@ -83,6 +97,7 @@ pub struct GameMap {
     pub placeables: Vec<u32>,
     pub first_entity: Option<u32>,
     pub spawns: Vec<Spawn>,
+    pub objectives: Vec<MapObjective>,
     pub mode_name: String,
     pub team_sizes: Vec<u8>,
     pub free_for_all: bool,
@@ -105,6 +120,7 @@ impl GameMap {
                 position: [54.56507, 1.0, 42.14788],
                 yaw: -170.3434,
             }],
+            objectives: Vec::new(),
             mode_name: PRACTICE_RANGE_NAME.into(),
             team_sizes: vec![1, 0],
             free_for_all: false,
@@ -202,6 +218,7 @@ impl MapCatalog {
                     mirrored: raw.mirrored,
                     first_entity: raw.first_entity,
                     spawns,
+                    objectives: raw.objectives.unwrap_or_default(),
                 },
             );
         }
@@ -274,6 +291,7 @@ impl MapCatalog {
             placeables,
             first_entity: entry.first_entity,
             spawns,
+            objectives: entry.objectives.clone(),
             mode_name: mode_name.into(),
             team_sizes: team_sizes.into(),
             free_for_all,
@@ -290,6 +308,7 @@ struct MapEntry {
     mirrored: Vec<u32>,
     first_entity: Option<u32>,
     spawns: Vec<SpawnEntry>,
+    objectives: Vec<MapObjective>,
 }
 
 impl MapEntry {
@@ -337,6 +356,7 @@ struct RawMap {
     first_entity: Option<u32>,
     placeables_by_mode: Option<IndexMap<String, Vec<u32>>>,
     spawns: Option<Vec<RawSpawn>>,
+    objectives: Option<Vec<MapObjective>>,
 }
 
 #[derive(Deserialize)]

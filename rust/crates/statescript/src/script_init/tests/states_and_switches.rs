@@ -2520,3 +2520,270 @@ fn queued_messages_abort_and_rearm_waits_without_crossing_instance_scope() {
     assert!(component.snapshot().is_none());
     assert_eq!(component.run_now(&mut EmptyWorld), Err(InitFault::Halted));
 }
+
+#[test]
+fn wheel_actions_inherit_plain_action_continuation() {
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/wheel-base-actions-v1.json"
+    )))
+    .unwrap();
+    for case in fixture["input"].as_array().unwrap() {
+        let index = u32::try_from(case["graph"].as_u64().unwrap()).unwrap();
+        let class = case["class"].as_str().unwrap();
+        let continuation = case["continuation"].as_i64().unwrap();
+        let mut inherited = node(
+            1,
+            class,
+            None,
+            json!({
+                "m_E6525980": {"$":"UnsupportedCosmeticPayload"},
+                "m_06B5A4F1": {"$":"UnsupportedCosmeticTarget"},
+                "m_outPlug": plug(&[(2, "m_inPlug")], &[]),
+            }),
+        );
+        inherited["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = Arc::new(store(vec![graph(
+            index,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")],&[])}),
+                ),
+                inherited,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({
+                        "m_out_Var": var(1, false),
+                        "m_value": {"$":"STUConfigVarInt","m_value":continuation}
+                    }),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]));
+        let component = Component::start(
+            graphs,
+            0xa000_0101,
+            Variables::new(),
+            vec![Root::new(1, index)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(
+            snapshot.instances[&1].variables[&1],
+            Value::Integer(continuation)
+        );
+    }
+}
+
+#[test]
+fn cycle_index_steps_and_wraps_with_an_expression_local_candidate() {
+    let fixture: Json = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/behavior/statescript-cycle-index-v1.json"
+    )))
+    .unwrap();
+    for case in fixture["cases"].as_array().unwrap() {
+        let available = case["available"].as_array().unwrap();
+        let mut cycle = node(
+            1,
+            "STU_BC5E4622",
+            None,
+            json!({
+                "m_D10618D1": available.len(),
+                "m_339A63DB": var(30, true),
+                "m_C78954CB": case["reverse"],
+                "m_A53FE9DA": case["fail"],
+                "m_condition":{"$":"STU_919FD47C","m_expression":{
+                    "m_dynamicVars": [var(29, true), var(12, false)],
+                    "m_opcodes": [8, 0, 13, 1, 17, 0]
+                }},
+                "m_outPlug":plug(&[(2,"m_inPlug")],&[]),
+            }),
+        );
+        cycle["fields"]["m_ADEB6E05"] = json!(true);
+        let graphs = Arc::new(store(vec![graph(
+            39,
+            vec![
+                node(
+                    0,
+                    "STUStatescriptEntry",
+                    None,
+                    json!({"m_outPlug":plug(&[(1,"m_inPlug")],&[])}),
+                ),
+                cycle,
+                node(
+                    2,
+                    "STUStatescriptActionSetVar",
+                    None,
+                    json!({
+                        "m_out_Var":var(88, true), "m_value":true
+                    }),
+                ),
+            ],
+            json!([]),
+            json!([0]),
+        )]));
+        let vars = Variables::from([
+            (
+                29,
+                Value::Array(
+                    available
+                        .iter()
+                        .map(|item| Value::Bool(item.as_bool().unwrap()))
+                        .collect(),
+                ),
+            ),
+            (30, Value::Integer(case["start"].as_i64().unwrap())),
+        ]);
+        let component = Component::start(
+            graphs,
+            0xa000_0101,
+            vars,
+            vec![Root::new(1, 39)],
+            0,
+            &mut EmptyWorld,
+            MAX_INIT_WORK,
+        )
+        .unwrap();
+        let snapshot = component.snapshot().unwrap();
+        assert!(
+            snapshot.initialization_complete(),
+            "{:?}",
+            snapshot.diagnostics
+        );
+        assert_eq!(snapshot.variables[&88], Value::Bool(true));
+        assert_eq!(
+            snapshot.variables[&30],
+            Value::Integer(case["expected"].as_i64().unwrap()),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
+fn track_b2_nodes_and_states_execute_generically() {
+    let graphs = Arc::new(store(vec![graph(
+        0x7001,
+        vec![
+            node(
+                0,
+                "STUStatescriptEntry",
+                None,
+                json!({"m_outPlug": plug(&[(1, "m_inPlug"), (6, "m_beginPlug"), (7, "m_beginPlug"), (8, "m_beginPlug"), (9, "m_beginPlug"), (10, "m_beginPlug")], &[])}),
+            ),
+            node(
+                1,
+                "STU_D137ECA0",
+                None,
+                json!({
+                    "m_ADEB6E05": 1,
+                    "m_D10618D1": {"$": "STUConfigVarBool", "m_value": 1},
+                    "m_out_Var": var(501, true),
+                    "m_value": {"$": "STUConfigVarInt", "m_value": 7},
+                    "m_outPlug": plug(&[(2, "m_inPlug")], &[]),
+                    "m_08FBE734": plug(&[], &[]),
+                }),
+            ),
+            node(
+                2,
+                "STU_008D30B1",
+                None,
+                json!({
+                    "m_ADEB6E05": 1,
+                    "m_targets": null,
+                    "m_amount": {"$": "STUConfigVarFloat", "m_value": 1.0},
+                    "m_outPlug": plug(&[(3, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                3,
+                "STU_621AF478",
+                None,
+                json!({
+                    "m_ADEB6E05": 1,
+                    "m_targets": null,
+                    "m_DB744C76": {"$": "STUConfigVarBool", "m_value": 1},
+                    "m_outPlug": plug(&[(4, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                4,
+                "STU_1F2DB0E9",
+                None,
+                json!({
+                    "m_ADEB6E05": 1,
+                    "m_AF872E86": {"$": "STUConfigVarInt", "m_value": 3},
+                    "m_outPlug": plug(&[(5, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                5,
+                "STU_3A276B3A",
+                None,
+                json!({
+                    "m_ADEB6E05": 1,
+                    "m_condition": {"$": "STUConfigVarBool", "m_value": 1},
+                    "m_gameMessage": {"$": "STUConfigVarGameMessage", "m_gameMessage": "0x024000000000115C"},
+                    "m_outPlug": plug(&[(11, "m_inPlug")], &[]),
+                }),
+            ),
+            node(
+                6,
+                "STUStatescriptStateCreateEntity",
+                Some(0),
+                json!({"m_2BBEEAB8": 1}),
+            ),
+            node(7, "STU_0C3A5D53", Some(1), json!({"m_2BBEEAB8": 1})),
+            node(8, "STU_B1FA9C2A", Some(2), json!({"m_2BBEEAB8": 1})),
+            node(9, "STU_63D801B1", Some(3), json!({"m_2BBEEAB8": 1})),
+            node(10, "STU_49FE0019", Some(4), json!({"m_2BBEEAB8": 1})),
+            node(
+                11,
+                "STUStatescriptActionSetVar",
+                None,
+                json!({"m_out_Var": var(502, true), "m_value": true}),
+            ),
+            node(12, "STU_CAE23847", None, json!({})),
+        ],
+        json!([6, 7, 8, 9, 10]),
+        json!([0]),
+    )]));
+    let component = Component::start(
+        graphs,
+        0xa000_0102,
+        Variables::new(),
+        vec![Root::new(1, 0x7001)],
+        0,
+        &mut EmptyWorld,
+        MAX_INIT_WORK,
+    )
+    .unwrap();
+    let snapshot = component.snapshot().unwrap();
+    assert!(
+        snapshot.initialization_complete(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert!(
+        snapshot.diagnostics.is_empty(),
+        "{:?}",
+        snapshot.diagnostics
+    );
+    assert_eq!(snapshot.variables[&501], Value::Integer(7));
+    assert_eq!(snapshot.variables[&502], Value::Bool(true));
+}

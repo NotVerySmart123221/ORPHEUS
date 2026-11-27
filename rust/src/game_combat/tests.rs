@@ -1,5 +1,8 @@
 use super::*;
-use crate::{game_content::GameMap, game_instance::RETAIL_QUANTA, scene_assets::SceneAssets};
+use crate::{
+    game_content::GameMap, game_heroes::SOLDIER, game_instance::RETAIL_QUANTA,
+    scene_assets::SceneAssets,
+};
 
 const SCRIPT_RAY_SITE: crate::script_init::Site = crate::script_init::Site {
     entity: 91,
@@ -53,11 +56,12 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         script_init::ViewTargetQuery,
     };
 
-    let mut room = RoomSimulation::new(fixture_bots()).unwrap();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
     let query = ViewTargetQuery {
         source: 9,
         offset: [0.0; 3],
+        eye_heading: None,
         range: 10.0,
         aperture: 22.0,
         limit: 4,
@@ -97,6 +101,37 @@ fn frozen_view_query_only_reports_empty_when_no_other_actor_can_match() {
         let expected = (slot == 0).then(Vec::new);
         assert_eq!(snapshot.empty_view_targets(&query), expected);
     }
+
+    // Bots are also valid view targets (e.g. Mercy/Zen/Sombra/Zarya on Practice Range bots),
+    // so a solo player in a room with living bots must not short-circuit to an empty result.
+    let mut bot_room = RoomSimulation::new(fixture_bots()).unwrap();
+    bot_room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [4.0, 0.0, 2.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    bot_room
+        .spawn_player_body(PlayerBodyState::new(
+            BodyId {
+                entity: 9,
+                generation: 1,
+            },
+            109,
+            0,
+            0,
+            1,
+            mover,
+            None,
+            frame,
+            None,
+        ))
+        .unwrap();
+    let bot_snapshot = bot_room.capture_spatial_frame(frame).unwrap().unwrap();
+    assert_eq!(bot_snapshot.empty_view_targets(&query), None);
 }
 
 fn check_spatial_candidates_frame(free_for_all: bool) {
@@ -336,6 +371,37 @@ fn owner_startup_spatial_frame_excludes_the_frozen_body_on_each_replacement() {
         vitals: Option<Vitals>,
     }
     impl OwnerBodyRuntime for FrameProbe {
+        fn receive_applied_damage(&mut self, _: AppliedDamage) -> io::Result<()> {
+            Ok(())
+        }
+        fn receive_room_message(
+            &mut self,
+            _: u32,
+            _: crate::script_init::RoomMessage,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_host_event(
+            &mut self,
+            _: crate::script_init::HostEvent,
+            _: crate::script_init::HostHealthContext,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_authored_hit_feedback(
+            &mut self,
+            _: crate::script_init::HostEvent,
+            _: &crate::script_init::HostHealthContext,
+            _: f32,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
+        fn receive_authored_elimination_feedback(
+            &mut self,
+            _: Arc<HealthTargetFacts>,
+        ) -> Result<usize, crate::script_init::InitFault> {
+            Ok(0)
+        }
         fn set_spatial_frame(&mut self, frame: Arc<RoomSpatialFrame>) {
             *self.view.lock().unwrap() = Some(frame);
         }
@@ -1582,6 +1648,7 @@ pub(super) fn fixture_impact(entity: u32, damage: f64) -> Impact {
         critical: false,
         loadout: None,
         impulse: None,
+        geometry: None,
     }
 }
 
@@ -1742,7 +1809,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     stream.arrived(hit.last);
     assert_eq!(
         scene.take_encounter_voice_requests(),
-        [crate::junkenstein_voice::VoiceRequest {
+        [crate::pve_encounter::voice::VoiceRequest {
             anchor: 0x8000_0032,
             speaker: crate::world::GAME_MODE_ENTITY,
             stimulus: 0x0ee0_0000_0000_06c7,
@@ -1890,7 +1957,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     assert_eq!(
         handoff.kind,
         crate::script_init::StateKind::PersistentSend(
-            crate::junkenstein_messages::POST_MATCH_PHASE
+            crate::pve_encounter::messages::POST_MATCH_PHASE
         ),
     );
     let phase = scene.encounter_post_match_wire().unwrap().unwrap();
@@ -1944,7 +2011,9 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
     assert_eq!(results.states[&2].activation, 1);
     assert_eq!(
         results.states[&2].kind,
-        crate::script_init::StateKind::PersistentSend(crate::junkenstein_messages::RESULT_SUMMARY),
+        crate::script_init::StateKind::PersistentSend(
+            crate::pve_encounter::messages::RESULT_SUMMARY
+        ),
     );
     assert_eq!(mode.variables[&8525], Value::Integer(0));
     let payload = scene.encounter_result_wire().unwrap().unwrap();
@@ -1977,7 +2046,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
         .0
         .take_defender_messages()
         .into_iter()
-        .filter(|message| message.message == crate::junkenstein_messages::ENCOUNTER_RESULT)
+        .filter(|message| message.message == crate::pve_encounter::messages::ENCOUNTER_RESULT)
         .collect();
     let [result] = messages.as_slice() else {
         panic!("expected one authored match result, received {messages:?}");
@@ -2084,7 +2153,7 @@ fn authored_zomnic_attack_updates_gate_damage_and_retires_the_pair() {
                 assert_eq!(
                     instance.states[&4].kind,
                     crate::script_init::StateKind::PersistentSend(
-                        crate::junkenstein_messages::POST_MATCH_SIGNAL
+                        crate::pve_encounter::messages::POST_MATCH_SIGNAL
                     )
                 );
                 assert!(projection.instance_states(manager).unwrap().contains(&4));
@@ -2267,10 +2336,100 @@ pub(super) fn flight_fixture(owner: BodyId, speed: f64) -> AdmittedFlight {
     .unwrap();
     AdmittedFlight {
         token,
+        launch_frame: 0,
         flight,
         stun: None,
         hit_effect: None,
+        impact_spawn: None,
+        presentation: None,
     }
+}
+
+#[test]
+fn owner_splash_uses_the_same_calibrated_shape_as_other_targets() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_hitscan::HurtVolumeCatalog,
+        mover_settings::{MoverCatalog, MoverSettings},
+        script_player::fixture_body_factory,
+        script_wire::Value,
+    };
+    use serde_json::{Value as Json, json};
+
+    let fixture: Json = serde_json::from_str(include_str!(
+        "../../../fixtures/behavior/projectile-self-splash-v1.json"
+    ))
+    .unwrap();
+    let calibrated = &fixture["calibrated_owner"];
+    let input = &fixture["input"];
+    let (factory, mut spawn) = fixture_body_factory();
+    spawn.pose.position = serde_json::from_value(calibrated["feet"].clone()).unwrap();
+    let owner = BodyId {
+        entity: spawn.entity,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        spawn.pose.position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let body_template = 0x0400_0000_0000_ABCD;
+    let runtime = Box::new(factory.start(spawn).unwrap());
+    let state = PlayerBodyState::new(
+        owner,
+        spawn.controller,
+        spawn.slot,
+        0,
+        SOLDIER,
+        mover,
+        Some(runtime),
+        spawn.frame,
+        None,
+    )
+    .with_body_template(body_template);
+    let before = state.vitals().unwrap().total();
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.spawn_player_body(state).unwrap();
+    let mut launch = flight_fixture(owner, input["projectile_speed"].as_f64().unwrap());
+    let ballistics = ProjectileBallistics::from_fields(
+        &json!({
+            "m_projectileSpeed": input["projectile_speed"],
+            "m_D2D11CE9": {
+                "m_8A3E3883": input["self_damage_scale"],
+                "m_modifyHealth": {"m_amount": input["blast_damage"]},
+                "m_0D30E40C": [{"m_radius": calibrated["radius"], "m_B399CACB": 1.0}]
+            }
+        }),
+        |value| Ok(value.as_f64().map_or(Value::Null, Value::Float)),
+    )
+    .unwrap()
+    .unwrap();
+    launch.flight = ProjectileFlight::new(
+        ballistics,
+        serde_json::from_value(calibrated["launch_origin"].clone()).unwrap(),
+        [-1.0, 0.0, 0.0],
+        None,
+    )
+    .unwrap();
+    let catalog = HurtVolumeCatalog::from_json(&json!({
+        "version": 1, "bodies": {(format!("0x{body_template:016X}")): calibrated["hurt_profile"]}
+    }).to_string()).unwrap();
+    let ground = fixture_ground();
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None).with_hurt_volumes(&catalog);
+    let (outcomes, hits) = room
+        .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT, |_| true)
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(hits.is_empty());
+    let expected = fixture["expected"]["owner_damage"].as_f64().unwrap();
+    assert_eq!(
+        room.player_body(owner).unwrap().vitals().unwrap().total(),
+        before - expected
+    );
 }
 
 #[test]
@@ -2306,7 +2465,7 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
     for value in [0.0, -1.0, f64::NAN, f64::INFINITY] {
         assert!(Stun::from_seconds(value).is_none());
     }
-    for amount in [25.0, 1000.0] {
+    for (amount, visible) in [(25.0, true), (1000.0, true), (25.0, false)] {
         let bots = fixture_bots();
         let victim = bots[0].entity;
         let unhit = bots[1].entity;
@@ -2341,13 +2500,19 @@ fn projectile_stun_applies_only_to_surviving_hits_and_expires_exclusively() {
         )
         .unwrap();
         let (_, hits) = room
-            .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT)
+            .advance_projectiles(&queries, 7, owner, vec![launch], FIXTURE_CONTEXT, |wire| {
+                wire != victim || visible
+            })
             .unwrap();
         assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].damage.target_facts.target,
+            if visible { victim } else { unhit }
+        );
         let bot = &state(&room, victim).unwrap().bot;
-        assert_eq!(bot.is_stunned(1049), amount == 25.0);
+        assert_eq!(bot.is_stunned(1049), visible && amount == 25.0);
         assert!(!bot.is_stunned(1050));
-        assert!(!state(&room, unhit).unwrap().bot.is_stunned(1001));
+        assert_eq!(state(&room, unhit).unwrap().bot.is_stunned(1001), !visible);
     }
 }
 
@@ -2421,7 +2586,7 @@ fn npc_weapons_share_calibrated_body_contact_and_target_admission() {
         let origin = [0.0, case.height, 0.0];
         let direction = [1.0, 0.0, 0.0];
         let hitscan = HitscanShot::with_direction(origin, direction, 8.0, definition);
-        let selected = room.npc_weapon_targets(&queries).unwrap();
+        let selected = room.npc_weapon_targets(&queries, 0).unwrap();
         let contacts = selected
             .iter()
             .filter_map(|candidate| candidate.hostile_to(source, 1, case.free_for_all));
@@ -2499,7 +2664,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     assert_eq!(token, second.token);
     for (connection, owner, flight) in [(7, owner, first), (8, other, second)] {
         let (outcomes, hits) = simulation
-            .advance_projectiles(&queries, connection, owner, vec![flight], context)
+            .advance_projectiles(&queries, connection, owner, vec![flight], context, |_| true)
             .unwrap();
         assert!(outcomes.is_empty() && hits.is_empty());
     }
@@ -2512,7 +2677,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
         ..owner
     };
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, Vec::new(), context)
+        .advance_projectiles(&queries, 7, owner, Vec::new(), context, |_| true)
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
     assert!(simulation.world.get::<AdmittedFlight>(old_handle).is_none());
@@ -2524,7 +2689,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
     );
 
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 8, other, Vec::new(), context)
+        .advance_projectiles(&queries, 8, other, Vec::new(), context, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(matches!(
@@ -2541,7 +2706,7 @@ fn projectile_flights_keep_peer_generation_and_report_terminal_outcomes() {
 
     let too_far = flight_fixture(owner, 10_000_000.0);
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, vec![too_far], context)
+        .advance_projectiles(&queries, 7, owner, vec![too_far], context, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(matches!(outcomes.as_slice(), [FlightOutcome::Failed(observed)] if *observed == token));
@@ -2624,6 +2789,7 @@ fn missing_flight_component_is_explicit_and_retirement_is_idempotent() {
             owner,
             vec![flight_fixture(owner, 1.0)],
             FIXTURE_CONTEXT,
+            |_| true,
         )
         .unwrap();
     let entity = simulation.projectiles[&7].order[0];
@@ -2632,7 +2798,7 @@ fn missing_flight_component_is_explicit_and_retirement_is_idempotent() {
         .entity_mut(entity)
         .remove::<AdmittedFlight>();
     assert!(matches!(
-        simulation.advance_projectiles(&queries, 7, owner, Vec::new(), FIXTURE_CONTEXT),
+        simulation.advance_projectiles(&queries, 7, owner, Vec::new(), FIXTURE_CONTEXT, |_| true),
         Err(CombatError::MissingFlight { connection: 7, entity: missing }) if missing == entity
     ));
     simulation.retire_projectiles(7);
@@ -2666,6 +2832,7 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
             owner,
             vec![flight_fixture(owner, 1.0)],
             FIXTURE_CONTEXT,
+            |_| true,
         )
         .unwrap();
     let handle = simulation.projectiles[&7].order[0];
@@ -2674,7 +2841,14 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
         ..FIXTURE_CONTEXT
     };
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, old, vec![flight_fixture(old, 1.0)], later)
+        .advance_projectiles(
+            &queries,
+            7,
+            old,
+            vec![flight_fixture(old, 1.0)],
+            later,
+            |_| true,
+        )
         .unwrap();
     assert!(outcomes.is_empty() && hits.is_empty());
     assert_eq!(simulation.projectiles[&7].order, [handle]);
@@ -2688,12 +2862,13 @@ fn stale_generation_does_not_retire_or_advance_the_replacement_flight() {
                 ..owner
             },
             Vec::new(),
-            later
+            later,
+            |_| true
         ),
         Err(CombatError::FlightOwnerIdentity { .. })
     ));
     let (outcomes, hits) = simulation
-        .advance_projectiles(&queries, 7, owner, Vec::new(), later)
+        .advance_projectiles(&queries, 7, owner, Vec::new(), later, |_| true)
         .unwrap();
     assert!(hits.is_empty());
     assert!(
@@ -2765,12 +2940,15 @@ fn bot_damage_history_and_respawn_follow_identity_after_scene_reorder() {
         },
         context.quanta,
     );
-    assert_eq!(result.health.entity, first);
+    assert_eq!(result.damage.target_facts.target, first);
     assert_eq!(
         result.notices[1],
         Some(CombatNotice::Elimination {
             killer: 7,
-            victim: first
+            victim: first,
+            loadout: 0,
+            fire: 100,
+            critical: false,
         })
     );
     let actors = bots.debug_actors().unwrap().collect::<Vec<_>>();
@@ -2977,7 +3155,11 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
         .unwrap();
     let bot = bots.bodies().unwrap().nth(slot).unwrap();
     let entity = bot.entity;
-    let [x, y, z] = bot.position;
+    let [x, _, z] = bot.position;
+    let head_y = queries
+        .hurt_pose(bot.spawn.body, queries.target(bot))
+        .head_probe_height()
+        .expect("training body supports head hits");
     let count = bots.bodies().unwrap().len();
     let mut context = ShotContext {
         team: 0,
@@ -3010,7 +3192,7 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
         .unwrap();
     let mut shot = PosedHitscan {
         source: 0xa000_0101,
-        origin: [x - 8.0, y + eye_height(SOLDIER, false), z],
+        origin: [x - 8.0, head_y, z],
         direction: [1.0, 0.0, 0.0],
         command: Command {
             frame: context.tick,
@@ -3045,7 +3227,7 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
             .unwrap()
             .unwrap();
         let terminal = index == 4;
-        assert_eq!(result.health.entity, entity);
+        assert_eq!(result.damage.target_facts.target, entity);
         assert_eq!(
             result.notices[0],
             Some(CombatNotice::Hit {
@@ -3061,6 +3243,9 @@ fn repeated_rifle_hits_retire_and_respawn_only_the_hit_bot() {
             terminal.then_some(CombatNotice::Elimination {
                 killer: shot.source,
                 victim: entity,
+                loadout: 0,
+                fire: 100,
+                critical: false,
             })
         );
         assert_eq!(
@@ -3251,13 +3436,26 @@ fn debug_physics_records_hitscan_rays_and_enforces_ring_cap() {
     assert_eq!(overlay.rays.len(), 4);
     assert_eq!(overlay.rays[0].hit, "actor");
     assert_eq!(overlay.rays[0].target, Some(target));
+    assert!(overlay.rays[0].surface.is_none());
     assert_eq!(overlay.rays[1].hit, "world");
     assert!((overlay.rays[1].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[2].hit, "none");
+    assert!(overlay.rays[2].surface.is_none());
     assert_eq!(overlay.rays[2].end, [-25.0, 1.0, 0.0]);
     assert_eq!(overlay.rays[3].hit, "world");
     assert!((overlay.rays[3].end[0] - 10.0).abs() < 1e-6);
     assert_eq!(overlay.rays[3].target, None);
+    for ray in [&overlay.rays[1], &overlay.rays[3]] {
+        let surface = ray.surface.unwrap();
+        assert_eq!(surface.geometry, "movement");
+        assert_eq!(surface.mask, 0x18);
+        assert_eq!(surface.surface_flags, 0);
+        assert!(matches!(
+            surface.cache_source,
+            Some(crate::collision_scene::StaticRaySource::Mesh { .. })
+        ));
+        assert_eq!(surface.normal.map(f64::abs), [1.0, 0.0, 0.0]);
+    }
     assert!(overlay.rays.iter().all(|ray| ray.script.is_none()));
 
     room.enable_spatial_queries(false, Arc::new(fixture_ground()), RoomSpatialNeeds::Queries);
@@ -3534,4 +3732,939 @@ fn debug_scripts_is_read_only_and_enforces_summary_caps() {
     assert_eq!(inst_summary.active_states[0].kind, "Ability");
     assert_eq!(inst_summary.active_states[0].flags, Some(7));
     assert!(inst_summary.active_states.iter().all(|s| s.raw != 1));
+}
+
+#[test]
+fn spatial_frame_honors_weapon_terrain_category() {
+    use crate::collision_cache::{CollisionCache, Mesh, RayCacheIdentity, Triangle};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    let triangles = [
+        [[-1.0, 0.0, 2.0], [1.0, 0.0, 2.0], [0.0, 3.0, 2.0]],
+        [[-1.0, 0.0, 6.0], [1.0, 0.0, 6.0], [0.0, 3.0, 6.0]],
+    ];
+    let header = json!({
+        "meshes": [[6, 2]],
+        "hulls": 0,
+        "models": 0,
+        "placements": 0,
+        "identifiers": [],
+        "weapon_terrain_category": 0x0200,
+        "geometry": "expanded-static-rays",
+        "category_mask": 65535,
+        "prop_scope": "indexed-static-models",
+        "map": "0x0800000000004242",
+        "chunk": "0x0DD0001100004242",
+        "ckey": "synthetic-map"
+    });
+    let cache = CollisionCache {
+        header: serde_json::from_value(header).unwrap(),
+        meshes: vec![Mesh {
+            vertices: triangles.iter().flatten().copied().collect(),
+            triangles: vec![
+                Triangle {
+                    corners: [0, 2, 1],
+                    wings: [-1; 3],
+                    mask: MOVER_CATEGORY,
+                    surface: 0,
+                },
+                Triangle {
+                    corners: [3, 5, 4],
+                    wings: [-1; 3],
+                    mask: 0x0200,
+                    surface: 0,
+                },
+            ],
+        }],
+        hulls: vec![],
+        models: vec![],
+        placements: vec![],
+    };
+    let identity = RayCacheIdentity {
+        map_guid: 0x0800_0000_0000_4242,
+        collision_ckey: "synthetic-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let ground =
+        Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let target = 0xc000_0001;
+    let frame = RoomSpatialFrame {
+        candidates: vec![SpatialCandidate {
+            entity: target,
+            position: [0.0, 0.0, 4.0],
+            team: Some(1),
+        }],
+        actor_capsules: Some(BTreeMap::from([(
+            target,
+            TargetPose {
+                feet: [0.0, 0.0, 4.0],
+                height: 2.0,
+                eye: 1.5,
+                radius: 0.5,
+            },
+        )])),
+        entity_facts: None,
+        script_targets: HashMap::from([(
+            target,
+            RoomScriptTarget {
+                entity: Entity::from_raw(target),
+                candidate_index: Some(0),
+                position: [0.0, 0.0, 4.0],
+                health: true,
+                health_snapshot: None,
+                angles: [0, 0],
+                velocity: [0.0; 3],
+                eye_position: Some([0.0, 1.5, 4.0]),
+                filter_flags: Some(0),
+                script_state: Default::default(),
+                messages: false,
+                cue_listener: true,
+                voice: None,
+            },
+        )]),
+        player_wires: HashMap::new(),
+        ground,
+        breakables: None,
+        actor_voice: None,
+        map_guid: None,
+        retired: Arc::default(),
+        #[cfg(any(test, feature = "inspector"))]
+        captured_tick: 1,
+        #[cfg(any(test, feature = "inspector"))]
+        debug_rays: Arc::default(),
+    };
+    assert_eq!(
+        frame.line_clear([0.0, 1.0, 0.0], [0.0, 1.0, 4.0]),
+        Some(true)
+    );
+    assert_eq!(
+        frame.line_clear([0.0, 1.0, 0.0], [0.0, 1.0, 8.0]),
+        Some(false)
+    );
+    let site = crate::script_init::Site {
+        entity: target,
+        instance: 0,
+        graph: 0,
+        node: None,
+    };
+    let world_hit = frame
+        .ray_cast(site, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 10.0)
+        .unwrap()
+        .unwrap();
+    assert!((world_hit.distance - 6.0).abs() < 1e-4);
+    let actor_hit = frame
+        .actor_ray_cast(site, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 10.0, &[target])
+        .unwrap()
+        .unwrap();
+    assert_eq!(actor_hit.entity, target);
+}
+
+#[test]
+fn hitscan_pierces_and_breaks_breakable_placement_then_clears_projectile_sweeps() {
+    use crate::collision_cache::{
+        CollisionCache, Mesh, Placement, RAY_GEOMETRY, RAY_PROP_SCOPE, RayCacheIdentity, Shape,
+        Triangle, chunk_guid,
+    };
+    use crate::collision_scene::BreakableState;
+    use crate::game_hitscan::{DamageTags, HurtVolumeCatalog};
+    use crate::mover_settings::{MoverCatalog, MoverSettings};
+    use std::collections::BTreeSet;
+
+    let map = 0x0800_0000_0000_4242;
+    let identity = RayCacheIdentity {
+        map_guid: map,
+        collision_ckey: "synthetic-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let glass = Mesh {
+        vertices: vec![[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.5, 0.0]],
+        triangles: vec![Triangle {
+            corners: [0, 1, 2],
+            wings: [-1; 3],
+            mask: MOVER_CATEGORY,
+            surface: 0,
+        }],
+    };
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [],
+            "hulls": 0,
+            "models": 1,
+            "placements": 1,
+            "identifiers": [],
+            "geometry": RAY_GEOMETRY,
+            "category_mask": 0xffff,
+            "prop_scope": RAY_PROP_SCOPE,
+            "map": format!("0x{map:016X}"),
+            "chunk": format!("0x{:016X}", chunk_guid(map)),
+            "ckey": "synthetic-map",
+            "breakable_model_shapes": { "0": [0] },
+        }))
+        .unwrap(),
+        meshes: vec![],
+        hulls: vec![],
+        models: vec![vec![Shape::Mesh {
+            mesh: glass,
+            mask: MOVER_CATEGORY,
+        }]],
+        placements: vec![Placement {
+            model: 0,
+            group: 0,
+            translation: [0.0, 0.0, 2.0],
+            scale: [1.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+        }],
+    };
+    let rays = Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let sweeps = Arc::new(
+        crate::contact_world::ContactWorld::from_expanded_ray_cache(
+            cache,
+            &BTreeSet::new(),
+            identity,
+        )
+        .unwrap(),
+    );
+    let breakables = Arc::new(BreakableState::new());
+    let bots = crate::game_bots::BotCatalog::from_json(
+        r#"{
+            "heroes":{"0x01":{"name":"Test bot","body":"0x02","health":200}},
+            "maps":{"0x03":{"hints":{},"spawners":[
+                {"hero":"0x01","team":1,"position":[0,0,4],"rotation":[0,0,0,1],"graphs":[]}
+            ]}}
+        }"#,
+    )
+    .unwrap()
+    .make(3, |_| crate::game_bots::BotWalk::default());
+    let bot_entity = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    room.enable_spatial_queries(false, Arc::clone(&rays), RoomSpatialNeeds::Queries);
+    room.set_breakables(Arc::clone(&breakables));
+    let movers =
+        MoverCatalog::from_json(r#"{"0x02":{"stand_height":2.0,"stand_radius":0.5}}"#).unwrap();
+    let hurt_volumes = HurtVolumeCatalog::default();
+    let queries = BotQueries::new(false, &movers, &rays, None)
+        .with_combat_geometry(&rays, Some(&sweeps))
+        .with_breakables(&breakables)
+        .with_hurt_volumes(&hurt_volumes);
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = crate::mover::Mover::new(
+        MoverSettings::default(),
+        Arc::clone(&sweeps),
+        [0.0, 0.0, 0.0],
+        0,
+        0x18,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        owner, 1, 0, 0, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+
+    // First projectile hits the unbroken breakable panel and shatters it.
+    assert!(
+        queries
+            .projectile_wall([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 5.0, 0.0)
+            .unwrap()
+            .is_some()
+    );
+    assert!(breakables.is_broken(0));
+    assert!(
+        queries
+            .projectile_wall([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 5.0, 0.0)
+            .unwrap()
+            .is_none()
+    );
+
+    // Reset breakable state, then verify hitscan pierces the intact panel, hits the bot, and breaks it.
+    breakables.clear();
+    assert!(!breakables.is_broken(0));
+    let shot = PosedHitscan {
+        source: owner.entity,
+        origin: [0.0, 1.0, 0.0],
+        direction: [0.0, 0.0, 1.0],
+        command: crate::commands::Command {
+            frame: 1,
+            ..Default::default()
+        },
+        shot_frame: 1,
+        reach: 20.0,
+        hit: HitDefinition {
+            tags: DamageTags::EMPTY,
+            amount: 20.0,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        },
+    };
+    let hit = room
+        .hitscan(
+            &queries,
+            shot,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 1,
+                now: Duration::ZERO,
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert!(hit.is_some());
+    assert!(breakables.is_broken(0));
+    assert_eq!(room.body_healths().unwrap()[&bot_entity], 180.0);
+}
+
+#[test]
+fn live_room_interactive_props_authored_blast_breakables_and_pvp_objective() {
+    use crate::{
+        collision_cache::{
+            CollisionCache, Placement, RAY_GEOMETRY, RAY_PROP_SCOPE, RayCacheIdentity, Shape,
+            chunk_guid,
+        },
+        collision_scene::{BreakableState, CollisionScene},
+        contact_world::ContactWorld,
+        game_hitscan::DamageTags,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        projectile_flight::{Blast, ProjectileBallistics, ProjectileFlight},
+        pvp_mode::{AssaultRound, CapturePointSpec, MatchPhase, PvpObjectiveRuntime},
+        room_primitives::{INTERACT_BUTTON_BIT, ObbTrigger, ObbZone, PhysicsProp, ResetButtonProp},
+    };
+    const TEST_MOVER_CATEGORY: u16 = 0x0018;
+    use std::collections::BTreeSet;
+
+    let map = 0x0800_0000_0000_4243;
+    let identity = RayCacheIdentity {
+        map_guid: map,
+        collision_ckey: "synthetic-blast-map",
+        placement_ckey: None,
+        prop_records_sha256: None,
+    };
+    let cache = CollisionCache {
+        header: serde_json::from_value(serde_json::json!({
+            "meshes": [],
+            "hulls": 0,
+            "models": 2,
+            "placements": 2,
+            "identifiers": [],
+            "geometry": RAY_GEOMETRY,
+            "category_mask": 0xffff,
+            "prop_scope": RAY_PROP_SCOPE,
+            "map": format!("0x{map:016X}"),
+            "chunk": format!("0x{:016X}", chunk_guid(map)),
+            "ckey": "synthetic-blast-map",
+            "breakable_model_shapes": { "0": [0] },
+        }))
+        .unwrap(),
+        meshes: Vec::new(),
+        hulls: Vec::new(),
+        models: vec![
+            vec![Shape::Sphere {
+                center: [0.0, 0.0, 0.0],
+                radius: 0.4,
+                mask: TEST_MOVER_CATEGORY,
+            }],
+            vec![Shape::Sphere {
+                center: [0.0, 0.0, 0.0],
+                radius: 0.5,
+                mask: TEST_MOVER_CATEGORY,
+            }],
+        ],
+        placements: vec![
+            // Placement 0: breakable prop 2.4m to the right of projectile wall impact
+            Placement {
+                model: 0,
+                group: 0,
+                translation: [2.4, 1.0, 5.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+            // Placement 1: solid wall hit by projectile at z=5.0
+            Placement {
+                model: 1,
+                group: 0,
+                translation: [0.0, 1.0, 5.0],
+                rotation: [0.0, 0.0, 0.0, 1.0],
+                scale: [1.0, 1.0, 1.0],
+            },
+        ],
+    };
+    let scene =
+        Arc::new(CollisionScene::expanded_rays(&cache, &BTreeSet::new(), identity).unwrap());
+    let breakables = Arc::new(BreakableState::new());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &scene, None)
+        .with_combat_geometry(&scene, None)
+        .with_breakables(&breakables);
+
+    let mut room = RoomSimulation::new(Vec::new()).unwrap();
+    room.enable_spatial_queries(false, Arc::clone(&scene), RoomSpatialNeeds::Queries);
+    room.set_breakables(Arc::clone(&breakables));
+
+    // Register a basketball prop, reset button, and Assault capture point.
+    room.set_interactive_prop_floor_y(0.0);
+    room.interactive_props_mut()
+        .props
+        .insert(9001, PhysicsProp::new(9001, [0.0, 1.0, 2.0], 0.2));
+    room.interactive_props_mut().buttons.insert(
+        9002,
+        ResetButtonProp::new(9002, [0.0, 0.0, 0.5], vec![9001], 0x0300_0000_0000_BEEF),
+    );
+    let mut assault = AssaultRound::new(
+        vec![CapturePointSpec {
+            placeable: 1,
+            position: [0.0, 0.0, 0.0],
+            zone: ObbZone::new(vec![ObbTrigger::from_raw([
+                0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0,
+            ])]),
+            round_seconds: 240.0,
+            capture_seconds: 10.0,
+            segments: 3,
+        }],
+        1.0,
+    );
+    assault.phase = MatchPhase::Active;
+    assault.deadline = 300.0;
+    assault.last_update = 0.0;
+    room.set_pvp_objective(PvpObjectiveRuntime::Assault(assault));
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    room.spawn_player_body(PlayerBodyState::new(
+        owner, 1, 0, 1, SOLDIER, mover, None, 1, None,
+    ))
+    .unwrap();
+
+    // 1. Hitscan ray shoots the basketball prop -> imparts velocity.
+    let shot = PosedHitscan {
+        source: owner.entity,
+        origin: [0.0, 1.0, 0.0],
+        direction: [0.0, 0.0, 1.0],
+        command: crate::commands::Command {
+            frame: 1,
+            ..Default::default()
+        },
+        shot_frame: 1,
+        reach: 20.0,
+        hit: HitDefinition {
+            tags: DamageTags::EMPTY,
+            amount: 20.0,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        },
+    };
+    let _ = room
+        .hitscan(
+            &queries,
+            shot,
+            ShotContext {
+                team: 1,
+                quanta: 16,
+                tick: 1,
+                now: Duration::from_secs(1),
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert!(room.interactive_props().props[&9001].velocity[2] > 0.0);
+
+    // 2. Finish tick steps interactive props AND advances Assault capture point progress!
+    room.finish_tick(&queries, 2, Duration::from_secs(2))
+        .unwrap();
+    assert_ne!(
+        room.interactive_props().props[&9001].position,
+        [0.0, 1.0, 2.0]
+    );
+    match room.pvp_objective().unwrap() {
+        PvpObjectiveRuntime::Assault(round) => {
+            assert!(
+                round.current().progress > 0.0,
+                "live attacker inside Assault OBB must advance capture progress"
+            );
+        }
+        _ => panic!("expected Assault PvP objective"),
+    }
+
+    // 3. Player presses Interact button near reset button -> resets basketball cleanly.
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = INTERACT_BUTTON_BIT;
+    room.finish_tick(&queries, 3, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(
+        room.interactive_props().props[&9001].position,
+        [0.0, 1.0, 2.0]
+    );
+    assert!(!room.take_prop_cues().is_empty());
+
+    // 4. Projectile with authored 3.0m blast radius detonates on wall at z=5.0 -> smashes breakable 2.4m away!
+    let flight = ProjectileFlight::new(
+        ProjectileBallistics {
+            speed: 400.0,
+            lifetime: 2.0,
+            max_distance: None,
+            radius: 0.1,
+            terrain_radius: 0.0,
+            definition: None,
+            direct: None,
+            blast: Some(Blast {
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: 80.0,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+                rings: vec![(0.5, 1.0), (3.0, 0.5)],
+                self_damage_scale: 0.0,
+                self_knockback_scale: 0.0,
+                knockback: None,
+                detonate_on_expiry: false,
+            }),
+            terrain_rebound: None,
+        },
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0],
+        Some(3),
+    )
+    .unwrap();
+    assert!(!breakables.is_broken(0));
+    let (outcomes, _) = room
+        .advance_projectiles(
+            &queries,
+            1,
+            owner,
+            vec![AdmittedFlight {
+                token: crate::game_projectiles::ProjectileToken::server_only(1),
+                launch_frame: 4,
+                flight,
+                stun: None,
+                hit_effect: None,
+                impact_spawn: None,
+                presentation: None,
+            }],
+            ShotContext {
+                team: 1,
+                quanta: 16,
+                tick: 4,
+                now: Duration::from_secs(4),
+            },
+            |_| true,
+        )
+        .unwrap();
+    assert_eq!(outcomes.len(), 1);
+    assert!(
+        breakables.is_broken(0),
+        "projectile splash must smash breakables within its authored 3.0m blast radius"
+    );
+}
+
+#[cfg(feature = "lua-mods")]
+#[test]
+fn live_room_lua_mods_apply_rules_hooks_actions_and_hot_reload() {
+    use crate::{
+        commands::JUMP,
+        contact_world::ContactWorld,
+        game_hitscan::DamageTags,
+        mod_script::ModHost,
+        mover::Mover,
+        mover_settings::{MoverCatalog, MoverSettings},
+        room_primitives::PhysicsProp,
+        vitals::Vitals,
+    };
+    use std::sync::Mutex;
+
+    let low_grav_src = include_str!("../../scripts/mods/low_gravity_arena.lua");
+    let headshot_src = include_str!("../../scripts/mods/headshot_only_practice.lua");
+
+    let host = Arc::new(Mutex::new(
+        ModHost::from_source("low_gravity_arena.lua", low_grav_src).unwrap(),
+    ));
+
+    let bots = fixture_bots();
+    let bot_entity = bots[0].entity;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    room.enable_spatial_queries(false, Arc::clone(&ground), RoomSpatialNeeds::Queries);
+    room.attach_mod_host(
+        Arc::clone(&host),
+        0x0800_0000_0000_0688,
+        0x0230_0000_0000_0012,
+    );
+
+    // Spawn a living player body with vitals so heal actions can be observed.
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    let mut player_state = PlayerBodyState::new(owner, 1, 0, 0, SOLDIER, mover, None, 1, None);
+    let mut vitals = Vitals::new(200.0, 0.0, 0.0);
+    vitals.damage(
+        50.0,
+        Death {
+            time: 0.0,
+            frame: 1,
+            killer: 0,
+        },
+    );
+    assert_eq!(vitals.total(), 150.0);
+    player_state.set_test_halted_vitals(vitals);
+    room.spawn_player_body(player_state).unwrap();
+
+    // Verify Low-Gravity Arena rules immediately synced to Mover!
+    assert_eq!(room.mod_active_rules().gravity_scale, 0.45);
+    assert_eq!(room.mod_active_rules().speed_scale, 1.2);
+    assert_eq!(
+        room.player_body(owner).unwrap().mover.mod_scales(),
+        (0.45, 1.2)
+    );
+    assert!((room.player_body(owner).unwrap().mover.pose().gravity - 1.75 * 0.45).abs() < 1e-6);
+
+    // Step first tick -> triggers on_room_start + Jump button impulse!
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = JUMP;
+    room.finish_tick(&queries, 2, Duration::from_secs(1))
+        .unwrap();
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Low-Gravity Arena active")),
+        "on_room_start broadcast missing: {:?}",
+        room.mod_broadcast_log()
+    );
+
+    // Verify Jump button queued vertical impulse onto Mover (+4.5 m/s).
+    let mut poses = crate::mover_kinematics::poses(
+        None,
+        crate::commands::Command {
+            frame: 2,
+            ..Default::default()
+        },
+    );
+    room.player_body_mut(owner)
+        .unwrap()
+        .mover
+        .step_pending(ground.triangles(), &mut poses, 0.016, 1, || &[], |_, _| {})
+        .unwrap();
+    assert!(
+        room.player_body(owner).unwrap().mover.pose().velocity[1] > 3.5,
+        "Jump on_button impulse must launch player upward, got {:?}",
+        room.player_body(owner).unwrap().mover.pose().velocity
+    );
+
+    // Chat command !help works live.
+    room.mod_dispatch_chat("Player", "!help", 3, Duration::from_secs(2));
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("!grav")),
+        "on_chat !help broadcast missing"
+    );
+
+    // Hot-reload shared ModHost to Headshot-Only Practice!
+    let status = host
+        .lock()
+        .unwrap()
+        .reload_source("headshot_only_practice.lua", headshot_src)
+        .unwrap();
+    assert!(status.changed);
+    assert_eq!(status.generation, 2);
+
+    // Next finish_tick automatically detects generation 2, resets Mover scales to 1.0, and runs on_room_start.
+    room.finish_tick(&queries, 4, Duration::from_secs(3))
+        .unwrap();
+    assert_eq!(
+        room.player_body(owner).unwrap().mover.mod_scales(),
+        (1.0, 1.0)
+    );
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Headshot-Only Practice enabled"))
+    );
+
+    // Bodyshot on bot -> Headshot-Only mod reduces damage to 0.0!
+    let bodyshot = Impact {
+        entity: bot_entity,
+        distance: 1.0,
+        damage: 60.0,
+        critical: false,
+        loadout: None,
+        tags: DamageTags::EMPTY,
+        geometry: None,
+        impulse: None,
+    };
+    let hit = room
+        .apply_bot_impact(
+            owner.entity,
+            4,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 4,
+                now: Duration::from_secs(3),
+            },
+            &bodyshot,
+        )
+        .unwrap();
+    assert!(
+        hit.is_none(),
+        "bodyshot must deal 0 damage under Headshot-Only mod"
+    );
+    assert_eq!(room.body_healths().unwrap()[&bot_entity], 100.0);
+
+    // Headshot on bot (100 damage -> kill!) -> kills bot, heals attacker +25 HP (150 -> 175), broadcasts kill!
+    let headshot = Impact {
+        entity: bot_entity,
+        distance: 1.0,
+        damage: 100.0,
+        critical: true,
+        loadout: None,
+        tags: DamageTags::EMPTY,
+        geometry: None,
+        impulse: None,
+    };
+    let hit = room
+        .apply_bot_impact(
+            owner.entity,
+            5,
+            ShotContext {
+                team: 0,
+                quanta: 16,
+                tick: 5,
+                now: Duration::from_secs(4),
+            },
+            &headshot,
+        )
+        .unwrap();
+    assert!(hit.is_some(), "headshot must deal full damage and kill");
+    assert_eq!(
+        room.player_body(owner).unwrap().vitals().unwrap().total(),
+        175.0,
+        "headshot mod must heal attacker +25 HP (150 -> 175)"
+    );
+    assert!(
+        room.mod_broadcast_log()
+            .iter()
+            .any(|msg| msg.contains("Crisp headshot! Total headshot eliminations: 1"))
+    );
+
+    // Verify ResetInteractiveProp action works cleanly against RoomSimulation interactive props.
+    room.interactive_props_mut()
+        .props
+        .insert(77, PhysicsProp::new(77, [1.0, 2.0, 3.0], 0.2));
+    room.interactive_props_mut()
+        .props
+        .get_mut(&77)
+        .unwrap()
+        .position = [9.0, 9.0, 9.0];
+    host.lock()
+        .unwrap()
+        .reload_source(
+            "prop_reset.lua",
+            r#"
+            return {
+                abi = 1,
+                on_room_start = function(ctx)
+                    return { { kind = "reset_interactive_prop", prop_id = 77 } }
+                end,
+            }
+            "#,
+        )
+        .unwrap();
+    room.finish_tick(&queries, 6, Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        room.interactive_props().props[&77].position,
+        [1.0, 2.0, 3.0]
+    );
+}
+
+#[cfg(feature = "lua-mods")]
+#[test]
+fn lua_mod_abi_v2_dance_party_chat_bots_status_and_voice_cues() {
+    use crate::{
+        contact_world::ContactWorld,
+        game_heroes::HeroCatalog,
+        mod_script::ModHost,
+        mover_settings::{MoverCatalog, MoverSettings},
+        vitals::Vitals,
+    };
+    use std::sync::Mutex;
+
+    let dance_src = include_str!("../../scripts/mods/dance_party_workshop.lua");
+    let host = Arc::new(Mutex::new(
+        ModHost::from_source("dance_party_workshop.lua", dance_src).unwrap(),
+    ));
+    let heroes = Arc::new(
+        HeroCatalog::from_json(
+            r#"{
+                "0x02E000000000006E": {"name":"Soldier: 76", "class":"Damage", "body":"0x04000000000003CF"},
+                "0x02E0000000000003": {"name":"Tracer", "class":"Damage", "body":"0x040000000000002B"}
+            }"#,
+        )
+        .unwrap(),
+    );
+
+    let bots = fixture_bots();
+    let bot_entity = bots[0].entity;
+    let initial_bot_yaw = bots[0].yaw;
+    let mut room = RoomSimulation::new(bots).unwrap();
+    let ground = Arc::new(fixture_ground());
+    let movers = MoverCatalog::default();
+    let queries = BotQueries::new(false, &movers, &ground, None);
+    room.enable_spatial_queries(false, Arc::clone(&ground), RoomSpatialNeeds::Queries);
+    room.set_mod_world_assets(Arc::clone(&heroes), Arc::clone(&ground));
+    room.set_player_names(HashMap::from([(1, String::from("HeroTester"))]));
+    room.attach_mod_host(
+        Arc::clone(&host),
+        0x0800_0000_0000_0688,
+        0x0230_0000_0000_0012,
+    );
+
+    let owner = BodyId {
+        entity: 0xa000_0100,
+        generation: 1,
+    };
+    let mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        [0.0, 0.0, 0.0],
+        0,
+        0x08,
+    )
+    .unwrap();
+    let mut player_state = PlayerBodyState::new(owner, 1, 0, 0, SOLDIER, mover, None, 1, None);
+    player_state.set_test_halted_vitals(Vitals::new(200.0, 0.0, 0.0));
+    room.spawn_player_body(player_state).unwrap();
+    assert_eq!(room.player_body(owner).unwrap().name, "HeroTester");
+
+    // 1. Live in-room chat `!danceall` makes bots enter dance mode and returns broadcast replies!
+    let replies = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!danceall",
+        2,
+        Duration::from_secs(1),
+    );
+    assert!(
+        replies.iter().any(|r| r.contains("DANCE PARTY")),
+        "expected dance party reply, got {replies:?}"
+    );
+    room.finish_tick(&queries, 3, Duration::from_millis(1016))
+        .unwrap();
+    let danced_yaw = room.state_mut(bot_entity).unwrap().unwrap().bot.yaw;
+    assert_ne!(
+        danced_yaw, initial_bot_yaw,
+        "dancing bot must visibly rotate/animate"
+    );
+
+    // 2. `!hero tracer` resolves Tracer via HeroCatalog and queues a live hero switch for owner 1!
+    let replies = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!hero tracer",
+        4,
+        Duration::from_millis(1032),
+    );
+    assert!(replies.iter().any(|r| r.contains("Tracer")));
+    assert_eq!(room.take_mod_hero_switch(1), Some(0x02E0_0000_0000_0003));
+
+    // 3. `!slowmo 0.5` sets time_scale to 0.5x and scales mover speed & gravity proportionally!
+    let _ = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!slowmo 0.5",
+        5,
+        Duration::from_millis(1048),
+    );
+    assert!((room.mod_active_rules().time_scale - 0.5).abs() < 1e-6);
+    let (g_scale, s_scale) = room.player_body(owner).unwrap().mover.mod_scales();
+    assert!((g_scale - 0.25).abs() < 1e-6 && (s_scale - 0.5).abs() < 1e-6);
+
+    // 4. `!bot tracer 1` spawns a brand-new bot dynamically and queues its EntityUpdate create!
+    let bot_count_before = room.by_wire.len();
+    let _ = room.mod_dispatch_chat_from(
+        Some(1),
+        "HeroTester",
+        "!bot tracer 1",
+        6,
+        Duration::from_millis(1064),
+    );
+    assert_eq!(room.by_wire.len(), bot_count_before + 1);
+    assert!(!room.take_created().is_empty());
+
+    // 5. Verify OW 1.74 ability1 (0x0008) -> PlayVoiceCue, and reload (0x0400) -> lethal Kill -> PlayerDeath!
+    host.lock()
+        .unwrap()
+        .reload_source(
+            "abi2_edges.lua",
+            r#"
+            return {
+                abi = 2,
+                on_button = function(ctx, player, button, pressed)
+                    if pressed and button == "ability1" then
+                        return {
+                            { kind = "play_voice_cue", entity = player.entity, stimulus = 12345 },
+                        }
+                    elseif pressed and button == "reload" then
+                        return {
+                            { kind = "kill", entity = player.entity },
+                        }
+                    end
+                    return {}
+                end,
+            }
+            "#,
+        )
+        .unwrap();
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = 0x0008; // OW 1.74 ability1
+    room.finish_tick(&queries, 7, Duration::from_millis(1080))
+        .unwrap();
+    let cues = room.take_player_cues();
+    assert!(
+        cues.iter().any(|c| matches!(
+            c.notice,
+            crate::game_combat_messages::CombatNotice::Voice {
+                stimulus: 12345,
+                ..
+            }
+        )),
+        "PlayVoiceCue must emit CombatNotice::Voice, got {cues:?}"
+    );
+    room.player_body_mut(owner).unwrap().pending_pressed_buttons = 0x0400; // OW 1.74 reload
+    room.finish_tick(&queries, 8, Duration::from_millis(1096))
+        .unwrap();
+    let deaths = room.take_player_deaths();
+    assert_eq!(
+        deaths.len(),
+        1,
+        "lethal ModAction::Kill must emit PlayerDeath"
+    );
+    assert_eq!(deaths[0].body, owner);
 }

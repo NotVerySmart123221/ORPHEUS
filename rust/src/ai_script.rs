@@ -1,6 +1,12 @@
 //! Bounded, sandboxed Lua 5.4 host for room-local AI `think()` policies.
 
-use std::{cell::Cell, io, rc::Rc};
+use std::{
+    io,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    },
+};
 
 use mlua::{ChunkMode, Function, HookTriggers, Lua, LuaOptions, StdLib, Table, Value};
 use thiserror::Error;
@@ -9,6 +15,7 @@ use crate::{
     game_clock::TICK_PERIOD,
     game_combat::{PlayerBodyState, RoomSimulation},
     game_replication::BodyId,
+    patrol_script::{AiActorSnapshot, AiPatrolSnapshot},
 };
 
 /// Version of the bounded Lua AI `think(snapshot, events) -> commands` ABI.
@@ -48,51 +55,7 @@ pub(crate) enum TargetRole {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct AiPatrolSnapshot {
-    pub(crate) route_index: usize,
-    pub(crate) route_count: usize,
-    pub(crate) wait_seconds: f64,
-    pub(crate) walking: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct AiActorSnapshot {
-    pub(crate) entity: u32,
-    pub(crate) generation: Option<u64>,
-    pub(crate) team: u8,
-    pub(crate) position: [f64; 3],
-    pub(crate) yaw: f64,
-    pub(crate) alive: bool,
-    pub(crate) health: f64,
-    pub(crate) max_health: f64,
-    pub(crate) stunned: bool,
-    pub(crate) patrol: Option<AiPatrolSnapshot>,
-}
-
-impl AiActorSnapshot {
-    pub(crate) fn patrol_fixture(route_index: usize, route_count: usize) -> Self {
-        Self {
-            entity: 0xc000_1000,
-            generation: None,
-            team: 1,
-            position: [0.0; 3],
-            yaw: 0.0,
-            alive: true,
-            health: 200.0,
-            max_health: 200.0,
-            stunned: false,
-            patrol: Some(AiPatrolSnapshot {
-                route_index,
-                route_count,
-                wait_seconds: 0.0,
-                walking: false,
-            }),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct AiTargetSnapshot {
     pub(crate) body: Option<BodyId>,
     pub(crate) entity: u32,
@@ -114,7 +77,7 @@ pub(crate) struct AiSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum AiEvent {
     Spawn { tick: u32 },
     Release { tick: u32 },
@@ -177,7 +140,7 @@ impl From<AiScriptError> for io::Error {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) enum HandleQueryResult<'a> {
     LivePlayer(&'a PlayerBodyState),
     StalePlayer(BodyId),
@@ -185,7 +148,7 @@ pub(crate) enum HandleQueryResult<'a> {
 }
 
 /// Validates a player `BodyId` handle read-only against `RoomSimulation`'s ECS world.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn query_body_handle<'a>(sim: &'a RoomSimulation, id: BodyId) -> HandleQueryResult<'a> {
     if !sim.player_body_generation_current(id) {
         return HandleQueryResult::StalePlayer(id);
@@ -198,7 +161,7 @@ pub(crate) fn query_body_handle<'a>(sim: &'a RoomSimulation, id: BodyId) -> Hand
     HandleQueryResult::UnknownHandle(id)
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn validate_player_body_handle(
     sim: &RoomSimulation,
     id: BodyId,
@@ -212,7 +175,7 @@ pub(crate) fn validate_player_body_handle(
     }
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn validate_commands_against_simulation(
     commands: &[AiCommand],
     simulation: &RoomSimulation,
@@ -243,8 +206,8 @@ pub(crate) fn validate_ai_source_bounds(source: &str) -> Result<(), AiScriptErro
 pub(crate) struct AiScript {
     think: Function,
     lua: Lua,
-    remaining_hooks: Rc<Cell<u32>>,
-    budget_exhausted: Rc<Cell<bool>>,
+    remaining_hooks: Arc<AtomicU32>,
+    budget_exhausted: Arc<AtomicBool>,
 }
 
 impl AiScript {
@@ -253,17 +216,17 @@ impl AiScript {
         let lua = Lua::new_with(StdLib::NONE, LuaOptions::default()).map_err(map_mlua_error)?;
         lua.set_memory_limit(AI_MEMORY_LIMIT_BYTES)
             .map_err(map_mlua_error)?;
-        let remaining_hooks = Rc::new(Cell::new(AI_INIT_HOOK_BUDGET));
-        let budget_exhausted = Rc::new(Cell::new(false));
-        let hooks = Rc::clone(&remaining_hooks);
-        let exhausted = Rc::clone(&budget_exhausted);
+        let remaining_hooks = Arc::new(AtomicU32::new(AI_INIT_HOOK_BUDGET));
+        let budget_exhausted = Arc::new(AtomicBool::new(false));
+        let hooks = Arc::clone(&remaining_hooks);
+        let exhausted = Arc::clone(&budget_exhausted);
         lua.set_hook(
             HookTriggers::new().every_nth_instruction(AI_INSTRUCTION_HOOK_INTERVAL),
             move |_, _| {
-                let left = hooks.get().saturating_sub(1);
-                hooks.set(left);
+                let left = hooks.load(Ordering::Relaxed).saturating_sub(1);
+                hooks.store(left, Ordering::Relaxed);
                 if left == 0 {
-                    exhausted.set(true);
+                    exhausted.store(true, Ordering::Relaxed);
                     return Err(mlua::Error::runtime("AI instruction budget exhausted"));
                 }
                 Ok(mlua::VmState::Continue)
@@ -281,7 +244,7 @@ impl AiScript {
         {
             Ok(value) => value,
             Err(error) => {
-                if budget_exhausted.get() {
+                if budget_exhausted.load(Ordering::Relaxed) {
                     return Err(AiScriptError::InstructionBudgetExceeded {
                         phase: AiExecutionPhase::Init,
                     });
@@ -331,8 +294,9 @@ impl AiScript {
     ) -> Result<Vec<AiCommand>, AiScriptError> {
         validate_snapshot_inputs(snapshot, events)?;
 
-        self.remaining_hooks.set(AI_THINK_HOOK_BUDGET);
-        self.budget_exhausted.set(false);
+        self.remaining_hooks
+            .store(AI_THINK_HOOK_BUDGET, Ordering::Relaxed);
+        self.budget_exhausted.store(false, Ordering::Relaxed);
 
         let snapshot_table = marshal_snapshot(&self.lua, snapshot).map_err(map_mlua_error)?;
         let events_table = marshal_events(&self.lua, events).map_err(map_mlua_error)?;
@@ -340,7 +304,7 @@ impl AiScript {
         let result = match self.think.call::<Value>((snapshot_table, events_table)) {
             Ok(value) => value,
             Err(error) => {
-                if self.budget_exhausted.get() {
+                if self.budget_exhausted.load(Ordering::Relaxed) {
                     return Err(AiScriptError::InstructionBudgetExceeded {
                         phase: AiExecutionPhase::Think,
                     });

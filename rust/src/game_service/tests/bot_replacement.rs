@@ -18,6 +18,7 @@ struct Input {
     bot_ids: [u32; 5],
     replacement_interval_ms: u64,
     notice_grace_ms: u64,
+    room_weapon_hit: f64,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +59,7 @@ fn enqueue(peer: &mut Peer, retired: u32, created: u32, now: Duration) {
         BotReplacement {
             retired,
             created: create_bot(created),
+            waits_for_presentation: false,
         },
         now + SILENCE_TIME,
     );
@@ -92,12 +94,12 @@ fn acknowledge(peer: &mut Peer, sent_sequence: u32, now: Duration) {
     peer.world.acknowledge(report, now);
 }
 
-fn started_peer(schemas: &Schemas, bots: &[u32]) -> (Peer, u32) {
-    let owner = player_entity(0);
+fn started_peer(schemas: &Schemas, bots: &[u32], slot: i8) -> (Peer, u32) {
+    let owner = player_entity(slot as usize);
     let card = PlayerCard::default();
     let viewer = PlayerAppearance {
         entity: owner,
-        slot: 0,
+        slot,
         team: 0,
         card: &card,
     };
@@ -120,6 +122,76 @@ fn started_peer(schemas: &Schemas, bots: &[u32]) -> (Peer, u32) {
 }
 
 #[test]
+fn settled_bot_weapon_damage_reaches_shooter_and_observer_delivery() {
+    use crate::{
+        commands::Command,
+        game_bots::Bot,
+        game_combat::{PosedHitscan, ShotContext},
+        game_hitscan::{DamageTags, HitDefinition},
+        game_instance::RETAIL_QUANTA,
+    };
+
+    let input = contract().input;
+    let target = input.bot_ids[0];
+    let mut bot = Bot::fixture_walker([4.0, 0.0, 0.0]);
+    bot.entity = target;
+    bot.position = [4.0, 0.0, 0.0];
+    let maximum = bot.spawn.health;
+    let mut scene = PreparedScene::fixture_for_bots(vec![bot]);
+    let (room, queries) = scene.bot_simulation();
+    let schemas = fixture();
+    let (mut shooter, mut shooter_sequence) = started_peer(&schemas, &[target], 0);
+    let (mut observer, mut observer_sequence) = started_peer(&schemas, &[target], 1);
+    let tick = FIRST_TICK;
+    let hit = room
+        .hitscan(
+            &queries,
+            PosedHitscan {
+                source: shooter.world.owner() | 1,
+                origin: [0.0, 0.8, 0.0],
+                direction: [1.0, 0.0, 0.0],
+                command: Command {
+                    frame: tick,
+                    ..Command::default()
+                },
+                shot_frame: tick,
+                reach: 8.0,
+                hit: HitDefinition {
+                    tags: DamageTags::EMPTY,
+                    amount: input.room_weapon_hit,
+                    loadout: None,
+                    critical: 1.0,
+                    falloff: None,
+                },
+            },
+            ShotContext {
+                team: 0,
+                quanta: RETAIL_QUANTA,
+                tick,
+                now: Duration::ZERO,
+            },
+            |entity| entity == target,
+        )
+        .unwrap()
+        .unwrap();
+    shooter.bot_hit(hit);
+    assert_eq!(
+        room.body_healths().unwrap()[&target],
+        maximum - input.room_weapon_hit
+    );
+    let [update]: [EntityUpdate; 1] = room.take_scripted_health().try_into().unwrap();
+    for (peer, sequence) in [
+        (&mut shooter, &mut shooter_sequence),
+        (&mut observer, &mut observer_sequence),
+    ] {
+        assert!(!peer.world.health_pending(target));
+        peer.world.queue_health(update.clone());
+        let (_, records) = send_records(peer, &schemas, sequence);
+        assert_eq!(records, [(target, 2)]);
+    }
+}
+
+#[test]
 fn pending_respawn_chain_preserves_notice_gate_and_independent_bot_delivery() {
     let Fixture {
         input: Input { bot_ids, .. },
@@ -128,7 +200,7 @@ fn pending_respawn_chain_preserves_notice_gate_and_independent_bot_delivery() {
     } = contract();
     let [a, b, c, d, e] = bot_ids;
     let schemas = fixture();
-    let (mut peer, mut sequence) = started_peer(&schemas, &[a, d]);
+    let (mut peer, mut sequence) = started_peer(&schemas, &[a, d], 0);
     let first = BOT_RESPAWN_TIME;
     let second = first + BOT_RESPAWN_TIME;
 
@@ -174,7 +246,7 @@ fn next_respawn_waits_for_the_preceding_create_acknowledgement() {
     } = contract();
     let [a, b, c, ..] = bot_ids;
     let schemas = fixture();
-    let (mut peer, mut sequence) = started_peer(&schemas, &[a]);
+    let (mut peer, mut sequence) = started_peer(&schemas, &[a], 0);
     let first = BOT_RESPAWN_TIME;
     let second = first + BOT_RESPAWN_TIME;
 
@@ -211,7 +283,7 @@ fn stale_respawn_from_before_peer_start_does_not_block_next_generation() {
     } = contract();
     let [a, b, c, ..] = bot_ids;
     let schemas = fixture();
-    let (mut peer, mut sequence) = started_peer(&schemas, &[b]);
+    let (mut peer, mut sequence) = started_peer(&schemas, &[b], 0);
     let first = BOT_RESPAWN_TIME;
     let second = first + BOT_RESPAWN_TIME;
 

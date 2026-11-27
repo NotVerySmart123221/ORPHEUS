@@ -174,6 +174,243 @@ fn prepare_owner(
 
 #[test]
 #[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn prepared_final_blow_effect_survives_owner_egress_loss() {
+    exercise_final_blow_effect(false);
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
+fn prepared_projectile_final_blow_effect_survives_owner_egress_loss() {
+    exercise_final_blow_effect(true);
+}
+
+fn exercise_final_blow_effect(projectile: bool) {
+    use crate::{
+        game_bots::BOT_ENTITY,
+        game_clock::TICK_PERIOD,
+        game_combat::{AdmittedFlight, FlightOutcome, ShotContext},
+        game_hitscan::{DamageTags, HitDefinition},
+        game_projectiles::{OwnerProjectiles, ProjectileLeases},
+        projectile_flight::{ProjectileBallistics, ProjectileFlight},
+        script_init::ShotEvent,
+        script_stream::OWNER_SETTLE_FRAMES,
+    };
+
+    let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
+    let assets = SceneAssets::load(runtime).unwrap();
+    let mut scene = assets.prepare(GameMap::practice_range()).unwrap();
+    let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
+    let target = BOT_ENTITY + 5;
+    let simulation = scene.simulation_mut();
+    simulation.enable_authored_elimination_feedback();
+    simulation.body_mut(target).unwrap().position = [x - 4.0, y, z];
+
+    let mut world = WorldDelivery::new(OWNER);
+    let mut egress = GameEgress::default();
+    let mut start = prepare_owner(&mut scene, &mut world, &mut egress);
+    assert!(deliver_until(
+        &mut world,
+        &mut scene,
+        &mut egress,
+        &mut start,
+        |world| {
+            world
+                .body_script
+                .as_ref()
+                .is_some_and(|script| script.stream.base().is_some())
+        }
+    ));
+    let id = world.active_body_id().unwrap();
+    let viewer = PlayerAppearance {
+        entity: OWNER,
+        slot: 0,
+        team: 0,
+        card: &PlayerCard::default(),
+    };
+    let acknowledged = |world: &WorldDelivery| {
+        world
+            .body_script
+            .as_ref()
+            .unwrap()
+            .stream
+            .base()
+            .unwrap()
+            .1
+            .acknowledged_callout()
+    };
+    let advance = |world: &mut WorldDelivery, scene: &mut PreparedScene, tick| {
+        world.queue_commands(
+            tick,
+            &[Command {
+                frame: tick,
+                yaw: -16384,
+                ..Command::default()
+            }],
+        );
+        let (_, left) = world
+            .advance_input(scene, &viewer, RETAIL_QUANTA, 16)
+            .unwrap();
+        assert!(!left);
+        assert_eq!(world.input.processed, Some(tick));
+    };
+    let settle = |scene: &mut PreparedScene, tick, amount, killed| {
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        let context = ShotContext {
+            team: 0,
+            quanta: RETAIL_QUANTA,
+            tick,
+            now: tick * TICK_PERIOD,
+        };
+        let hit = HitDefinition {
+            amount,
+            tags: DamageTags::EMPTY,
+            loadout: None,
+            critical: 1.0,
+            falloff: None,
+        };
+        let origin = [x, y + 1.0, z];
+        let direction = [-1.0, 0.0, 0.0];
+        let settled = if projectile && killed {
+            let template = 1;
+            let leases = ProjectileLeases::new(0, tick, [template]).unwrap();
+            let token = OwnerProjectiles::new(id.entity, leases)
+                .admit(
+                    ShotEvent {
+                        entity: id.entity,
+                        instance: 1,
+                        graph: 1,
+                        raw_state: 0,
+                        frame: tick,
+                        time_ms: 0,
+                        activation: 1,
+                        activation_ms: 0,
+                        ordinal: 0,
+                    },
+                    template,
+                    3,
+                )
+                .unwrap();
+            let flight = ProjectileFlight::new(
+                ProjectileBallistics {
+                    speed: 300.0,
+                    lifetime: 0.03,
+                    max_distance: None,
+                    radius: 0.0,
+                    terrain_radius: 0.0,
+                    definition: Some(template),
+                    direct: Some(hit),
+                    blast: None,
+                    terrain_rebound: None,
+                },
+                origin,
+                direction,
+                None,
+            )
+            .unwrap();
+            let (outcomes, mut hits) = simulation
+                .advance_projectiles(
+                    &queries,
+                    1,
+                    id,
+                    vec![AdmittedFlight {
+                        token,
+                        launch_frame: context.tick,
+                        flight,
+                        stun: None,
+                        hit_effect: None,
+                        impact_spawn: None,
+                        presentation: None,
+                    }],
+                    context,
+                    |_| true,
+                )
+                .unwrap();
+            assert!(matches!(
+                outcomes.as_slice(),
+                [FlightOutcome::Ended { token: settled, impact: true, .. }] if *settled == token
+            ));
+            assert_eq!(hits.len(), 1);
+            hits.remove(0)
+        } else {
+            simulation
+                .hitscan(
+                    &queries,
+                    PosedHitscan {
+                        source: id.entity,
+                        command: Command {
+                            frame: tick,
+                            ..Command::default()
+                        },
+                        shot_frame: tick,
+                        origin,
+                        direction,
+                        reach: 8.0,
+                        hit,
+                    },
+                    context,
+                    |entity| entity == target,
+                )
+                .unwrap()
+                .expect("hit the stationary target")
+        };
+        assert!(matches!(
+            settled.notices[0],
+            Some(crate::game_combat_messages::CombatNotice::Hit { target: hit_target, killed: observed, .. })
+                if hit_target == target && observed == killed
+        ));
+    };
+
+    let before = acknowledged(&world);
+    let lethal_tick = start + OWNER_SETTLE_FRAMES + 4;
+    for tick in start + 1..=lethal_tick + 8 {
+        advance(&mut world, &mut scene, tick);
+        if tick == start + 1 {
+            settle(&mut scene, tick, 20.0, false);
+        } else if tick == lethal_tick {
+            settle(&mut scene, tick, 500.0, true);
+        }
+        let runtime = scene
+            .simulation()
+            .player_body(id)
+            .unwrap()
+            .runtime
+            .as_ref()
+            .unwrap();
+        let snapshot = runtime.snapshot().unwrap();
+        assert!(snapshot.diagnostics.is_empty());
+        let actions = snapshot
+            .frame_actions
+            .iter()
+            .filter(|action| action.callout.serial > before);
+        assert_eq!(actions.count(), usize::from(tick > lethal_tick));
+
+        let sequence = tick - FIRST_TICK;
+        let (_, frame) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            tick,
+            sequence,
+        );
+        let delivered = tick != lethal_tick + 1;
+        let report = egress.acknowledge(frame.sequence + 1, u64::from(delivered));
+        if !delivered {
+            assert!(report.packets.iter().flat_map(|packet| &packet.records).any(|record| {
+                matches!(record.delivery, Delivery::BodyScript { id: sent, delta: true, .. } if sent == id)
+            }));
+        }
+        world.acknowledge(report, Duration::ZERO);
+        assert_eq!(
+            acknowledged(&world),
+            before + u32::from(tick > lethal_tick + 1)
+        );
+    }
+    assert!(world.owner_script_fault.is_none());
+}
+
+#[test]
+#[ignore = "requires the target-tagged 104319 Practice Range runtime"]
 fn stock_practice_owner_observes_processed_commands_and_rifle_state() {
     let runtime = std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap();
     let assets = SceneAssets::load(runtime).unwrap();
@@ -311,7 +548,7 @@ fn stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo() {
     assert!(!rifle.states[&10].active);
     let shots = world.take_hitscan(scene.simulation_mut());
     assert_eq!(shots.len(), 1);
-    assert_eq!(shots[0].shot_frame, press);
+    assert_eq!(shots[0].0.shot_frame, press);
 
     let (_, sent) = transmit(
         &mut world,
@@ -332,6 +569,59 @@ fn stock_practice_owner_rifle_batched_tap_delivers_terminal_ammo() {
     assert_eq!(
         snapshot.volley_identity(rifle_id, 10),
         Some((1, u64::from(press) * FRAME_MS))
+    );
+
+    // Send the next press and release separately. The press can seed the
+    // client's volley with the count before the shot. Lose that packet and
+    // prove the release carries the post-shot count without another shot.
+    let next_press = release + 24;
+    let next_release = next_press + 1;
+    for (frame, buttons, arrived, wire_ammo) in
+        [(next_press, FIRE, false, 29), (next_release, 0, true, 28)]
+    {
+        world.queue_commands(
+            frame,
+            &[Command {
+                frame,
+                buttons,
+                ..Command::default()
+            }],
+        );
+        assert!(
+            !world
+                .advance_input(&mut scene, &viewer, RETAIL_QUANTA, 32)
+                .unwrap()
+                .1
+        );
+        let shots = world.take_hitscan(scene.simulation_mut());
+        assert_eq!(shots.len(), usize::from(buttons == FIRE));
+        assert_eq!(
+            rifle_state(scene.simulation().player_body(id).unwrap()).0,
+            28
+        );
+        let (_, sent) = transmit(
+            &mut world,
+            Some(scene.simulation_mut()),
+            &mut egress,
+            frame,
+            frame - FIRST_TICK,
+        );
+        let stream = &world.body_script.as_ref().unwrap().stream;
+        assert_eq!(stream.command_frame(), frame);
+        assert_eq!(
+            stream
+                .latest_snapshot()
+                .unwrap()
+                .instance_variables(rifle_id)
+                .unwrap()[&53],
+            ScriptValue::Integer(wire_ammo),
+        );
+        transport_outcome(&mut world, &mut egress, sent.sequence, arrived);
+    }
+    let (_, confirmed) = world.body_script.as_ref().unwrap().stream.base().unwrap();
+    assert_eq!(
+        confirmed.instance_variables(rifle_id).unwrap()[&53],
+        ScriptValue::Integer(28)
     );
 }
 
@@ -406,7 +696,7 @@ fn stock_practice_owner_gap_does_not_charge_for_an_unposed_rifle_round() {
     assert_eq!(world.input.processed, Some(next_shot));
     let shots = world.take_hitscan(scene.simulation_mut());
     assert_eq!(shots.len(), 1);
-    assert_eq!(shots[0].shot_frame, next_shot);
+    assert_eq!(shots[0].0.shot_frame, next_shot);
     assert_eq!(ammo(&scene), 11);
 }
 

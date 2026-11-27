@@ -17,6 +17,7 @@ use crate::{
         Value::{self, Array, Bool, Signed, Struct, Unsigned},
     },
     lobby_transport::LobbyMessage,
+    match_scene::WheelCosmetics,
     retail_templates::RetailTemplates,
     world::SkinTheme,
 };
@@ -250,6 +251,43 @@ impl Collection {
         Ok(SkinTheme {
             guid: item(0x38).map_or(0, |skin| skin.skin_theme),
             golden: item(0x50).is_some_and(|weapon| weapon.name == "GOLDEN"),
+        })
+    }
+
+    pub(crate) fn equipped_wheel_cosmetics(
+        &self,
+        profile: &Profile,
+        hero: u64,
+    ) -> io::Result<WheelCosmetics> {
+        let loadout = self.loadout(profile, hero)?;
+        let read_slots = |offset| -> io::Result<[u64; 4]> {
+            let mut slots = [0; 4];
+            if loadout.contains_key(&offset) {
+                for (slot, value) in slots.iter_mut().zip(array(&loadout, offset)?) {
+                    let guid = unsigned(value)?;
+                    if guid >> 48 == 0x0250 {
+                        *slot = guid;
+                    }
+                }
+            }
+            Ok(slots)
+        };
+        let emotes = read_slots(0x88)?;
+        let resolve = |catalog: &HashMap<u64, u64>| {
+            emotes.map(|unlock| catalog.get(&unlock).copied().unwrap_or(0))
+        };
+        Ok(WheelCosmetics {
+            sprays: read_slots(0x58)?,
+            emotes,
+            emote_aliases: resolve(&self.items.emote_aliases),
+            emote_blend_trees: resolve(&self.items.emote_blend_trees),
+            voice_effects: read_slots(0x70)?.map(|unlock| {
+                self.items
+                    .wheel_voice_effects
+                    .get(&unlock)
+                    .copied()
+                    .unwrap_or(0)
+            }),
         })
     }
 
@@ -707,6 +745,62 @@ mod tests {
             collection.equipped_skin(&profile, 0).unwrap(),
             SkinTheme::default()
         );
+    }
+
+    #[test]
+    fn controller_cosmetics_keep_equipped_order_and_clear_missing_slots() {
+        use crate::{
+            match_scene::{PlayerCard, Possession},
+            world::{ComponentValue, EQUIPPED_COSMETICS},
+        };
+
+        let collection = synthetic_collection();
+        let profile = Profile {
+            loadouts: Map::from_iter([(
+                guid_text(HERO),
+                json!({
+                    "+0x58": ["0x0250000000000004", "0x0", "0x0250000000000006"],
+                    "+0x88": ["0x0250000000000091", "0x0880000000000003",
+                              "0x0250000000000092", "0x0250000000000093", "0x0250000000000094"]
+                }),
+            )]),
+            ..Profile::default()
+        };
+        let cosmetics = collection.equipped_wheel_cosmetics(&profile, HERO).unwrap();
+        let mut card = PlayerCard::default();
+        card.wheel_cosmetics.insert(HERO, cosmetics);
+        let fields = |hero| {
+            let components = card.possession_components(Possession {
+                body: 1,
+                hero,
+                skin: None,
+            });
+            components
+                .into_iter()
+                .find(|component| component.index == EQUIPPED_COSMETICS)
+                .unwrap()
+                .fields
+        };
+        let ids = |slots: [u64; 9]| {
+            let mut values = slots.map(|guid| Some(ComponentValue::Id(guid)));
+            values[4] = None;
+            values
+        };
+        assert_eq!(
+            fields(HERO),
+            ids([
+                0x0250_0000_0000_0004,
+                0,
+                0x0250_0000_0000_0006,
+                0,
+                0,
+                0x0250_0000_0000_0091,
+                0,
+                0x0250_0000_0000_0092,
+                0x0250_0000_0000_0093
+            ])
+        );
+        assert_eq!(fields(HERO + 1), ids([0; 9]));
     }
 
     #[test]

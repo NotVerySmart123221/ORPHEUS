@@ -306,6 +306,7 @@ pub struct BodyStream<S> {
     lost_keys: BTreeMap<ChangeKey, u32>,
     latest_lost: Option<S>,
     initial_owner: Option<u32>,
+    observer_clean_key: Option<(u64, bool, bool)>,
 }
 
 impl<S> BodyStream<S> {
@@ -324,6 +325,25 @@ impl<S> BodyStream<S> {
             lost_keys: BTreeMap::new(),
             latest_lost: None,
             initial_owner: None,
+            observer_clean_key: None,
+        }
+    }
+
+    pub fn observer_matches_clean(
+        &self,
+        revision: u64,
+        bot_dead: bool,
+        can_introduce: bool,
+    ) -> bool {
+        self.base.is_some()
+            && self.pending.is_empty()
+            && self.lost_keys.is_empty()
+            && self.observer_clean_key == Some((revision, bot_dead, can_introduce))
+    }
+
+    pub fn mark_observer_clean(&mut self, revision: u64, bot_dead: bool, can_introduce: bool) {
+        if self.base.is_some() && self.pending.is_empty() && self.lost_keys.is_empty() {
+            self.observer_clean_key = Some((revision, bot_dead, can_introduce));
         }
     }
 
@@ -390,6 +410,7 @@ impl<S> BodyStream<S> {
         );
         self.last = last;
         self.latest_lost = None;
+        self.observer_clean_key = None;
         Ok(result)
     }
 
@@ -465,6 +486,7 @@ impl<S> BodyStream<S> {
         }
         self.last = last;
         self.latest_lost = None;
+        self.observer_clean_key = None;
         Ok(result)
     }
 
@@ -525,6 +547,7 @@ impl<S> BodyStream<S> {
         };
         self.base = Some(item.snapshot);
         self.base_last = last;
+        self.observer_clean_key = None;
         self.pending.retain(|&number, _| number > last);
         self.lost_keys.retain(|_, number| *number > last);
         if self.initial_owner.is_some_and(|initial| initial <= last) {

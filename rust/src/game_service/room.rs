@@ -14,6 +14,7 @@ pub(super) struct RoomWorld {
     pub(super) scene: Box<PreparedScene>,
     pub(super) card: PlayerCard,
     pub(super) patrol: PatrolScript,
+    #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
     pub(super) patrol_generation: u64,
 }
 
@@ -501,7 +502,16 @@ impl Room {
             .ok_or(RoomError::Invariant(
                 "admitted member has no live roster slot",
             ))?;
-        member.peer = Some(Peer::new(player.entity));
+        let entity = player.entity;
+        let team = player.info.team;
+        member.peer = Some(Peer::new(entity));
+        if let Some(world) = &mut self.world {
+            world
+                .scene
+                .simulation_mut()
+                .voice_chat_mut()
+                .join(entity, crate::game_replay::VoiceChannel::Team(team));
+        }
         Ok(())
     }
 
@@ -520,6 +530,7 @@ impl Room {
             if let Some(world) = &mut self.world {
                 world.scene.retire_projectiles(connection);
                 let simulation = world.scene.simulation_mut();
+                simulation.voice_chat_mut().leave(entity);
                 simulation.retire_player_owner(entity);
                 simulation.set_team_member_counts(counts);
             }
@@ -566,44 +577,77 @@ impl Room {
                     egress,
                     loading,
                     world,
+                    combat_ui,
                     ..
                 } = peer;
                 let mut response_error = None;
-                let commands =
-                    ingress.receive(schemas, payload, |message| {
-                        match MessageKind::from(message.id) {
-                            MessageKind::Ping => {
-                                let received = wall_nanoseconds();
-                                if let Ok(pong) =
-                                    pong(&message.fields, received, wall_nanoseconds())
+                let commands = ingress.receive(schemas, payload, |message, command_frame| {
+                    match MessageKind::from(message.id) {
+                        MessageKind::Ping => {
+                            let received = wall_nanoseconds();
+                            if let Ok(pong) = pong(&message.fields, received, wall_nanoseconds()) {
+                                let result = encode(schemas, pong.id, &pong.fields)
+                                    .map_err(RoomError::from)
+                                    .and_then(|bytes| {
+                                        egress.queue_reliable(bytes).map_err(RoomError::from)
+                                    });
+                                if let Err(error) = result {
+                                    response_error.get_or_insert(error);
+                                }
+                            }
+                        }
+                        MessageKind::MapLoaded => {
+                            loading.mark_loaded(now);
+                        }
+                        MessageKind::GameMessage if room.world.is_some() => {
+                            world.queue_game_message(tick, now, message);
+                        }
+                        MessageKind::WheelAction => {
+                            if let Some(world_state) = &room.world {
+                                world.queue_wheel_action(
+                                    world_state.scene.simulation(),
+                                    &message,
+                                    command_frame,
+                                );
+                            }
+                        }
+                        MessageKind::CardVote => {
+                            let card_id = message
+                                .fields
+                                .get(&0x80)
+                                .and_then(|v| match *v {
+                                    crate::jam_codec::Value::Unsigned(id) => Some(id as usize),
+                                    crate::jam_codec::Value::Signed(id) if id >= 0 => {
+                                        Some(id as usize)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or(0);
+                            if let Some(world_state) = &mut room.world {
+                                let voter = world.owner();
+                                if let Some(card) = world_state
+                                    .scene
+                                    .simulation_mut()
+                                    .scoreboard_mut()
+                                    .vote_card(voter, card_id)
                                 {
-                                    let result = encode(schemas, pong.id, &pong.fields)
-                                        .map_err(RoomError::from)
-                                        .and_then(|bytes| {
-                                            egress.queue_reliable(bytes).map_err(RoomError::from)
-                                        });
-                                    if let Err(error) = result {
-                                        response_error.get_or_insert(error);
+                                    let vote_notice = CombatNotice::CardVoteUpdate {
+                                        card_index: card.card_id as u32,
+                                        votes: card.votes,
+                                        epic: card.epic(),
+                                    };
+                                    combat_ui.queue_legacy(vote_notice);
+                                    for member in room.members.values_mut() {
+                                        if let Some(other) = &mut member.peer {
+                                            other.queue_combat_notice(vote_notice);
+                                        }
                                     }
                                 }
                             }
-                            MessageKind::MapLoaded => {
-                                loading.mark_loaded(now);
-                            }
-                            MessageKind::GameMessage if room.world.is_some() => {
-                                world.queue_game_message(tick, now, message);
-                            }
-                            MessageKind::WheelAction => {
-                                if let Some(world_state) = &room.world {
-                                    world.queue_wheel_action(
-                                        world_state.scene.simulation(),
-                                        &message,
-                                    );
-                                }
-                            }
-                            _ => (),
                         }
-                    });
+                        _ => (),
+                    }
+                });
                 if let Some(error) = response_error {
                     return Err(error);
                 }
@@ -685,13 +729,19 @@ impl Room {
                 if (!leave && peer.world.combat_body_active()) || settled_shots {
                     let (bots, queries) = world.scene.bot_simulation();
                     bots.activate_combat();
-                    for shot in shots {
-                        if let Some(hit) = bots.hitscan(&queries, shot, context, |entity| {
-                            peer.world.identity_ready(entity)
-                        })? {
-                            bots.deliver_applied_damage(peer.world.owner(), hit.damage.clone());
-                            peer.bot_hit(hit);
+                    let mut settled_hits = Vec::new();
+                    for (shot, policy) in shots {
+                        if let Some(hit) =
+                            bots.hitscan_with_policy(&queries, shot, policy, context, |entity| {
+                                peer.world.actor_contact_ready(entity)
+                            })?
+                        {
+                            settled_hits.push(hit);
                         }
+                    }
+                    bots.deliver_coalesced_hits(peer.world.owner(), &settled_hits);
+                    for hit in settled_hits {
+                        peer.bot_hit(hit);
                     }
                 }
                 // A batch may have yielded before a body selection so these
@@ -767,12 +817,80 @@ impl Room {
             )
         };
         for death in deaths {
+            if let Some(delay) = respawn_delay {
+                world
+                    .scene
+                    .simulation_mut()
+                    .schedule_player_respawn(death.body, now.saturating_add(delay));
+            }
+            let killcam_header = world
+                .scene
+                .simulation()
+                .replay()
+                .killcam(death.body.entity)
+                .filter(|clip| clip.killer != clip.victim && !clip.frames.is_empty())
+                .map(|clip| CombatNotice::HighlightHeader {
+                    star_entity: clip.killer,
+                    target_entity: clip.victim,
+                    category: 0,
+                    star_hero: clip
+                        .frames
+                        .last()
+                        .and_then(|f| f.actors.iter().find(|a| a.entity == clip.killer))
+                        .map_or(0, |a| a.hero),
+                    start_tick: clip.start_tick,
+                    end_tick: clip.end_tick,
+                });
             for member in self.members.values_mut() {
                 if let Some(peer) = &mut member.peer {
                     peer.queue_player_death(death);
-                    if let Some(delay) = respawn_delay {
-                        peer.world
-                            .schedule_player_respawn(death.body, now.saturating_add(delay));
+                    if let Some(header) = killcam_header {
+                        if peer.world.active_body_id() == Some(death.body) {
+                            peer.queue_combat_notice(header);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(winner) = world.scene.simulation_mut().take_match_winner() {
+            let mode_name = self.map.mode_name.clone();
+            let sim = world.scene.simulation_mut();
+            sim.record_completed_career_matches(winner, &mode_name, now.as_secs_f64());
+            let potg_notice = sim.replay().potg().map(|potg| {
+                let category = match potg.category {
+                    crate::game_replay::PotgCategory::HighScore => 1,
+                    crate::game_replay::PotgCategory::Lifesaver => 2,
+                    crate::game_replay::PotgCategory::Sharpshooter => 3,
+                    crate::game_replay::PotgCategory::Shutdown => 4,
+                };
+                CombatNotice::HighlightHeader {
+                    star_entity: potg.star_entity,
+                    target_entity: potg.star_entity,
+                    category,
+                    star_hero: potg.star_hero,
+                    start_tick: potg.start_tick,
+                    end_tick: potg.end_tick,
+                }
+            });
+            let card_notices: Vec<CombatNotice> = sim
+                .scoreboard_mut()
+                .generate_commendation_cards()
+                .iter()
+                .map(|card| CombatNotice::CommendationCardNotice {
+                    card_index: card.card_id as u32,
+                    owner: card.owner,
+                    hero: card.hero,
+                    stat_guid: card.stat_guid,
+                    value: card.value as f32,
+                })
+                .collect();
+            for member in self.members.values_mut() {
+                if let Some(peer) = &mut member.peer {
+                    if let Some(potg) = potg_notice {
+                        peer.queue_combat_notice(potg);
+                    }
+                    for card in &card_notices {
+                        peer.queue_combat_notice(*card);
                     }
                 }
             }
@@ -798,7 +916,11 @@ impl Room {
             });
             if let Some(peer) = peer {
                 match cue.notice {
-                    CombatNotice::Hit { .. } | CombatNotice::Elimination { .. } => {
+                    CombatNotice::Hit { .. }
+                    | CombatNotice::HealConfirm { .. }
+                    | CombatNotice::HealEvent { .. }
+                    | CombatNotice::Elimination { .. }
+                    | CombatNotice::ScorePopup { .. } => {
                         peer.queue_shooter_notice(cue.listener, cue.notice);
                     }
                     _ => peer.queue_player_cue(cue.listener, cue.source, cue.notice),
@@ -807,11 +929,10 @@ impl Room {
         }
         if junkenstein {
             if !messages.is_empty() {
-                let deadeye = world.scene.deadeye_scene(0).ok();
                 world
                     .scene
                     .simulation_mut()
-                    .deliver_player_defender_messages(deadeye.as_ref(), &messages);
+                    .deliver_player_defender_messages(None, &messages);
             }
             let voice_targets: Vec<u32> = self
                 .members
@@ -858,7 +979,10 @@ impl Room {
                 let Some(peer) = &mut member.peer else {
                     continue;
                 };
-                let Some((victim, due)) = peer.world.pending_player_respawn() else {
+                let Some(victim) = peer.world.active_body_id() else {
+                    continue;
+                };
+                let Some(due) = world.scene.simulation().pending_player_respawn(victim) else {
                     continue;
                 };
                 // Keep the victim notice eligible until reliable admission.
@@ -888,6 +1012,48 @@ impl Room {
                     now,
                 ) {
                     eprintln!("player {:08X} respawn rejected: {error}", viewer.entity);
+                }
+            }
+        }
+        if !world.scene.simulation().encounter_screens_complete() {
+            for member in self.members.values_mut() {
+                let Some(peer) = &mut member.peer else {
+                    continue;
+                };
+                let Some(player) = self.players.get(member.slot).filter(|player| !player.gone)
+                else {
+                    continue;
+                };
+                let Ok(slot) = i8::try_from(member.slot) else {
+                    continue;
+                };
+                let viewer = PlayerAppearance {
+                    entity: player.entity,
+                    slot,
+                    team: player.info.team,
+                    card: &world.card,
+                };
+                if let Err(error) = peer.world.advance_body_swap(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!("player {:08X} body swap rejected: {error}", viewer.entity);
+                }
+                #[cfg(feature = "lua-mods")]
+                if let Err(error) = peer.world.advance_mod_hero_switch(
+                    &mut world.scene,
+                    &viewer,
+                    tick,
+                    player.quanta(),
+                    now,
+                ) {
+                    eprintln!(
+                        "player {:08X} mod hero switch rejected: {error}",
+                        viewer.entity
+                    );
                 }
             }
         }

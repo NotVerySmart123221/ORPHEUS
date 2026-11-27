@@ -8,11 +8,11 @@ use crate::{
     commands::Command,
     game_bots::Bot,
     game_hitscan::TargetHistory,
-    junkenstein_navigation::{
+    mover::VelocityChange,
+    pve_encounter::navigation::{
         BossPursuit, BossTarget, GateApproach, JUNKRAT, REAPER, ROADHOG, ReaperExit, SUMMONER,
         WITCH,
     },
-    mover::VelocityChange,
     scene_assets::BotQueries,
     static_ray::norm,
     vitals::Vitals,
@@ -28,6 +28,7 @@ pub(super) struct BotState {
     pub(super) respawn_at: Option<Duration>,
     pub(super) enemy: Option<EnemyState>,
     pub(super) stock_script: Option<super::stock_bot::StockBotScript>,
+    pub(super) base_target_tags: crate::script_init::TargetTagSnapshot,
 }
 
 pub(super) struct EnemyState {
@@ -337,15 +338,26 @@ impl BotState {
             target: self.bot.entity,
             room_status: None,
             filter_flags: self.native_filter_flags(),
-            tags: self.enemy.as_ref().map_or_else(Default::default, |enemy| {
-                enemy.scripts.target_tags(&enemy.graphs, &enemy.binding)
-            }),
+            tags: self.target_tags(),
             script_state: self.script_state(),
         }
     }
 
+    pub(super) fn target_tags(&self) -> crate::script_init::TargetTagSnapshot {
+        if let Some(script) = &self.stock_script {
+            return script.target_tags();
+        }
+        self.enemy.as_ref().map_or_else(
+            || self.base_target_tags.clone(),
+            |enemy| enemy.scripts.target_tags(&enemy.graphs, &enemy.binding),
+        )
+    }
+
     pub(super) fn script_state(&self) -> crate::script_entity_state::EntityScriptState {
         use crate::script_entity_state::EntityScriptState;
+        if let Some(script) = &self.stock_script {
+            return script.script_state();
+        }
         let Some(enemy) = &self.enemy else {
             return EntityScriptState::Absent;
         };
@@ -369,6 +381,7 @@ impl BotState {
             respawn_at: None,
             enemy: None,
             stock_script: None,
+            base_target_tags: Default::default(),
         }
     }
 }

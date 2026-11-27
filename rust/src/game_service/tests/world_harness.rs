@@ -4,7 +4,7 @@ use super::*;
 pub enum PreparedFixture {
     Stock,
     StockOwner,
-    StockNameplate,
+    StockNameplate { hit_effect: bool },
     StockProjectile,
     StockSelfProjectile(GroundShot),
     StockBiotic,
@@ -55,8 +55,13 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         .map(|(&id, &value)| (id, value.into()))
         .collect();
     let expected_mode = crate::match_scene::mode_ui(assets.graphs(), &mode_variables).unwrap();
-    let target = BOT_ENTITY + 1;
+    let hit_effect = matches!(
+        fixture,
+        PreparedFixture::StockNameplate { hit_effect: true }
+    );
+    let target = BOT_ENTITY + if hit_effect { 5 } else { 1 };
     let mut nameplate_target_health = None;
+    let mut allied_nameplates = HashSet::new();
     let collection = Collection::new(
         &RetailTemplates::load(data.join("retail_templates.json")).unwrap(),
         Arc::new(ItemDb::load(&data).unwrap()),
@@ -104,12 +109,15 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         (&assets, &collection),
         |map| {
             let mut scene = assets.prepare(map)?;
+            if hit_effect {
+                scene.bot_simulation().0.enable_authored_hit_feedback(1.0);
+            }
             scripted_bots = scene.scripted_bots() != 0;
             if matches!(
                 fixture,
-                PreparedFixture::StockOwner | PreparedFixture::StockNameplate
+                PreparedFixture::StockOwner | PreparedFixture::StockNameplate { .. }
             ) {
-                if matches!(fixture, PreparedFixture::StockNameplate) {
+                if matches!(fixture, PreparedFixture::StockNameplate { .. }) {
                     assert!(scripted_bots);
                     assert_eq!(
                         mode_variables.get(&9539),
@@ -120,6 +128,15 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 }
                 let [x, y, z] = scene.map().spawn_point(0, 0).unwrap().0;
                 let (bots, _) = scene.bot_simulation();
+                if matches!(fixture, PreparedFixture::StockNameplate { .. }) {
+                    allied_nameplates.extend(
+                        bots.bodies()
+                            .unwrap()
+                            .filter(|bot| bot.spawn.team == 0)
+                            .map(|bot| bot.entity),
+                    );
+                    assert!(!allied_nameplates.is_empty());
+                }
                 let bot = bots.body_mut(target).unwrap();
                 bot.position = [x - 4.0, y, z];
                 nameplate_target_health = Some(bot.spawn.health);
@@ -152,7 +169,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 fixture,
                 PreparedFixture::Stock
                     | PreparedFixture::StockOwner
-                    | PreparedFixture::StockNameplate
+                    | PreparedFixture::StockNameplate { .. }
                     | PreparedFixture::StockProjectile
                     | PreparedFixture::StockSelfProjectile(_)
                     | PreparedFixture::StockBiotic
@@ -208,9 +225,10 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         && !matches!(
             fixture,
             PreparedFixture::Stock
-                | PreparedFixture::StockNameplate
+                | PreparedFixture::StockNameplate { .. }
                 | PreparedFixture::StockProjectile
                 | PreparedFixture::StockSelfProjectile(_)
+                | PreparedFixture::StockBiotic
         )
     {
         assert_eq!(result.err().unwrap().kind(), io::ErrorKind::Unsupported);
@@ -298,7 +316,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
     let mut moving_bot = false;
     let mut npc_full_parents = HashMap::new();
     let mut acknowledged_npc_baselines = HashSet::new();
-    let mut target_nameplate = !matches!(fixture, PreparedFixture::StockNameplate);
+    let mut target_nameplate = !matches!(fixture, PreparedFixture::StockNameplate { .. });
     loop {
         let frame = client.receive();
         assert!(client.window.accept(frame.seq));
@@ -375,6 +393,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                         assert_eq!(npc_full_parents[&record.entity].get(&parent), Some(&0x0c18));
                         assert_eq!(state, 3);
                         target_nameplate |= record.entity == target;
+                        allied_nameplates.remove(&record.entity);
                     }
                 }
             }
@@ -398,6 +417,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             && controller
             && moving_bot
             && target_nameplate
+            && allied_nameplates.is_empty()
             && bot_possessions.len() == 15
         {
             let possessed_bodies: HashSet<_> = bot_possessions.values().copied().collect();
@@ -407,7 +427,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
         }
         assert!(
             Instant::now() < deadline,
-            "waiting for world and script baselines"
+            "waiting for world and script baselines; allied nameplates pending: {allied_nameplates:?}"
         );
     }
     match fixture {
@@ -418,7 +438,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             exercise_stock_rifle(&mut client, &schemas, frame + 1, BOT_ENTITY + 1);
         }
-        PreparedFixture::StockNameplate => {
+        PreparedFixture::StockNameplate { .. } => {
             let frame = pick_soldier_for_weapon(&mut client, &schemas);
             exercise_stock_nameplate_hit(
                 &mut client,
@@ -426,6 +446,7 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
                 frame,
                 target,
                 nameplate_target_health.unwrap(),
+                hit_effect.then_some(&server),
             );
         }
         PreparedFixture::Combat => {
@@ -443,7 +464,6 @@ pub fn exercise_prepared_world(fixture: PreparedFixture) {
             exercise_stock_self_splash(&mut client, &schemas, &server, launch, shot);
         }
         PreparedFixture::StockBiotic => {
-            assert!(!scripted_bots);
             let frame = exercise_owner_vm(&mut client, &schemas, false);
             let launch = wait_for_stock_weapon(&mut client, &schemas, frame + 1);
             exercise_stock_biotic(&mut client, &schemas, launch);
@@ -995,8 +1015,10 @@ fn exercise_stock_nameplate_hit(
     first: u32,
     target: u32,
     initial_health: f64,
+    verify_active: Option<&GameService>,
 ) {
     let frame = wait_for_stock_weapon(client, schemas, first);
+    let body = player_entity(0) | 1;
     let fire = crate::commands::FIRE;
     client.send(ACK, command_batch(frame, 1, -16384, fire, false));
     client.send(ACK, command_batch(frame + 1, 1, -16384, 0, false));
@@ -1009,6 +1031,9 @@ fn exercise_stock_nameplate_hit(
         if lost.is_none() {
             if let Some(hit) = reliable.iter().find(|item| item.message.id == 25001) {
                 lost = Some((hit.sequence, hit.message.fields.clone()));
+                if verify_active.is_some() {
+                    client.send(ACK, command_batch(frame + 2, 8, -16384, 0, false));
+                }
                 continue;
             }
         }
@@ -1058,8 +1083,18 @@ fn exercise_stock_nameplate_hit(
         client.send(ACK, Vec::new());
         assert!(
             Instant::now() < deadline,
-            "waiting for nonlethal health update and retransmitted hit notice"
+            "missing combat delivery: damage={seen_damage:?}, health={seen_health:?}"
         );
+    }
+    if let Some(server) = verify_active {
+        let snapshot = server.debug_snapshot().unwrap();
+        let script = snapshot
+            .rooms
+            .iter()
+            .flat_map(|room| &room.scripts)
+            .find(|script| script.entity == body)
+            .expect("the owner VM must remain mounted after hitting a stationary bot");
+        assert_eq!(script.diagnostics, 0);
     }
     let actual_damage = initial_health - seen_health.unwrap();
     assert_eq!(actual_damage.round_ties_even() as u64, seen_damage.unwrap());

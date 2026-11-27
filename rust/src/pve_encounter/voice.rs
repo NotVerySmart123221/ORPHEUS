@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn shared_boss_speech_contract() {
         let contract: Value = serde_json::from_str(include_str!(
-            "../../fixtures/behavior/junkenstein-boss-speech-v1.json"
+            "../../../fixtures/behavior/junkenstein-boss-speech-v1.json"
         ))
         .unwrap();
         assert_eq!(contract["schema_version"], 1);

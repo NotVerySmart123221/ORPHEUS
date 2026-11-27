@@ -7,6 +7,7 @@ mod death_notice;
 mod harness;
 mod isolation;
 mod junkenstein_validation;
+mod npc_fire;
 mod same_schedule;
 mod world_harness;
 
@@ -64,6 +65,7 @@ fn timing_opt_in_reports_empty_histograms_while_no_world_is_running() {
 }
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn lua_fault_in_one_room_leaves_sibling_room_and_patrol_alive() {
     use crate::{
         game_bots::{BOT_ENTITY, Bot},
@@ -185,8 +187,12 @@ fn lua_fault_in_one_room_leaves_sibling_room_and_patrol_alive() {
 
 #[test]
 #[ignore = "requires a prepared 104319 Practice Range pack"]
+#[cfg(feature = "lua-debug")]
 fn prepared_rooms_keep_patrol_script_state_local() {
-    use crate::{ai_script::AiActorSnapshot, patrol_script::WaitEvent, scene_assets::SceneAssets};
+    use crate::{
+        patrol_script::{AiActorSnapshot, WaitEvent},
+        scene_assets::SceneAssets,
+    };
 
     let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
     let schemas = Arc::new(Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap());
@@ -408,7 +414,13 @@ fn prepared_worker_retries_the_stock_soldier_vm_on_encrypted_loopback() {
 #[test]
 #[ignore = "requires a tagged 104319 Practice Range scene with stock bot VM graphs"]
 fn prepared_worker_delivers_a_stock_nameplate_and_nonlethal_hit_over_encrypted_udp() {
-    exercise_prepared_world(PreparedFixture::StockNameplate);
+    exercise_prepared_world(PreparedFixture::StockNameplate { hit_effect: false });
+}
+
+#[test]
+#[ignore = "requires a tagged 104319 Practice Range scene with stock bot definitions"]
+fn prepared_worker_keeps_owner_vm_active_after_hitting_stationary_bot() {
+    exercise_prepared_world(PreparedFixture::StockNameplate { hit_effect: true });
 }
 
 #[test]
@@ -442,7 +454,7 @@ fn prepared_worker_applies_stock_particle_splash_damage_and_launch() {
 }
 
 #[test]
-#[ignore = "requires a tagged 104319 Practice Range scene without bot VM graphs"]
+#[ignore = "requires a prepared 104319 Practice Range scene with compatible owner graph metadata"]
 fn prepared_worker_delivers_stock_biotic_canister_and_field() {
     exercise_prepared_world(PreparedFixture::StockBiotic);
 }
@@ -608,6 +620,7 @@ fn junkenstein_worker_delivers_castle_gate_and_mode_frame() {
     server.stop().unwrap();
 }
 
+#[cfg(feature = "lua-debug")]
 const POLICY_STAY: &str = r#"
 return {
     abi = 2,
@@ -621,6 +634,7 @@ return {
 }
 "#;
 
+#[cfg(feature = "lua-debug")]
 const POLICY_MOVE: &str = r#"
 return {
     abi = 2,
@@ -635,6 +649,7 @@ return {
 "#;
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn hot_reload_updates_active_rooms_future_rooms_and_digest() {
     use crate::{
         game_bots::{BOT_ENTITY, Bot},
@@ -685,7 +700,7 @@ fn hot_reload_updates_active_rooms_future_rooms_and_digest() {
     assert_eq!(report.digest, expected_digest);
     assert_eq!(report.active_rooms, 1);
     assert!(report.changed);
-    assert_eq!(state.active_patrol_source.as_ref(), POLICY_MOVE);
+    assert_eq!(state.active_patrol_source.as_deref(), Some(POLICY_MOVE));
     assert_eq!(
         state.rooms[&room_a]
             .world
@@ -773,11 +788,11 @@ fn hot_reload_updates_active_rooms_future_rooms_and_digest() {
 }
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn hot_reload_rejects_invalid_scripts_and_rolls_back_atomically() {
     use crate::{
         ai_script::{AI_MAX_SOURCE_BYTES, AiExecutionPhase, AiScriptError},
         game_bots::{BOT_ENTITY, Bot},
-        patrol_script::DEFAULT_SOURCE,
         scene_assets::PreparedScene,
     };
 
@@ -874,11 +889,7 @@ fn hot_reload_rejects_invalid_scripts_and_rolls_back_atomically() {
         );
         assert_eq!(state.patrol_reload_generation, 0, "{label}");
         assert_eq!(state.patrol_policy_digest, digest_0, "{label}");
-        assert_eq!(
-            state.active_patrol_source.as_ref(),
-            DEFAULT_SOURCE,
-            "{label}"
-        );
+        assert_eq!(state.active_patrol_source.as_deref(), None, "{label}");
         assert!(state.recent_faults.is_empty(), "{label}");
         assert!(state.rooms.contains_key(&room_a), "{label}");
         assert_eq!(
@@ -926,6 +937,7 @@ fn hot_reload_rejects_invalid_scripts_and_rolls_back_atomically() {
 }
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn hot_reload_partial_staging_failure_leaves_all_rooms_and_digest_unchanged() {
     use crate::{
         ai_script::AiScriptError,
@@ -980,7 +992,7 @@ fn hot_reload_partial_staging_failure_leaves_all_rooms_and_digest_unchanged() {
     assert_eq!(*script_err, AiScriptError::MemoryLimitExceeded);
     assert_eq!(state.patrol_reload_generation, 1);
     assert_eq!(state.patrol_policy_digest, stay_digest);
-    assert_eq!(state.active_patrol_source.as_ref(), POLICY_STAY);
+    assert_eq!(state.active_patrol_source.as_deref(), Some(POLICY_STAY));
 
     // Tick both rooms past the 3s spawn wait: neither should adopt POLICY_MOVE (slot 1).
     for _ in 0..33 {
@@ -1038,10 +1050,11 @@ fn hot_reload_partial_staging_failure_leaves_all_rooms_and_digest_unchanged() {
 }
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn hot_reload_never_resurrects_stale_body_id_handles() {
     use crate::{
         ai_script::{
-            AiActorSnapshot, AiEvent, AiScript, AiScriptError, AiSnapshot, AiTargetSnapshot,
+            AiEvent, AiScript, AiScriptError, AiSnapshot, AiTargetSnapshot,
             validate_commands_against_simulation,
         },
         contact_world::ContactWorld,
@@ -1051,6 +1064,7 @@ fn hot_reload_never_resurrects_stale_body_id_handles() {
         game_replication::BodyId,
         mover::Mover,
         mover_settings::MoverSettings,
+        patrol_script::AiActorSnapshot,
         scene_assets::PreparedScene,
     };
 
@@ -1216,6 +1230,7 @@ fn hot_reload_never_resurrects_stale_body_id_handles() {
 }
 
 #[test]
+#[cfg(feature = "lua-debug")]
 fn hot_reload_file_rejects_missing_or_invalid_file_and_server_config_defaults_opt_out() {
     use crate::{ai_script::AI_MAX_SOURCE_BYTES, server::ServerConfig};
     use sha2::{Digest, Sha256};
@@ -1258,7 +1273,7 @@ fn hot_reload_file_rejects_missing_or_invalid_file_and_server_config_defaults_op
     assert_eq!(service.ai_policy_status().unwrap().generation, 1);
 
     let reset = service
-        .reload_ai_script(crate::patrol_script::DEFAULT_SOURCE)
+        .reload_ai_script(crate::patrol_script::LUA_SOURCE)
         .unwrap();
     assert_eq!(reset.generation, 2);
     assert!(reset.changed);
@@ -1714,6 +1729,7 @@ fn paused_room_keeps_keepalive_disconnect_and_packet_budget_sane_without_busy_sp
 
 #[test]
 #[ignore = "requires an authorized base 104319 Practice Range runtime"]
+#[cfg(feature = "lua-debug")]
 fn prepared_practice_rooms_hot_reload_and_roll_back_without_interrupting_patrol() {
     use crate::{
         game_bots::BOT_ENTITY, game_heroes::SOLDIER, scene_assets::SceneAssets,

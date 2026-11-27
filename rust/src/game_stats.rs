@@ -41,7 +41,7 @@ pub struct StatSlot {
     pub no_medal: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct PlayerStats {
     values: HashMap<u64, f64>,
 }
@@ -189,14 +189,38 @@ pub fn on_fire_component(
     threshold: Option<f32>,
     on_fire: Option<bool>,
 ) -> Component {
-    let mut fields = vec![None; GMP_STATS_FIELDS];
-    fields[SCORE] = score.map(ComponentValue::F32);
-    fields[THRESHOLD] = threshold.map(ComponentValue::F32);
-    fields[ON_FIRE] = on_fire.map(|flag| ComponentValue::U8(u8::from(flag)));
-    Component {
-        index: GMP_STATS,
-        fields,
+    with_on_fire(
+        Component {
+            index: GMP_STATS,
+            fields: vec![None; GMP_STATS_FIELDS],
+        },
+        score,
+        threshold,
+        on_fire,
+    )
+}
+
+/// Merge On-Fire score, threshold, and active flag into an existing `GMP_STATS`
+/// component so controller updates never send duplicate component 64 entries.
+pub fn with_on_fire(
+    mut component: Component,
+    score: Option<f32>,
+    threshold: Option<f32>,
+    on_fire: Option<bool>,
+) -> Component {
+    if component.fields.len() < GMP_STATS_FIELDS {
+        component.fields.resize(GMP_STATS_FIELDS, None);
     }
+    if let Some(score) = score {
+        component.fields[SCORE] = Some(ComponentValue::F32(score));
+    }
+    if let Some(threshold) = threshold {
+        component.fields[THRESHOLD] = Some(ComponentValue::F32(threshold));
+    }
+    if let Some(flag) = on_fire {
+        component.fields[ON_FIRE] = Some(ComponentValue::U8(u8::from(flag)));
+    }
+    component
 }
 
 /// The effective flag on a fresh player controller, before any stats updates.

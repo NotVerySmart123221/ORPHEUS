@@ -357,6 +357,260 @@ fn received_damage_audio_follows_only_the_current_victim_connection() {
     );
 }
 
+#[test]
+fn native_received_damage_is_delivered_only_to_the_body_that_lost_health() {
+    let contract: Json = serde_json::from_str(include_str!(
+        "../../../../fixtures/behavior/received-damage-feedback-v1.json"
+    ))
+    .unwrap();
+    let damage = contract["input"]["damage"].as_f64().unwrap();
+    let schemas = Schemas::from_json(&contract["jam_schema"].to_string()).unwrap();
+    let ray_distance = contract["input"]["ray_distance"].as_f64().unwrap();
+    let normal =
+        serde_json::from_value(contract["expected"]["direct_hit_outward_normal"].clone()).unwrap();
+    let source_position =
+        serde_json::from_value(contract["input"]["script_source_position"].clone()).unwrap();
+    assert_native_received_damage(
+        &schemas,
+        damage,
+        Some((ray_distance, normal)),
+        source_position,
+    );
+    assert_native_received_damage(&schemas, damage, None, source_position);
+}
+
+#[test]
+#[ignore = "requires the separately prepared 104319 game schemas"]
+fn prepared_native_received_damage_uses_the_104319_schema() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let schemas = Schemas::load(runtime.join("data/game_schemas_174.json")).unwrap();
+    let source_position = [-6.25, 0.5, 8.75];
+    assert_native_received_damage(
+        &schemas,
+        9.0,
+        Some((4.0, [-1.0, 0.0, 0.0])),
+        source_position,
+    );
+    assert_native_received_damage(&schemas, 9.0, None, source_position);
+}
+
+fn assert_native_received_damage(
+    schemas: &Schemas,
+    damage: f64,
+    ray: Option<(f64, [f64; 3])>,
+    source_position: [f64; 3],
+) {
+    let graph = feedback_graph(109, 207, CueTrigger::EliminationDealt);
+    let (mut room, [source, victim], mut sequence) = feedback_room(graph, [0, 1]);
+    let source_create = room
+        .world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .take_player_events()
+        .into_iter()
+        .find_map(|event| match event {
+            crate::game_combat::PlayerBodyEvent::Created { id, update, .. } if id == source => {
+                Some(*update)
+            }
+            _ => None,
+        })
+        .expect("source observer create");
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .player_body_mut(source)
+        .unwrap()
+        .mover = Mover::new(
+        MoverSettings::default(),
+        Arc::new(ContactWorld::new(Vec::new()).unwrap()),
+        source_position,
+        0,
+        0x18,
+    )
+    .unwrap();
+    let tick = FIRST_TICK + 1;
+    apply_and_advance(&mut room, [source, victim], tick, damage);
+    for member in room.members.values() {
+        assert_eq!(
+            member
+                .peer
+                .as_ref()
+                .unwrap()
+                .pending_combat_notices()
+                .count(),
+            0
+        );
+    }
+
+    room.world
+        .as_mut()
+        .unwrap()
+        .scene
+        .simulation_mut()
+        .enable_received_damage_feedback();
+    apply_and_advance(&mut room, [source, victim], tick + 2, 0.0);
+    assert_eq!(
+        room.members[&2]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .count(),
+        0
+    );
+    let hit_tick = tick + 4;
+    let origin = if let Some((distance, _)) = ray {
+        let scene = &mut room.world.as_mut().unwrap().scene;
+        let [x, y, z] = scene
+            .simulation()
+            .player_body(victim)
+            .unwrap()
+            .mover
+            .pose()
+            .position;
+        let origin = [x - distance, y + 1.0, z];
+        let (simulation, queries) = scene.bot_simulation();
+        simulation.activate_combat();
+        simulation
+            .hitscan(
+                &queries,
+                PosedHitscan {
+                    source: source.entity,
+                    origin,
+                    direction: [1.0, 0.0, 0.0],
+                    command: Command {
+                        frame: hit_tick,
+                        ..Command::default()
+                    },
+                    shot_frame: hit_tick,
+                    reach: 12.0,
+                    hit: HitDefinition {
+                        tags: DamageTags::EMPTY,
+                        amount: damage,
+                        loadout: None,
+                        critical: 1.0,
+                        falloff: None,
+                    },
+                },
+                ShotContext {
+                    team: 0,
+                    quanta: RETAIL_QUANTA,
+                    tick: hit_tick,
+                    now: hit_tick * TICK_PERIOD,
+                },
+                |entity| entity == victim.entity,
+            )
+            .unwrap()
+            .expect("player hit");
+        advance_feedback(&mut room, [source, victim], hit_tick);
+        Some(origin)
+    } else {
+        apply_and_advance(&mut room, [source, victim], hit_tick, damage);
+        Some(source_position)
+    };
+    assert!(
+        room.members[&1]
+            .peer
+            .as_ref()
+            .unwrap()
+            .pending_combat_notices()
+            .all(|notice| !matches!(notice, CombatNotice::DamageReceived { .. }))
+    );
+    let normal = ray.map(|(_, normal)| normal);
+    let simulation = room.world.as_ref().unwrap().scene.simulation();
+    let peer = room.members.get_mut(&2).unwrap().peer.as_mut().unwrap();
+    let notices: Vec<_> = peer.pending_combat_notices().copied().collect();
+    let [
+        CombatNotice::DamageReceived {
+            source: actual_source,
+            victim: actual_victim,
+            dealt: actual_dealt,
+            origin: actual_origin,
+            impact_point,
+            normal: actual_normal,
+            contact_set: actual_contact_set,
+            critical: false,
+            armor_or_shield: false,
+            special_vfx: false,
+        },
+    ] = notices.as_slice()
+    else {
+        panic!("unexpected pending damage notices: {notices:?}");
+    };
+    assert_eq!(*actual_source, source.entity);
+    assert_eq!(*actual_victim, victim.entity);
+    assert_eq!(*actual_dealt, damage as f32);
+    assert_eq!(*actual_origin, origin);
+    let expected_impact = impact_point.expect("victim impact point");
+    assert_eq!(*actual_normal, normal);
+    assert_eq!(*actual_contact_set, 0);
+    peer.flush_combat(schemas, (tick + 4) * TICK_PERIOD, Some(simulation))
+        .unwrap();
+    assert!(!peer.egress.has_queued_reliable());
+    peer.world.create_remote_player(source, source_create);
+    while !peer.world.identity_ready(source.entity) || !peer.world.identity_ready(victim.entity) {
+        assert!(sequence[1] < 16);
+        acknowledge_world_frame(peer, &mut sequence[1]);
+    }
+    peer.flush_combat(schemas, (tick + 5) * TICK_PERIOD, Some(simulation))
+        .unwrap();
+    peer.world
+        .send_frame(
+            tick + 5,
+            Vec::new(),
+            false,
+            None,
+            &mut peer.egress,
+            |payload| {
+                let mut reader = BitReader::new(&payload);
+                reader.var_a().unwrap();
+                let channel = read_channel(&mut reader, schemas).unwrap();
+                let [event] = channel.reliable.as_slice() else {
+                    panic!("expected one victim feedback event");
+                };
+                assert_eq!(event.message.id, 25000);
+                assert_eq!(event.message.fields[&0x78], Value::Signed(1));
+                for (offset, xyz) in [
+                    (0x84, normal.unwrap_or_default()),
+                    (0x90, expected_impact),
+                    (0x9c, origin.unwrap_or_default()),
+                ] {
+                    assert_eq!(
+                        event.message.fields[&offset],
+                        Value::Struct(Fields::from_iter(
+                            [0, 4, 8]
+                                .into_iter()
+                                .zip(xyz.map(|v| Value::Float32(v as f32)))
+                        ))
+                    );
+                }
+                assert_eq!(
+                    event.message.fields[&0xa8],
+                    Value::Array(vec![Value::Unsigned(0); 3])
+                );
+                assert_eq!(event.message.fields[&0xc0], Value::Float32(damage as f32));
+                assert_eq!(
+                    event.message.fields[&0xd8],
+                    Value::Array(vec![Value::Float32(damage as f32), Value::Float32(1.0)])
+                );
+                for (offset, body) in [(0x7c, source), (0x80, victim)] {
+                    assert_eq!(
+                        event.message.fields[&offset],
+                        Value::Struct(Fields::from(
+                            [(0, Value::Unsigned(u64::from(body.entity))),]
+                        ))
+                    );
+                }
+                Ok::<_, io::Error>(sequence[1] + 1)
+            },
+        )
+        .unwrap();
+}
+
 fn assert_reliable_cue(
     room: &mut Room,
     connection: u32,
@@ -747,11 +1001,42 @@ fn confirmed_headshot_cue_reaches_only_the_shooter_connection() {
 
 #[test]
 fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
-    use crate::{
-        combat_voice::CombatVoiceCatalog,
-        game_bots::{BotCatalog, BotWalk},
-    };
+    use crate::combat_voice::CombatVoiceCatalog;
 
+    let voice = CombatVoiceCatalog::from_json(
+        r#"{
+            "multikill_window_ticks": 3,
+            "multikills": {
+                "2": { "stimulus": "0x0EE0000000000102", "lines": ["0x0760000000000202"] },
+                "3": { "stimulus": "0x0EE0000000000103", "lines": ["0x0760000000000203"] }
+            }
+        }"#,
+    )
+    .unwrap();
+    assert_multikill_announcer_cues(voice);
+}
+
+#[test]
+#[ignore = "requires a prepared combat voice catalog using the authored two-second interval"]
+fn prepared_multikill_announcer_restarts_the_two_second_interval() {
+    let runtime = std::path::PathBuf::from(std::env::var_os("ORPHEUS_RUNTIME_DIR").unwrap());
+    let voice =
+        crate::combat_voice::CombatVoiceCatalog::load(runtime.join("data/combat_voice_174.json"))
+            .unwrap();
+    assert_eq!(
+        voice.multikill_window_ticks() * TICK_PERIOD,
+        Duration::from_secs(2)
+    );
+    assert_multikill_announcer_cues(voice);
+}
+
+fn assert_multikill_announcer_cues(voice: crate::combat_voice::CombatVoiceCatalog) {
+    use crate::game_bots::{BotCatalog, BotWalk};
+
+    let window = voice.multikill_window_ticks();
+    assert!(window > 2);
+    let (_, double) = voice.multikill_cue(2, 2).unwrap();
+    let (_, triple) = voice.multikill_cue(3, 3).unwrap();
     let bots = BotCatalog::from_json(
         r#"{
             "heroes": {"0x01": {"name": "Target", "body": "0x02", "health": 50}},
@@ -772,16 +1057,6 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         .map(|bot| (bot.entity, bot.spawn.position))
         .collect();
     let (mut room, [shooter], mut sequence) = feedback_room_with_bots(Vec::new(), [0], bots);
-    let voice = CombatVoiceCatalog::from_json(
-        r#"{
-            "multikill_window_ticks": 3,
-            "multikills": {
-                "2": { "stimulus": "0x0EE0000000000102", "lines": ["0x0760000000000202"] },
-                "3": { "stimulus": "0x0EE0000000000103", "lines": ["0x0760000000000203"] }
-            }
-        }"#,
-    )
-    .unwrap();
     room.world
         .as_mut()
         .unwrap()
@@ -830,7 +1105,12 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         advance_feedback(room, [shooter], tick);
     };
 
-    kill_bot(&mut room, targets[0].0, targets[0].1, FIRST_TICK + 1);
+    let first = FIRST_TICK + 1;
+    let second = first + window - 1;
+    let third = second + window - 1;
+    let expired = third + window + 1;
+    let next = expired + window - 1;
+    kill_bot(&mut room, targets[0].0, targets[0].1, first);
     assert_eq!(
         room.members[&1]
             .peer
@@ -841,27 +1121,27 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         0
     );
 
-    kill_bot(&mut room, targets[1].0, targets[1].1, FIRST_TICK + 3);
+    kill_bot(&mut room, targets[1].0, targets[1].1, second);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 4,
-        0x0760_0000_0000_0202,
+        second + 1,
+        double,
         0,
     );
 
-    kill_bot(&mut room, targets[2].0, targets[2].1, FIRST_TICK + 5);
+    kill_bot(&mut room, targets[2].0, targets[2].1, third);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 6,
-        0x0760_0000_0000_0203,
+        third + 1,
+        triple,
         1,
     );
 
@@ -871,7 +1151,7 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         .unwrap()
         .scene
         .simulation_mut()
-        .kill_bot_for_test(targets[5].0, FIRST_TICK + 6, (FIRST_TICK + 6) * TICK_PERIOD);
+        .kill_bot_for_test(targets[5].0, third + 1, (third + 1) * TICK_PERIOD);
     assert_eq!(
         room.members[&1]
             .peer
@@ -883,10 +1163,7 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
     );
 
     // Expiring the multikill window resets the streak back to 1 (no announcement).
-    for gap_tick in [FIRST_TICK + 7, FIRST_TICK + 9] {
-        advance_feedback(&mut room, [shooter], gap_tick);
-    }
-    kill_bot(&mut room, targets[3].0, targets[3].1, FIRST_TICK + 11);
+    kill_bot(&mut room, targets[3].0, targets[3].1, expired);
     assert_eq!(
         room.members[&1]
             .peer
@@ -897,15 +1174,15 @@ fn multikill_announcer_cues_emit_from_mode_entity_across_bot_eliminations() {
         0
     );
 
-    kill_bot(&mut room, targets[4].0, targets[4].1, FIRST_TICK + 13);
+    kill_bot(&mut room, targets[4].0, targets[4].1, next);
     assert_reliable_voice_cue(
         &mut room,
         1,
         GAME_MODE_ENTITY,
         shooter,
         &mut sequence[0],
-        FIRST_TICK + 14,
-        0x0760_0000_0000_0202,
+        next + 1,
+        double,
         2,
     );
 }

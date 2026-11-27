@@ -1,7 +1,10 @@
 //! Shared routing and scheduling. All mutable gameplay belongs to a room.
 
 use super::*;
-use crate::{ai_script::AiScriptError, game_egress::SendError, patrol_script};
+#[cfg(feature = "lua-debug")]
+use crate::ai_script::AiScriptError;
+use crate::{game_egress::SendError, patrol_script};
+#[cfg(feature = "lua-debug")]
 use sha2::{Digest, Sha256};
 
 const MAX_RECENT_FAULTS: usize = 64;
@@ -9,7 +12,8 @@ const MAX_RECENT_FAULTS: usize = 64;
 pub(super) struct State {
     pub(super) schemas: Arc<Schemas>,
     pub(super) preloaded_patrol: Option<PatrolScript>,
-    pub(super) active_patrol_source: Arc<str>,
+    #[cfg(feature = "lua-debug")]
+    pub(super) active_patrol_source: Option<Arc<str>>,
     pub(super) patrol_policy_digest: [u8; 32],
     pub(super) patrol_reload_generation: u64,
     pub(super) clock: GameClock,
@@ -21,6 +25,9 @@ pub(super) struct State {
     pub(super) next_connection: u32,
     pub(super) next_input_peer: Option<u32>,
     pub(super) recent_faults: VecDeque<FaultRecord>,
+    pub(super) career_recorder: Option<CareerRecorder>,
+    #[cfg(feature = "lua-mods")]
+    pub(super) mod_host: Option<Arc<std::sync::Mutex<crate::mod_script::ModHost>>>,
     #[cfg(any(test, feature = "inspector"))]
     pub(super) debug_control_enabled: bool,
 }
@@ -58,7 +65,8 @@ impl State {
         Self {
             schemas,
             preloaded_patrol: Some(patrol),
-            active_patrol_source: Arc::from(patrol_script::DEFAULT_SOURCE),
+            #[cfg(feature = "lua-debug")]
+            active_patrol_source: None,
             patrol_policy_digest,
             patrol_reload_generation: 0,
             clock: GameClock::default(),
@@ -70,6 +78,9 @@ impl State {
             next_connection: 1,
             next_input_peer: None,
             recent_faults: VecDeque::new(),
+            career_recorder: None,
+            #[cfg(feature = "lua-mods")]
+            mod_host: None,
             #[cfg(any(test, feature = "inspector"))]
             debug_control_enabled: false,
         }
@@ -118,25 +129,56 @@ impl State {
             injection: None,
         };
         let preloaded = world.as_ref().and_then(|_| self.preloaded_patrol.take());
-        let active_source = Arc::clone(&self.active_patrol_source);
+        #[cfg(feature = "lua-debug")]
+        let active_source = self.active_patrol_source.clone();
+        #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
         let patrol_generation = self.patrol_reload_generation;
+        #[cfg(feature = "lua-mods")]
+        let mod_host = self.mod_host.clone();
         let schemas = Arc::clone(&self.schemas);
         let prepared = guard_room(&mut room, RoomStage::Admission, |room| {
             if let Some(WorldStart { mut scene, card }) = world {
-                let patrol = match preloaded {
-                    Some(patrol) => patrol,
-                    None => PatrolScript::from_source(&active_source)?,
-                };
+                let patrol = preloaded.map_or_else(
+                    || {
+                        #[cfg(feature = "lua-debug")]
+                        if let Some(source) = &active_source {
+                            return PatrolScript::from_source_checked(source)
+                                .map_err(io::Error::from);
+                        }
+                        PatrolScript::load()
+                    },
+                    Ok,
+                )?;
                 scene
                     .simulation_mut()
                     .set_team_member_counts(room.team_member_counts());
+                scene.simulation_mut().set_player_names(
+                    room.players
+                        .iter()
+                        .map(|p| (p.entity, p.info.name.clone()))
+                        .collect(),
+                );
                 scene
                     .simulation_mut()
                     .seat_bots(&room.map, room.players.len());
+                #[cfg(feature = "lua-mods")]
+                {
+                    let heroes = scene.heroes_arc();
+                    let rays = scene.combat_rays_arc();
+                    scene.simulation_mut().set_mod_world_assets(heroes, rays);
+                    if let Some(host) = mod_host {
+                        scene.simulation_mut().attach_mod_host(
+                            host,
+                            room.map.map_guid,
+                            room.map.mode_guid,
+                        );
+                    }
+                }
                 room.world = Some(RoomWorld {
                     scene,
                     card,
                     patrol,
+                    #[cfg(any(test, feature = "inspector", feature = "lua-debug"))]
                     patrol_generation,
                 });
             }
@@ -418,12 +460,80 @@ impl State {
                 }
                 let _ = reply.send(());
             }
+            #[cfg(feature = "lua-debug")]
             Request::ReloadAiScript { source, reply } => {
                 let result = self.reload_patrol(&source);
                 let _ = reply.send(result);
             }
             Request::AiPolicyStatus { reply } => {
                 let _ = reply.send(self.ai_policy_status());
+            }
+            Request::SetCareerRecorder { recorder, reply } => {
+                self.career_recorder = Some(recorder);
+                let _ = reply.send(());
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::SetModHost { host, reply } => {
+                self.mod_host = Some(Arc::clone(&host));
+                for room in self.rooms.values_mut() {
+                    if let Some(world) = &mut room.world {
+                        let heroes = world.scene.heroes_arc();
+                        let rays = world.scene.combat_rays_arc();
+                        world
+                            .scene
+                            .simulation_mut()
+                            .set_mod_world_assets(heroes, rays);
+                        world.scene.simulation_mut().attach_mod_host(
+                            Arc::clone(&host),
+                            room.map.map_guid,
+                            room.map.mode_guid,
+                        );
+                    }
+                }
+                let _ = reply.send(());
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::ModChat {
+                id,
+                connection,
+                sender_name,
+                text,
+                reply,
+            } => {
+                let tick = self.clock.frame();
+                let replies = if let Some(room) = self.rooms.get_mut(&id) {
+                    let room_tick = room.sim_tick(tick);
+                    let room_now = room.sim_now(now);
+                    let sender_owner = room
+                        .members
+                        .get(&connection)
+                        .and_then(|m| room.players.get(m.slot))
+                        .map(|p| p.entity);
+                    if let Some(world) = &mut room.world {
+                        world.scene.simulation_mut().mod_dispatch_chat_from(
+                            sender_owner,
+                            &sender_name,
+                            &text,
+                            room_tick,
+                            room_now,
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                let _ = reply.send(replies);
+            }
+            #[cfg(feature = "lua-mods")]
+            Request::DrainModChat { id, reply } => {
+                let replies = self
+                    .rooms
+                    .get_mut(&id)
+                    .and_then(|room| room.world.as_mut())
+                    .map(|world| world.scene.simulation_mut().drain_mod_chat_replies())
+                    .unwrap_or_default();
+                let _ = reply.send(replies);
             }
             #[cfg(any(test, feature = "inspector"))]
             Request::Debug { reply } => {
@@ -558,7 +668,7 @@ impl State {
             timing: self.timing.clone(),
             ai_policy: Some(game_debug::AiPolicy {
                 generation: self.patrol_reload_generation,
-                abi_version: crate::ai_script::AI_ABI_VERSION,
+                abi_version: self.patrol_policy_abi(),
                 digest: patrol_script::format_digest(&self.patrol_policy_digest),
             }),
             faults,
@@ -573,18 +683,28 @@ impl State {
             .count();
         AiPolicyStatus {
             generation: self.patrol_reload_generation,
-            abi_version: crate::ai_script::AI_ABI_VERSION,
+            abi_version: self.patrol_policy_abi(),
             digest: patrol_script::format_digest(&self.patrol_policy_digest),
             active_rooms,
         }
     }
 
+    fn patrol_policy_abi(&self) -> u32 {
+        #[cfg(feature = "lua-debug")]
+        if self.active_patrol_source.is_some() {
+            return crate::ai_script::AI_ABI_VERSION;
+        }
+        patrol_script::STATESCRIPT_ABI
+    }
+
+    #[cfg(feature = "lua-debug")]
     pub(super) fn reload_patrol(&mut self, source: &str) -> io::Result<AiReloadReport> {
         self.reload_patrol_with(source, |_, candidate| {
             PatrolScript::from_source_checked(candidate)
         })
     }
 
+    #[cfg(feature = "lua-debug")]
     pub(super) fn reload_patrol_with(
         &mut self,
         source: &str,
@@ -625,7 +745,7 @@ impl State {
         // Phase 4: infallible atomic swap.
         let active_source: Arc<str> = Arc::from(source);
         let next_generation = self.patrol_reload_generation + 1;
-        self.active_patrol_source = active_source;
+        self.active_patrol_source = Some(active_source);
         self.preloaded_patrol = Some(next_preloaded);
         self.patrol_policy_digest = digest;
         self.patrol_reload_generation = next_generation;
@@ -1022,17 +1142,14 @@ impl State {
                             .world
                             .advance_fields(world.scene.simulation_mut(), room_tick)?
                         {
-                            let skip_wire = peer.world.spawned_body();
-                            let (bots, queries) = world.scene.bot_simulation();
-                            for update in bots.heal_allies(
+                            let (simulation, queries) = world.scene.bot_simulation();
+                            simulation.heal_allies(
                                 &queries,
                                 context.team,
-                                skip_wire,
+                                Some(source.entity),
                                 Some(source),
                                 &pulses,
-                            )? {
-                                peer.world.queue_health(update);
-                            }
+                            )?;
                         }
                         peer.world
                             .advance_biotic_views(world.scene.simulation(), room_tick)?;
@@ -1044,12 +1161,17 @@ impl State {
                             return Ok(());
                         };
                         let (simulation, queries) = world.scene.bot_simulation();
-                        let (outcomes, hits) = simulation
-                            .advance_projectiles(&queries, connection, owner, launches, context)?;
+                        let (outcomes, hits) = simulation.advance_projectiles(
+                            &queries,
+                            connection,
+                            owner,
+                            launches,
+                            context,
+                            |entity| peer.world.actor_contact_ready(entity),
+                        )?;
                         peer.world.finish_projectiles(owner, room_tick, outcomes)?;
+                        simulation.deliver_coalesced_hits(peer.world.owner(), &hits);
                         for hit in hits {
-                            simulation
-                                .deliver_applied_damage(peer.world.owner(), hit.damage.clone());
                             peer.bot_hit(hit);
                         }
                         Ok(())
@@ -1066,6 +1188,21 @@ impl State {
                 let result = self.room_work(id, RoomStage::FinishTick, None, |room| {
                     room.finish_simulation(room_tick, room_now)
                 })?;
+                if let Some(recorder) = &self.career_recorder {
+                    if let Some(room) = self.rooms.get_mut(&id) {
+                        if let Some(world) = &mut room.world {
+                            let records =
+                                world.scene.simulation_mut().take_completed_career_records();
+                            for (owner, record) in records {
+                                if let Some(player) =
+                                    room.players.iter().find(|p| p.entity == owner)
+                                {
+                                    recorder(&player.info.name, &record);
+                                }
+                            }
+                        }
+                    }
+                }
                 if let Some(result) = result {
                     spawned.insert(id, result.replacements);
                     created.insert(id, result.created);
@@ -1132,11 +1269,6 @@ impl State {
                             peer.world.create_bot(record.clone());
                         }
                     }
-                    if let Some(records) = scripted_health.get(&id) {
-                        for record in records {
-                            peer.world.queue_health(record.clone());
-                        }
-                    }
                     if let Some(events) = player_events.get(&id) {
                         for event in events {
                             match event {
@@ -1163,6 +1295,12 @@ impl State {
                             if *owner != peer.world.owner() {
                                 peer.world.queue_health(record.clone());
                             }
+                        }
+                    }
+                    // Settled room health takes precedence over earlier owner snapshots.
+                    if let Some(records) = scripted_health.get(&id) {
+                        for record in records {
+                            peer.world.queue_health(record.clone());
                         }
                     }
                     // A synchronous script stop is newer than the health
