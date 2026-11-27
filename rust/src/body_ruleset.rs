@@ -281,6 +281,11 @@ mod tests {
             );
             assert_eq!(get(PRACTICE_RANGE_MODE, SOLDIER, Npc, id), None);
         }
+        assert_eq!(
+            get(PRACTICE_RANGE_MODE, CASSIDY, Player, 0x290c),
+            Some(Value::Bool(true))
+        );
+        assert_eq!(get(PRACTICE_RANGE_MODE, CASSIDY, Npc, 0x290c), None);
         for mode in [JUNKENSTEIN_REVENGE, JUNKENSTEIN_ENDLESS] {
             for (hero, actor) in [
                 (CASSIDY, Player),
