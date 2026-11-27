@@ -93,6 +93,11 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
         node: &Node,
     ) -> Result<(), InitFault> {
         let site = self.site(key.instance, node);
+        // End plugs also run when the query is unavailable. Invalidate the
+        // prior attachment before any early Finish, without inventing a point.
+        self.trace_write(key, node, "m_9E1A7C58", Value::Bool(false))?;
+        self.trace_write(key, node, "m_1FFD7AC0", Value::Entity(0))?;
+        self.trace_write(key, node, "m_9169D109", Value::Bool(false))?;
         // The direction is the authored body pose (the reference's
         // `STU_2200A66D` resolver unchanged): the kit's mover pose carries
         // yaw and pitch jointly, and the harness answers the same pair.
@@ -203,12 +208,9 @@ impl<'graph, 'world, 'machine, W: World> Vm<'graph, 'world, 'machine, W> {
             promoted,
             standing: feet,
         };
-        self.trace_write(key, node, "m_1FFD7AC0", Value::Entity(0))?;
-        self.trace_write(key, node, "m_9169D109", Value::Bool(false))?;
         self.trace_write(key, node, "m_5ED803CF", Value::Vector(origin))?;
         self.trace_write(key, node, "m_F2F8606D", Value::Vector(origin))?;
         self.trace_write(key, node, "m_64801077", Value::Vector(direction))?;
-        self.trace_write(key, node, "m_9E1A7C58", Value::Bool(false))?;
         self.register_tick(key, self.machine.now_ms);
         self.post_after(key.instance, duration as u64, Event::Timer(key.raw, 1))
     }

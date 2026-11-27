@@ -22,6 +22,7 @@ fn hook_capsule() -> HookPullGeometry {
 }
 
 struct ChainWorld {
+    unavailable: bool,
     hit: Option<SpatialRayHit>,
     scene: Vec<([f64; 3], [f64; 3])>,
     forward: [f64; 3],
@@ -92,6 +93,9 @@ impl ChainWorld {
         direction: [f64; 3],
         max_distance: f64,
     ) -> Option<Option<SpatialRayHit>> {
+        if self.unavailable {
+            return None;
+        }
         if self.scene.is_empty() {
             return Some(self.hit);
         }
@@ -124,6 +128,20 @@ impl World for ChainWorld {
     }
     fn authored_forward(&self, _entity: u32) -> Option<[f64; 3]> {
         Some(self.forward)
+    }
+    fn body_angle(
+        &self,
+        entity: u32,
+        axis: crate::script_expr::BodyAngle,
+    ) -> crate::script_expr::AngleQuery {
+        use crate::script_expr::{AngleQuery, BodyAngle};
+        match (entity, axis) {
+            (0, _) => AngleQuery::Unbound,
+            (123, BodyAngle::Pitch) => {
+                AngleQuery::Present(self.pitch(entity).unwrap().to_degrees())
+            }
+            _ => AngleQuery::Unavailable,
+        }
     }
     fn owner_collision_category(&self, _site: Site) -> Option<u16> {
         Some(0x08)
@@ -173,6 +191,7 @@ fn hook_component(hit: Option<SpatialRayHit>, length: f64) -> Component {
     }
     let store = GraphStore::from_json(&serde_json::to_vec(&bundle).unwrap()).unwrap();
     let mut world = ChainWorld {
+        unavailable: false,
         hit,
         scene: Vec::new(),
         forward: [0.0, 0.0, 1.0],
@@ -222,11 +241,60 @@ fn presentation_only_diagnostic(diagnostic: &crate::script_init::types::Diagnost
 
 fn chain_world(hit: Option<SpatialRayHit>) -> ChainWorld {
     ChainWorld {
+        unavailable: false,
         hit,
         scene: Vec::new(),
         forward: [0.0, 0.0, 1.0],
         geometry: None,
     }
+}
+
+#[test]
+#[ignore = "requires an authorized 104319 runtime pack at ORPHEUS_RUNTIME_DIR"]
+fn prepared_hook_unavailable_recast_does_not_reuse_a_hit() {
+    let mut world = chain_world(Some(SpatialRayHit {
+        point: [0.0, 1.55, 6.0],
+        normal: [0.0, 0.0, -1.0],
+        distance: 6.0,
+    }));
+    let mut component = hook_component(world.hit, 0.0);
+    press_hook(&mut component, &mut world, 60);
+    let first = &component.snapshot().unwrap().instances[&1];
+    assert_eq!(first.variables.get(&435), Some(&Value::Bool(true)));
+    let movement = first.states[&1].clone();
+    assert!(movement.active);
+    component
+        .queue_move_result(
+            61,
+            crate::script_init::MoveToKey {
+                instance: 1,
+                raw: 1,
+                activation: movement.activation,
+                start_ms: movement.start_ms,
+            },
+            crate::script_init::MoveOutcome::Arrived,
+        )
+        .unwrap();
+    component
+        .advance_command(
+            Command {
+                frame: 61,
+                ..Command::default()
+            },
+            &mut world,
+        )
+        .unwrap();
+    assert!(!component.snapshot().unwrap().instances[&1].states[&1].active);
+    world.unavailable = true;
+    component.begin_state(1, 0, &mut world).unwrap();
+    let recast = &component.snapshot().unwrap().instances[&1];
+    assert_eq!(recast.variables.get(&435), Some(&Value::Bool(false)));
+    assert_eq!(recast.states[&1].activation, movement.activation);
+    assert!(!recast.states[&1].active);
+    assert_eq!(
+        recast.variables.get(&431),
+        Some(&Value::Vector([0.0, 1.55, 6.0]))
+    );
 }
 
 #[test]
@@ -317,6 +385,7 @@ fn prepared_hook_press_promotes_a_lip_only_the_doubled_capsule_step_reaches() {
     // CoverageTests.measure_ledge_fan: pitch -0.162916; the k=-2 ray.)
     let elevation = f64::atan(4.92 / 30.0);
     let mut world = ChainWorld {
+        unavailable: false,
         hit: None,
         scene: vec![
             // the wall's front face stands at z=30; the floor runs right up
